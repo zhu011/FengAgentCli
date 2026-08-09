@@ -1,13 +1,12 @@
-# Changelog
+# 更新日志
 
-All notable changes to FengAgentCli will be documented in this file.
+FengAgentCli 的所有重要变更均记录在此文件中。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
 ## [0.1.0] - 2026-08-09
 
-### Added
+### 新增
 
 - **Agent Loop** — 多轮对话循环：用户输入 → LLM 调用 → 工具执行 → 响应输出
 - **流式输出** — LLM 响应实时流式输出（SSE）
@@ -29,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker 部署** — 多阶段构建 Dockerfile
 - **完整文档** — README、PRD、架构设计、开发指南、模块文档、配置参考、扩展指南
 
-### Known Limitations
+### 已知限制
 
 - 向量检索记忆使用本地 TF-IDF（未来可接入 embeddings API）
 - 插件加载使用动态 import（需要 Bun 运行时）

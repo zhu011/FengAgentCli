@@ -1,6 +1,6 @@
 #!/bin/sh
-## FengAgentCli CLI wrapper for npm bin
-## Runs the CLI entry via bun (preferred) or node
+## FengAgentCli CLI 启动脚本（npm bin 入口）
+## 通过 bun（首选）或 node 运行 CLI 入口
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ENTRY="$SCRIPT_DIR/../packages/cli/src/entry.ts"
@@ -8,7 +8,7 @@ ENTRY="$SCRIPT_DIR/../packages/cli/src/entry.ts"
 if command -v bun >/dev/null 2>&1; then
   exec bun run "$ENTRY" "$@"
 else
-  echo "Error: Bun runtime is required to run fengagent." >&2
-  echo "Install Bun: https://bun.sh/" >&2
+  echo "错误：运行 fengagent 需要 Bun 运行时。" >&2
+  echo "安装 Bun: https://bun.sh/" >&2
   exit 1
 fi
