@@ -99,7 +99,7 @@ export async function main(argv: string[]): Promise<void> {
       }
     }
 
-    function createAgent(): InstanceType<typeof Agent> {
+    function createServerAgent(): InstanceType<typeof Agent> {
       const toolRegistry = createToolRegistry();
       registerBuiltinTools(toolRegistry);
 
@@ -142,7 +142,7 @@ export async function main(argv: string[]): Promise<void> {
       "../../web-ui/dist",
     );
 
-    startServer({ config, createAgent, staticDir });
+    startServer({ config, createAgent: createServerAgent, staticDir });
     return;
   }
 
