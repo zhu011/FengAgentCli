@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "paths": {
+      "@fengagent/shared": ["./../shared/src/index.ts"],
+      "@fengagent/shared/*": ["./../shared/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

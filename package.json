@@ -1,0 +1,77 @@
+{
+  "name": "fengagent",
+  "version": "0.1.0",
+  "description": "开源本地 AI Agent CLI 工具 — 对话、工具调用、多Agent、WebUI",
+  "type": "module",
+  "license": "MIT",
+  "author": "FengAgentCli Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhu011/FengAgentCli.git"
+  },
+  "homepage": "https://github.com/zhu011/FengAgentCli",
+  "bugs": {
+    "url": "https://github.com/zhu011/FengAgentCli/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "llm",
+    "anthropic",
+    "openai",
+    "tools",
+    "mcp",
+    "webui",
+    "typescript",
+    "bun"
+  ],
+  "bin": {
+    "fengagent": "bin/fengagent"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "files": [
+    "bin/",
+    "packages/*/src/**/*.ts",
+    "packages/*/src/**/*.tsx",
+    "packages/*/package.json",
+    "packages/web-ui/dist/",
+    "docs/DEVELOPMENT.md",
+    "docs/MODULES.md",
+    "docs/CONFIGURATION.md",
+    "docs/EXTENDING.md",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "Dockerfile"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun run build:web-ui",
+    "clean": "rm -rf packages/*/dist dist",
+    "dev": "bun run scripts/dev.ts",
+    "dev:web-ui": "cd packages/web-ui && bun run dev",
+    "build:web-ui": "cd packages/web-ui && bun run build",
+    "build:binary": "bun run scripts/build.ts",
+    "dev:server": "bun run packages/server/src/entry.ts",
+    "serve": "bun run packages/server/src/entry.ts",
+    "prepublishOnly": "bun run build:web-ui && bun run typecheck",
+    "publish": "bun run scripts/publish.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "dependencies": {
+    "hono": "^4.13.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@fengagent/llm",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./client": "./src/client.ts",
+    "./route": "./src/route.ts",
+    "./stream": "./src/stream.ts",
+    "./env": "./src/env.ts",
+    "./providers/anthropic": "./src/providers/anthropic.ts",
+    "./providers/openai": "./src/providers/openai.ts",
+    "./providers/openai-compatible": "./src/providers/openai-compatible.ts",
+    "./providers/bedrock": "./src/providers/bedrock.ts",
+    "./providers/google": "./src/providers/google.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhu011/FengAgentCli.git",
+    "directory": "packages/llm"
+  },
+  "dependencies": {
+    "@fengagent/core": "workspace:*",
+    "@fengagent/shared": "workspace:*",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^4.73.0",
+    "zod": "^3.23.0"
+  }
+}

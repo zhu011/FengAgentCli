@@ -1,0 +1,44 @@
+{
+  "name": "@fengagent/tools",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./registry": "./src/registry.ts",
+    "./executor": "./src/executor.ts",
+    "./permission": "./src/permission.ts",
+    "./permission-config": "./src/permission-config.ts",
+    "./hooks": "./src/hooks.ts",
+    "./truncate": "./src/truncate.ts",
+    "./mcp": "./src/mcp/index.ts",
+    "./builtin/file-read": "./src/builtin/file-read.ts",
+    "./builtin/file-write": "./src/builtin/file-write.ts",
+    "./builtin/file-edit": "./src/builtin/file-edit.ts",
+    "./builtin/bash": "./src/builtin/bash.ts",
+    "./builtin/glob": "./src/builtin/glob.ts",
+    "./builtin/grep": "./src/builtin/grep.ts",
+    "./builtin/task": "./src/builtin/task.ts",
+    "./builtin/memory": "./src/builtin/memory.ts",
+    "./builtin/skill": "./src/builtin/skill.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhu011/FengAgentCli.git",
+    "directory": "packages/tools"
+  },
+  "dependencies": {
+    "@fengagent/core": "workspace:*",
+    "@fengagent/shared": "workspace:*",
+    "@fengagent/context": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  }
+}

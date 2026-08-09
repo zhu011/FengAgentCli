@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "paths": {
+      "@fengagent/shared": ["./../shared/src/index.ts"],
+      "@fengagent/shared/*": ["./../shared/src/*"],
+      "@fengagent/core": ["./../core/src/index.ts"],
+      "@fengagent/core/*": ["./../core/src/*"],
+      "@fengagent/llm": ["./../llm/src/index.ts"],
+      "@fengagent/llm/*": ["./../llm/src/*"],
+      "@fengagent/tools": ["./../tools/src/index.ts"],
+      "@fengagent/tools/*": ["./../tools/src/*"],
+      "@fengagent/context": ["./../context/src/index.ts"],
+      "@fengagent/context/*": ["./../context/src/*"],
+      "@fengagent/agent": ["./../agent/src/index.ts"],
+      "@fengagent/agent/*": ["./../agent/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

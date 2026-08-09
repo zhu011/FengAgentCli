@@ -1,0 +1,39 @@
+# FengAgentCli .npmignore — 排除不需要发布的文件
+
+# 开发和测试文件
+**/__tests__/
+**/*.test.ts
+**/*.test.tsx
+**/__mocks__/
+**/__fixtures__/
+
+# 文档（已通过 files 字段控制，额外排除）
+docs/PRD.md
+docs/ARCHITECTURE.md
+
+# 构建脚本和开发工具
+scripts/dev.ts
+scripts/e2e-verify.ts
+
+# CI 和平台配置
+.multica/
+.kimi/
+.opencode/
+.fengagent/
+.agent_context/
+
+# Git 和编辑器
+.git/
+.gitignore
+.gitattributes
+
+# 依赖和构建产物（npm 自动排除 node_modules）
+dist/
+packages/web-ui/node_modules/
+packages/web-ui/dist/
+
+# 其他
+*.log
+.DS_Store
+Thumbs.db
+AGENTS.md

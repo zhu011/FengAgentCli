@@ -1,0 +1,33 @@
+{
+  "name": "@fengagent/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./tool": "./src/tool.ts",
+    "./agent": "./src/agent.ts",
+    "./session": "./src/session.ts",
+    "./event": "./src/event.ts",
+    "./config": "./src/config.ts",
+    "./squad": "./src/squad.ts",
+    "./permission": "./src/permission.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhu011/FengAgentCli.git",
+    "directory": "packages/core"
+  },
+  "dependencies": {
+    "@fengagent/shared": "workspace:*",
+    "zod": "^3.23.0"
+  }
+}
