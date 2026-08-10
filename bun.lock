@@ -94,6 +94,7 @@
       "name": "@fengagent/tools",
       "version": "0.1.0",
       "dependencies": {
+        "@fengagent/context": "workspace:*",
         "@fengagent/core": "workspace:*",
         "@fengagent/shared": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.0.0",

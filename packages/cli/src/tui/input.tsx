@@ -7,6 +7,7 @@
 
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { ThinkingPet } from "./thinking-pet.tsx";
 
 export interface InputProps {
   /** 提交回调 */
@@ -75,23 +76,21 @@ export function Input({
   });
 
   const promptText = disabled ? (
-    <Text color="yellow" dimColor> thinking... </Text>
+    <ThinkingPet />
   ) : (
-    <Text color="green" bold>{">"}</Text>
+    <Text color="green" bold>{">"} </Text>
   );
 
   return (
     <Box>
       {promptText}
-      <Text> </Text>
       {disabled ? (
-        <Text dimColor italic>{placeholder}</Text>
+        <Text dimColor italic> {placeholder}</Text>
       ) : value ? (
-        <Text>{value}</Text>
+        <Text>{value}<Text color="gray">█</Text></Text>
       ) : (
-        <Text dimColor italic>{placeholder}</Text>
+        <Text><Text color="gray">█</Text><Text dimColor italic> {placeholder}</Text></Text>
       )}
-      {!disabled && <Text color="gray">█</Text>}
     </Box>
   );
 }

@@ -82,10 +82,31 @@ export async function createAgent(
     env: options.env,
   });
 
-  // 2. 创建 LLM Client
-  const { client: llmClient } = createClientFromEnv(
-    options.env ?? process.env,
-  );
+  // 2. 创建 LLM Client（将 config 中的 provider/model/API key 注入到 env）
+  const envForLLM: Record<string, string | undefined> = {
+    ...options.env,
+    ...process.env,
+  };
+
+  function injectConfigEnv(key: string, configVal: string | undefined) {
+    if (configVal !== undefined && configVal !== "" && !envForLLM[key]) {
+      envForLLM[key] = configVal;
+    }
+  }
+
+  injectConfigEnv("FENG_PROVIDER", config.provider);
+  injectConfigEnv("FENG_MODEL", config.model);
+  injectConfigEnv("ANTHROPIC_API_KEY", config.anthropicApiKey);
+  injectConfigEnv("ANTHROPIC_BASE_URL", config.anthropicBaseUrl);
+  injectConfigEnv("OPENAI_API_KEY", config.openaiApiKey);
+  injectConfigEnv("OPENAI_BASE_URL", config.openaiBaseUrl);
+  injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
+  injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
+  injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
+  injectConfigEnv("GOOGLE_API_KEY", config.googleApiKey);
+  injectConfigEnv("GOOGLE_BASE_URL", config.googleBaseUrl);
+
+  const { client: llmClient } = createClientFromEnv(envForLLM);
 
   // 3. 工具注册表 + 内置工具
   const toolRegistry = createToolRegistry();

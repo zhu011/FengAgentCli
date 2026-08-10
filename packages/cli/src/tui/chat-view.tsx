@@ -9,6 +9,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { Message, ContentBlock } from "@fengagent/core";
 import { ToolView, type ToolCallInfo } from "./tool-view.tsx";
+import { ThinkingPet } from "./thinking-pet.tsx";
 
 export interface ChatViewProps {
   /** 已完成的消息列表 */
@@ -24,19 +25,26 @@ export interface ChatViewProps {
 /** 渲染单条消息 */
 function MessageItem({ message }: { message: Message }): React.ReactElement {
   const isUser = message.role === "user";
-  const roleLabel = isUser ? "你" : "AI";
+  const roleLabel = isUser ? "你" : "FengAgentCli";
   const roleColor = isUser ? "cyan" : "green";
 
   return (
-    <Box flexDirection="column" marginY={0}>
-      <Text color={roleColor} bold>
-        {roleLabel}:
-      </Text>
-      <Box flexDirection="column">
-        {message.content.map((block, i) => (
-          <ContentBlockView key={i} block={block} />
-        ))}
+    <Box flexDirection="column" width="100%" marginY={0}>
+      {/* 用户消息右对齐，助手消息左对齐 — 均铺满宽度 */}
+      <Box flexDirection="row" width="100%" justifyContent={isUser ? "flex-end" : "flex-start"}>
+        <Box flexDirection="column" width="100%">
+          <Text color={roleColor} bold>
+            {roleLabel}:
+          </Text>
+          <Box flexDirection="column" paddingLeft={isUser ? 8 : 0} width="100%">
+            {message.content.map((block, i) => (
+              <ContentBlockView key={i} block={block} />
+            ))}
+          </Box>
+        </Box>
       </Box>
+      {/* 消息间分隔线 */}
+      <Text color="gray" dimColor>─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─</Text>
     </Box>
   );
 }
@@ -319,7 +327,7 @@ export function ChatView({
   isRunning,
 }: ChatViewProps): React.ReactElement {
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width="100%">
       {/* 已完成的消息 */}
       {messages.map((msg, i) => (
         <MessageItem key={msg.id ?? i} message={msg} />
@@ -328,11 +336,11 @@ export function ChatView({
       {/* 流式输出中的助手文本 */}
       {(streamingText || isRunning) && (
         <Box flexDirection="column">
-          <Text color="green" bold>AI:</Text>
+          <Text color="green" bold>FengAgentCli:</Text>
           {streamingText ? (
             <MarkdownText text={streamingText} />
           ) : (
-            <Text dimColor italic>...</Text>
+            <ThinkingPet />
           )}
         </Box>
       )}

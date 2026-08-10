@@ -67,6 +67,17 @@ export const ConfigSchema = z.object({
   bashTimeout: z.number().int().positive().default(BASH_TIMEOUT),
   maxToolConcurrency: z.number().int().positive().default(MAX_TOOL_CONCURRENCY),
 
+  // API 密钥（可选，也可通过环境变量设置）
+  anthropicApiKey: z.string().optional(),
+  anthropicBaseUrl: z.string().optional(),
+  openaiApiKey: z.string().optional(),
+  openaiBaseUrl: z.string().optional(),
+  openaiCompatibleApiKey: z.string().optional(),
+  openaiCompatibleBaseUrl: z.string().optional(),
+  openaiCompatibleModel: z.string().optional(),
+  googleApiKey: z.string().optional(),
+  googleBaseUrl: z.string().optional(),
+
   // 运行配置
   maxTurns: z.number().int().positive().default(MAX_TURNS),
   logLevel: z.enum(["debug", "info", "warn", "error"]).default(DEFAULT_LOG_LEVEL),

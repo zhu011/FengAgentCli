@@ -12,6 +12,7 @@ import type { Session, Message, AgentEvent } from "@fengagent/core";
 import { ChatView } from "./chat-view.tsx";
 import { Input } from "./input.tsx";
 import { StatusBar } from "./status-bar.tsx";
+import { ThinkingPet } from "./thinking-pet.tsx";
 import { handleCommand, type CommandContext } from "../commands.ts";
 import type { ToolCallInfo } from "./tool-view.tsx";
 import {
@@ -155,6 +156,15 @@ export function App({
         return;
       }
 
+      // 立即将用户消息加入 UI（不等 Agent 响应）
+      const userMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: [{ type: "text", text }],
+        createdAt: Date.now(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+
       // 重置状态
       abortRef.current = false;
       setUi((prev) => ({
@@ -228,19 +238,76 @@ export function App({
 
   return (
     <Box flexDirection="column" height={stdoutStream.rows || 24}>
-      {/* 标题栏 */}
-      <Box justifyContent="space-between">
-        <Text bold color="magenta">
-          FengAgentCli
-        </Text>
-        <Text dimColor>v0.1.0</Text>
+      {/* 标题 + 欢迎页合并为单个大卡片（无消息时）/ 标题栏（有消息时） */}
+      <Box flexDirection="row" justifyContent="center" marginBottom={0}>
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor="magenta"
+          paddingX={2}
+          paddingY={2}
+          width={48}
+        >
+          {/* 标题 — 双闪电两端对称，居中 */}
+          <Box flexDirection="row" justifyContent="center">
+            <Text bold color="magenta">
+              ⚡⚡  FENGAGENTCLI  ⚡⚡
+            </Text>
+          </Box>
+          <Box flexDirection="row" justifyContent="center">
+            <Text dimColor> v0.1.0</Text>
+          </Box>
+
+          {/* 欢迎内容（仅无消息时展示） */}
+          {messages.length === 0 &&
+            ui.streamingText === "" &&
+            ui.systemMessages.length === 0 && (
+              <Box flexDirection="column" width={44}>
+                {/* 空白呼吸行 */}
+                <Text> </Text>
+                {/* 连续分隔线 — 44 字符覆盖内容宽度 */}
+                <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+                <Text> </Text>
+                {/* 简介 */}
+                <Box flexDirection="row" justifyContent="center">
+                  <Text color="white" bold>开源本地 AI Agent 编程工具</Text>
+                </Box>
+                <Box flexDirection="row" justifyContent="center">
+                  <Text dimColor>CLI · TUI · Web · Multi-Agent</Text>
+                </Box>
+                <Text> </Text>
+                {/* 6 核心能力 — 2 行 3 列，每列用 Box 固定宽度 14 等宽分布 */}
+                <Box flexDirection="row">
+                  <Box width={14}><Text>🗣  对话</Text></Box>
+                  <Box width={14}><Text>🔧  工具</Text></Box>
+                  <Box width={14}><Text>🤖  多Agent</Text></Box>
+                </Box>
+                <Box flexDirection="row">
+                  <Box width={14}><Text>🧠  记忆</Text></Box>
+                  <Box width={14}><Text>⚡  MCP</Text></Box>
+                  <Box width={14}><Text>🎨  WebUI</Text></Box>
+                </Box>
+                <Text> </Text>
+                {/* 连续分隔线 — 44 字符 */}
+                <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+                <Text> </Text>
+                {/* 操作提示 */}
+                <Box flexDirection="row" justifyContent="center">
+                  <Text color="cyan">📝  输入问题开始对话</Text>
+                </Box>
+                <Box flexDirection="row" justifyContent="center">
+                  <Text color="gray" dimColor>❓  /help  查看帮助</Text>
+                </Box>
+              </Box>
+            )}
+        </Box>
       </Box>
 
-      {/* 对话区域（占满剩余空间） */}
-      <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+      {/* 对话区域（占满剩余空间，width 100% 平铺填充） */}
+      <Box flexDirection="column" flexGrow={1} width="100%" overflowY="hidden">
         {/* 系统消息（命令输出等） */}
         {ui.systemMessages.length > 0 && (
-          <Box flexDirection="column" marginBottom={1}>
+          <Box flexDirection="column" width="100%" marginBottom={1}>
             {ui.systemMessages.map((msg, i) => (
               <Text key={i} color="gray" wrap="truncate">
                 {msg}
@@ -248,20 +315,6 @@ export function App({
             ))}
           </Box>
         )}
-
-        {/* 欢迎消息（无消息时） */}
-        {messages.length === 0 &&
-          ui.streamingText === "" &&
-          ui.systemMessages.length === 0 && (
-            <Box flexDirection="column">
-              <Text color="magenta" bold>
-                欢迎使用 FengAgentCli！
-              </Text>
-              <Text dimColor>
-                输入消息开始对话，或输入 /help 查看命令。
-              </Text>
-            </Box>
-          )}
 
         {/* 对话视图 */}
         <ChatView
@@ -271,6 +324,13 @@ export function App({
           isRunning={ui.status === "running"}
         />
       </Box>
+
+      {/* 思考动画宠物 — AI 运行中且无流式文本时显示 */}
+      {ui.status === "running" && ui.streamingText === "" && !pendingRequest && (
+        <Box paddingX={1} marginBottom={0}>
+          <ThinkingPet />
+        </Box>
+      )}
 
       {/* 权限审批对话框（工具需要用户审批时显示） */}
       {pendingRequest && (
