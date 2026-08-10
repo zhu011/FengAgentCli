@@ -6,7 +6,6 @@
  */
 
 import { memo } from "react";
-import { Bot, User } from "lucide-react";
 import type { DisplayMessage } from "../hooks/use-session.ts";
 import { MarkdownRenderer } from "./markdown-renderer.tsx";
 import { ToolCallCard } from "./tool-call-card.tsx";
@@ -41,7 +40,11 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
   return (
     <div className={`message-bubble message-bubble--${message.role}`}>
       <div className="message-bubble__header">
-        {isUser ? <User size={15} aria-hidden="true" /> : <Bot size={15} aria-hidden="true" />}
+        {isUser ? (
+          <span className="message-bubble__role-dot message-bubble__role-dot--user" aria-hidden="true" />
+        ) : (
+          <span className="message-bubble__role-dot message-bubble__role-dot--assistant" aria-hidden="true" />
+        )}
         <span className="message-bubble__role">
           {isUser ? "You" : "Assistant"}
         </span>
@@ -60,7 +63,12 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
         {isUser ? (
           <p className="message-bubble__text">{message.text}</p>
         ) : message.text.length > 0 ? (
-          <MarkdownRenderer text={message.text} />
+          <>
+            <MarkdownRenderer text={message.text} />
+            {message.streaming && (
+              <span className="typing-cursor" aria-hidden="true">▍</span>
+            )}
+          </>
         ) : message.streaming ? (
           <span className="message-bubble__placeholder">
             <span className="streaming-dots" aria-hidden="true">
@@ -68,7 +76,7 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
               <span />
               <span />
             </span>
-            Thinking...
+            思考中...
           </span>
         ) : null}
 

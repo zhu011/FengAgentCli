@@ -295,9 +295,26 @@ export function useSession(client: ApiClient): UseSessionResult {
                 break;
               }
 
-              // 其他事件不影响消息 UI
+              // turn-end / session-end — 兜底清理：确保所有消息标记为非流式
+              // （防止 message-end 未到达时 streaming: true 永不消除）
               case "turn-end":
-              case "session-end":
+              case "session-end": {
+                if (currentMessageId) {
+                  setDisplayMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === currentMessageId ? { ...m, streaming: false } : m,
+                    ),
+                  );
+                  streamingText.delete(currentMessageId);
+                  currentMessageId = null;
+                }
+                // 安全清理：标记所有消息为非流式
+                setDisplayMessages((prev) =>
+                  prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+                );
+                break;
+              }
+
               case "session-start":
               case "usage":
               case "compaction-start":

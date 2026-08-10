@@ -5,7 +5,14 @@
  * 渲染 Markdown 文本并支持代码高亮。
  */
 
-import { memo, useMemo, type ComponentPropsWithoutRef } from "react";
+import {
+  isValidElement,
+  memo,
+  useMemo,
+  useState,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -27,12 +34,57 @@ function hasMarkdownSyntax(text: string): boolean {
   );
 }
 
+/** 从 React 节点中递归提取纯文本 */
+function extractTextFromNode(node: ReactNode): string {
+  if (node == null) return "";
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractTextFromNode).join("");
+  if (isValidElement(node)) {
+    const props = node.props as { children?: ReactNode };
+    return extractTextFromNode(props.children);
+  }
+  return "";
+}
+
+/** 代码块组件 — 带语言标签 + 复制按钮 */
+function CodeBlock({ children, ...preProps }: ComponentPropsWithoutRef<"pre">) {
+  const [copied, setCopied] = useState(false);
+
+  // 从子 code 元素的 className 提取语言
+  const codeChildProps = isValidElement(children)
+    ? (children.props as { className?: string; children?: ReactNode })
+    : undefined;
+  const codeClassName = codeChildProps?.className ?? "";
+  const langMatch = /language-(\w+)/.exec(codeClassName);
+  const language = langMatch ? langMatch[1] : "";
+  const codeText = extractTextFromNode(codeChildProps?.children);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(codeText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="markdown-code-block-wrapper">
+      <div className="markdown-code-block-header">
+        <span className="markdown-code-block-lang">{language}</span>
+        <button className="markdown-code-block-copy" onClick={handleCopy}>
+          {copied ? "✓ Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="markdown-pre" {...preProps}>
+        {children}
+      </pre>
+    </div>
+  );
+}
+
 function MarkdownRendererImpl({ text }: MarkdownRendererProps) {
   const components = useMemo<Components>(
     () => ({
-      pre: (props: ComponentPropsWithoutRef<"pre">) => (
-        <pre className="markdown-pre" {...props} />
-      ),
+      pre: (props: ComponentPropsWithoutRef<"pre">) => <CodeBlock {...props} />,
       code: (props: ComponentPropsWithoutRef<"code">) => {
         const { className, children, ...rest } = props;
         const isInline = !className?.includes("language-");

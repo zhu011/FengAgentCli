@@ -2,43 +2,53 @@
  * @fengagent/web-ui — 应用入口
  *
  * 组合 SessionSidebar + ChatPage，
- * 管理全局状态（主题切换、API 客户端、会话状态）。
+ * 管理全局状态（API 客户端、会话状态）。
+ * Dark Tech Luxury 主题 — 暗色专用。
  */
 
 import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Moon, Sun } from "lucide-react";
 import { createApiClient } from "./api/client.ts";
 import { ChatPage } from "./pages/chat.tsx";
 import { SessionSidebar } from "./components/session-sidebar.tsx";
 import { useSession } from "./hooks/use-session.ts";
 import "./index.css";
 
-type Theme = "light" | "dark";
+type Theme = "dark" | "light" | "cyber";
 
-function getInitialTheme(): Theme {
-  if (typeof window === "undefined") return "light";
-  const stored = localStorage.getItem("fengagent-theme");
-  if (stored === "dark" || stored === "light") return stored;
-  // 跟随系统偏好
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
-}
+const THEME_ICONS: Record<Theme, string> = {
+  dark: "🌙",
+  light: "☀️",
+  cyber: "🌈",
+};
 
 function App() {
   const client = useMemo(() => createApiClient(), []);
   const session = useSession(client);
-  const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
-  // 应用主题 class
+  const [theme, setTheme] = useState<Theme>(() => {
+    const stored = localStorage.getItem("feng-theme");
+    if (stored === "light" || stored === "cyber" || stored === "dark") {
+      return stored;
+    }
+    return "dark";
+  });
+
+  // 应用 data-theme 属性 + dark class 按需切换
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    localStorage.setItem("fengagent-theme", theme);
+    document.documentElement.setAttribute("data-theme", theme);
+    if (theme === "dark" || theme === "cyber") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+    localStorage.setItem("feng-theme", theme);
   }, [theme]);
 
-  const toggleTheme = useCallback(() => {
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  const cycleTheme = useCallback(() => {
+    setTheme((prev) =>
+      prev === "dark" ? "light" : prev === "light" ? "cyber" : "dark",
+    );
   }, []);
 
   return (
@@ -55,12 +65,11 @@ function App() {
         <ChatPage client={client} session={session} />
       </div>
       <button
-        type="button"
-        className="app-shell__theme-toggle"
-        onClick={toggleTheme}
+        className="theme-toggle"
+        onClick={cycleTheme}
         aria-label="Toggle theme"
       >
-        {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+        {THEME_ICONS[theme]}
       </button>
     </div>
   );

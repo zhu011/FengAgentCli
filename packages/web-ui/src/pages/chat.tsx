@@ -106,7 +106,19 @@ export function ChatPage({ client, session }: ChatPageProps) {
           <MessageList messages={session.activeMessages} />
         ) : (
           <div className="chat-page__no-session">
-            <p>No active session. Create a new chat to get started.</p>
+            <div className="welcome-card">
+              <span className="welcome-card__icon">⚡</span>
+              <h2 className="welcome-card__title">FENGAGENTCLI</h2>
+              <div className="welcome-card__features">
+                <span className="welcome-card__feature-tag">对话</span>
+                <span className="welcome-card__feature-tag">工具调用</span>
+                <span className="welcome-card__feature-tag">多Agent</span>
+                <span className="welcome-card__feature-tag">WebUI</span>
+                <span className="welcome-card__feature-tag">MCP</span>
+                <span className="welcome-card__feature-tag">记忆系统</span>
+              </div>
+              <p className="welcome-card__hint">📝 输入消息开始对话</p>
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />

@@ -25,7 +25,7 @@ export function SessionSidebar({
   return (
     <aside className="session-sidebar">
       <div className="session-sidebar__header">
-        <h1 className="session-sidebar__title">FengAgent</h1>
+        <h1 className="session-sidebar__title">⚡ FENGAGENTCLI</h1>
         <button
           type="button"
           className="session-sidebar__new-btn"

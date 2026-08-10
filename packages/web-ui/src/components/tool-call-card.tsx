@@ -54,6 +54,9 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         <span className="tool-card__name">{toolCall.name}</span>
         <span className="tool-card__status">{statusIcon}</span>
       </button>
+      {toolCall.status === "running" && (
+        <div className="tool-card__progress" />
+      )}
 
       {expanded && (
         <div className="tool-card__body">
