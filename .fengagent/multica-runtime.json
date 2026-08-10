@@ -1,0 +1,11 @@
+{
+  "provider": "fengagent",
+  "displayName": "FengAgentCli",
+  "launchHeader": "fengagent acp",
+  "protocol": "acp",
+  "command": "bun",
+  "args": ["run", "packages/cli/src/entry.ts", "acp"],
+  "version": "0.1.0",
+  "capabilities": ["text", "tools", "streaming", "multi-agent", "mcp"],
+  "description": "开源本地 AI Agent CLI 工具 — 对话、工具调用、多Agent、WebUI"
+}

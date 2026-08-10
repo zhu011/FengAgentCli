@@ -73,5 +73,12 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "multica": {
+    "provider": "fengagent",
+    "launchHeader": "fengagent acp",
+    "displayName": "FengAgentCli",
+    "protocol": "acp",
+    "version": "0.1.0"
   }
 }

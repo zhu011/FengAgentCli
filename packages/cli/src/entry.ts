@@ -146,6 +146,58 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  // acp 子命令 — 启动 ACP 服务（Multica 运行时集成）
+  if (parsed.acp) {
+    const { loadConfigFromEnv } = await import("@fengagent/core");
+    const { Agent } = await import("@fengagent/agent");
+    const { createClientFromEnv } = await import("@fengagent/llm");
+    const {
+      createToolRegistry,
+      createToolExecutor,
+      registerBuiltinTools,
+      createPermissionChecker,
+      createHookRegistry,
+    } = await import("@fengagent/tools");
+    const { createContextManager } = await import("@fengagent/context");
+    const { startAcpServer } = await import("@fengagent/server");
+
+    const config = loadConfigFromEnv();
+    const { client: llmClient } = createClientFromEnv();
+    const workdir = process.cwd();
+
+    const hookRegistry = createHookRegistry();
+    const permissionChecker = createPermissionChecker(workdir);
+
+    function createAcpAgent(): InstanceType<typeof Agent> {
+      const toolRegistry = createToolRegistry();
+      registerBuiltinTools(toolRegistry);
+
+      const toolExecutor = createToolExecutor(permissionChecker, hookRegistry);
+      const contextManager = createContextManager({
+        config: {
+          contextWindow: config.contextWindow,
+          compactThreshold: config.compactThreshold,
+          compactKeepTokens: config.compactKeepTokens,
+          disableCompact: config.disableCompact,
+          smallModel: config.smallModel,
+        },
+        summaryGenerator: llmClient,
+        systemContextOptions: { workdir },
+      });
+      return new Agent({
+        llmClient,
+        toolRegistry,
+        toolExecutor,
+        contextManager,
+        config,
+        workdir,
+      });
+    }
+
+    startAcpServer({ config, createAgent: createAcpAgent });
+    return;
+  }
+
   // 构建 CLI 参数覆盖
   const cliOverrides: Record<string, unknown> = {};
   if (parsed.model) {

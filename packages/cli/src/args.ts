@@ -15,6 +15,8 @@ export interface ParsedArgs {
   session?: string;
   /** 是否启动 WebUI 服务模式 */
   serve: boolean;
+  /** 是否启动 ACP 服务模式 */
+  acp: boolean;
   /** 是否强制非交互模式（--print） */
   print: boolean;
   /** 额外的位置参数（非选项参数） */
@@ -49,6 +51,7 @@ export interface ArgParseError {
 export function parseArgs(argv: string[]): ParsedArgs {
   const result: ParsedArgs = {
     serve: false,
+    acp: false,
     print: false,
     positional: [],
     help: false,
@@ -73,6 +76,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "serve":
         result.serve = true;
+        break;
+      case "acp":
+        result.acp = true;
         break;
       case "--print":
         result.print = true;
@@ -159,6 +165,7 @@ export function getHelpText(): string {
 
 用法: feng [选项] [提示文本]
       feng serve [选项]
+      feng acp [选项]
 
 选项:
   -m, --model <id>       指定模型 ID
@@ -170,6 +177,7 @@ export function getHelpText(): string {
 
 子命令:
   serve                  启动 WebUI 服务模式
+  acp                    启动 ACP 服务模式（Multica 运行时集成）
 
 示例:
   feng "帮我读取 package.json"
