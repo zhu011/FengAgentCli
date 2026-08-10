@@ -585,7 +585,32 @@ describe("OpenAI-Compatible Provider (mocked fetch)", () => {
     expect((error as { error: { status?: number } }).error.status).toBe(500);
   });
 
-  test("defaultModel overrides request model in body", async () => {
+  test("request model takes priority over defaultModel", async () => {
+    let capturedBody: { model?: string } | null = null;
+    globalThis.fetch = mock((_url: string, init: RequestInit) => {
+      capturedBody = JSON.parse(init.body as string) as { model?: string };
+      return Promise.resolve(
+        createJSONResponse({
+          id: "test",
+          model: "local-model",
+          choices: [{ message: { content: "ok" }, finish_reason: "stop", index: 0 }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+      );
+    }) as unknown as typeof fetch;
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "test-key",
+      baseURL: "http://localhost:8080/v1",
+      defaultModel: "env-model",
+    });
+    await client.generate({ ...baseRequest, model: "local-model" });
+
+    const body = capturedBody as { model?: string } | null;
+    expect(body?.model).toBe("local-model");
+  });
+
+  test("defaultModel used when request model is empty", async () => {
     let capturedBody: { model?: string } | null = null;
     globalThis.fetch = mock((_url: string, init: RequestInit) => {
       capturedBody = JSON.parse(init.body as string) as { model?: string };
@@ -604,7 +629,7 @@ describe("OpenAI-Compatible Provider (mocked fetch)", () => {
       baseURL: "http://localhost:8080/v1",
       defaultModel: "env-model",
     });
-    await client.generate({ ...baseRequest, model: "local-model" });
+    await client.generate({ ...baseRequest, model: "" });
 
     const body = capturedBody as { model?: string } | null;
     expect(body?.model).toBe("env-model");

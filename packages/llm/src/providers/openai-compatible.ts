@@ -20,9 +20,9 @@ export function createOpenAICompatibleClient(
   const { apiKey, baseURL, defaultModel } = options;
   const endpoint = baseURL.replace(/\/+$/, "");
 
-  /** 如果设置了 defaultModel，覆盖请求中的 model（用于本地模型服务器等场景） */
+  /** 优先使用请求中的 model，defaultModel 仅作为兜底 */
   function resolveModel(request: LLMRequest): string {
-    return defaultModel ?? request.model;
+    return request.model || defaultModel || "";
   }
 
   return {
