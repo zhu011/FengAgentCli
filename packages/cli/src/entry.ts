@@ -51,7 +51,7 @@ export async function main(argv: string[]): Promise<void> {
 
   // serve 子命令 — 启动 WebUI 服务
   if (parsed.serve) {
-    const { loadConfigFromEnv } = await import("@fengagent/core");
+    const { loadConfig } = await import("@fengagent/core");
     const { Agent } = await import("@fengagent/agent");
     const { createClientFromEnv } = await import("@fengagent/llm");
     const {
@@ -68,7 +68,7 @@ export async function main(argv: string[]): Promise<void> {
     const { startServer } = await import("@fengagent/server");
     const { resolve } = await import("node:path");
 
-    const config = loadConfigFromEnv();
+    const config = await loadConfig();
     const { client: llmClient } = createClientFromEnv();
     const workdir = process.cwd();
 
