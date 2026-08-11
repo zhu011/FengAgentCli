@@ -69,7 +69,23 @@ export async function main(argv: string[]): Promise<void> {
     const { resolve } = await import("node:path");
 
     const config = await loadConfig();
-    const { client: llmClient } = createClientFromEnv();
+
+    // 将 config 中的 API 配置注入为等效环境变量（供 createClientFromEnv 使用）
+    const envForLLM: Record<string, string | undefined> = { ...process.env };
+    function injectConfigEnv(key: string, configVal: string | undefined) {
+      if (configVal !== undefined && configVal !== "" && !envForLLM[key]) {
+        envForLLM[key] = configVal;
+      }
+    }
+    injectConfigEnv("FENG_PROVIDER", config.provider);
+    injectConfigEnv("FENG_MODEL", config.model);
+    injectConfigEnv("ANTHROPIC_API_KEY", config.anthropicApiKey);
+    injectConfigEnv("OPENAI_API_KEY", config.openaiApiKey);
+    injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
+    injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
+    injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
+
+    const { client: llmClient } = createClientFromEnv(envForLLM);
     const workdir = process.cwd();
 
     // 共享 Hook 注册器和权限检查器
