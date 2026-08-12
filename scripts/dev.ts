@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
+const isWindows = process.platform === "win32";
 
 type Proc = { name: string; proc: import("node:child_process").ChildProcess };
 
@@ -41,13 +42,19 @@ function start(name: string, cmd: string, args: string[], cwd: string): Proc {
 }
 
 function cleanup() {
-  for (const { name, proc } of procs) {
-    if (!proc.killed) {
-      try {
+  for (const { proc } of procs) {
+    if (proc.exitCode !== null) continue;
+    try {
+      if (isWindows && proc.pid) {
+        // Windows 上 SIGTERM 不会真正终止 bun 子进程，需用 taskkill /F /T 杀整棵进程树
+        spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
+          stdio: "ignore",
+        });
+      } else {
         proc.kill("SIGTERM");
-      } catch {
-        // ignore
       }
+    } catch {
+      // ignore
     }
   }
 }
