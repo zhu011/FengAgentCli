@@ -31,6 +31,8 @@ export interface ServerOptions {
   createAgent: () => Agent;
   /** 静态文件目录（可选，生产模式托管 WebUI） */
   staticDir?: string;
+  /** 可选的 SessionStore，用于跨重启恢复历史会话 */
+  sessionStore?: import("@fengagent/agent").SessionStore;
 }
 
 /**
@@ -50,10 +52,10 @@ export function createApp(options: ServerOptions): {
   app: Hono;
   sessionManager: SessionManager;
 } {
-  const { config, createAgent, staticDir } = options;
+  const { config, createAgent, staticDir, sessionStore } = options;
 
   // 创建会话管理器
-  const sessionManager = new SessionManager({ createAgent });
+  const sessionManager = new SessionManager({ createAgent, sessionStore });
 
   // 创建 Hono 应用
   const app = new Hono();

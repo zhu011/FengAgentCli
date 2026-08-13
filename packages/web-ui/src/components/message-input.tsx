@@ -59,7 +59,6 @@ export function MessageInput({
         onCompositionEnd={() => setIsComposing(false)}
         placeholder={busy ? "Assistant is responding..." : placeholder}
         rows={3}
-        disabled={busy}
         aria-label="Message input"
       />
       <div className="message-input__footer">

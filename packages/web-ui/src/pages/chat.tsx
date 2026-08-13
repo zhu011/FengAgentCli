@@ -135,14 +135,20 @@ export function ChatPage({ client, session }: ChatPageProps) {
           />
         ) : (
           <div className="chat-page__no-session-input">
-            <button
-              type="button"
-              className="chat-page__create-btn"
-              onClick={() => void session.createSession()}
-              disabled={session.creatingSession}
-            >
-              {session.creatingSession ? "Creating..." : "New Chat"}
-            </button>
+            <MessageInput
+              busy={session.creatingSession || session.isStreaming}
+              placeholder="输入消息开始对话..."
+              onSubmit={async (text) => {
+                // 无活跃会话时自动创建，然后发送消息
+                await session.createSession();
+                // 等待 createSession 完成后 activeSessionId 会更新
+                // 使用 setTimeout 让 React 状态更新后再发送
+                setTimeout(() => {
+                  void session.sendMessage(text, selectedModel ?? undefined);
+                }, 100);
+              }}
+              onCancel={() => void session.interrupt()}
+            />
           </div>
         )}
       </footer>

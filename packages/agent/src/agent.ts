@@ -16,6 +16,9 @@ import { AgentLoop } from "./loop.ts";
 import type { AgentLoopOptions } from "./loop.ts";
 import type { SessionStore } from "./session.ts";
 import type { ToolContext } from "@fengagent/core/tool";
+import { createLogger, writeSessionLog } from "@fengagent/shared";
+
+const log = createLogger("agent");
 
 /** Agent 构造选项 */
 export interface AgentOptions extends AgentLoopOptions {
@@ -82,10 +85,23 @@ export class Agent {
     const sess = session ?? createSession(this.config.model);
     sess.status = "running";
 
+    log.info("prompt", `start text preview=${text.slice(0, 50)}, sessionId=${sess.id}`);
+
     // 添加用户消息
     const userMsg = createUserMessage(text);
     sess.messages.push(userMsg);
     sess.updatedAt = Date.now();
+
+    // 会话 JSONL 日志：记录用户消息
+    writeSessionLog({
+      timestamp: new Date().toISOString(),
+      sessionId: sess.id,
+      messageId: userMsg.id,
+      role: "user",
+      content: userMsg.content,
+      model: sess.model,
+      hasToolCalls: false,
+    });
 
     // 持久化会话和用户消息
     if (this.sessionStore) {
@@ -98,6 +114,34 @@ export class Agent {
 
     // 运行 Agent Loop
     for await (const event of this.loop.run(sess, options)) {
+      // 会话 JSONL 日志：message-end 时记录助手消息
+      if (event.type === "message-end") {
+        const assistantMsg = sess.messages.find((m) => m.id === event.messageId);
+        if (assistantMsg) {
+          const toolCalls = assistantMsg.content
+            .filter((b) => b.type === "tool-use")
+            .map((b): { name: string; input: unknown } => {
+              if (b.type === "tool-use") return { name: b.name, input: b.input };
+              return { name: "", input: null };
+            });
+          writeSessionLog({
+            timestamp: new Date().toISOString(),
+            sessionId: sess.id,
+            messageId: assistantMsg.id,
+            role: "assistant",
+            content: assistantMsg.content.map((b) => {
+              if (b.type === "text") return { type: "text", text: b.text.slice(0, 500) };
+              if (b.type === "tool-use") return { type: "tool-use", name: b.name };
+              if (b.type === "tool-result") return { type: "tool-result", toolUseId: b.toolUseId };
+              return { type: b.type };
+            }),
+            model: sess.model,
+            hasToolCalls: toolCalls.length > 0,
+            toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+            tokenCount: sess.tokenCount,
+          });
+        }
+      }
       yield event;
     }
 
@@ -111,6 +155,8 @@ export class Agent {
     }
 
     yield { type: "session-end" };
+
+    log.info("prompt", `completed sessionId=${sess.id}`);
   }
 
   /**

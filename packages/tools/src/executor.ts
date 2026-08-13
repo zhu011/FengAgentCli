@@ -20,6 +20,9 @@ import { createPermissionChecker } from "./permission.ts";
 import { truncateOutput } from "./truncate.ts";
 import type { HookRegistry, HookContext } from "./hooks.ts";
 import { createHookRegistry } from "./hooks.ts";
+import { createLogger } from "@fengagent/shared";
+
+const log = createLogger("tool-executor");
 
 export interface ExecutionContext {
   workdir: string;
@@ -108,6 +111,8 @@ export function createToolExecutor(
     context: ToolContext,
   ): Promise<ToolResult> {
     const validated = tool.inputSchema.parse(input);
+
+    log.info("executeOne", `tool=${tool.name}, input=${JSON.stringify(validated).slice(0, 50)}`);
     const hookCtx = toHookContext(context);
 
     // 1. 触发 pre-tool-use hooks（可阻止执行）
@@ -122,6 +127,8 @@ export function createToolExecutor(
 
     // 2. 权限检查
     const perm = permChecker.checkPermissions(tool, validated, context);
+
+    log.info("executeOne", `permission decision=${perm.decision}, tool=${tool.name}`);
 
     if (perm.decision === "deny") {
       return {
@@ -155,6 +162,8 @@ export function createToolExecutor(
       }
     }
 
+    const startTime = Date.now();
+
     // 3. 执行工具（带超时）
     const timeoutMs =
       tool.name === "bash"
@@ -175,6 +184,7 @@ export function createToolExecutor(
         err instanceof Error ? err : new Error(String(err)),
       );
       result = await hooks.triggerPostToolUse(tool.name, validated, errorRes, hookCtx);
+      log.error("executeOne", `execution error tool=${tool.name}, error=${err instanceof Error ? err.message : String(err)}`);
       return result;
     }
 
@@ -186,6 +196,9 @@ export function createToolExecutor(
 
     // 4. 截断输出
     const truncated = truncateOutput(result.content);
+
+    log.debug("executeOne", `result success, tool=${tool.name}, duration=${Date.now() - startTime}ms, isError=${result.isError}`);
+
     let finalResult: ToolResult = {
       ...result,
       content: truncated.content,
@@ -240,6 +253,8 @@ export function createToolExecutor(
           serial.push(call);
         }
       }
+
+      log.info("executeMany", `batch start total=${calls.length}, parallel=${parallel.length}, serial=${serial.length}`);
 
       const results: ExecutedToolResult[] = [];
 
@@ -299,6 +314,8 @@ export function createToolExecutor(
           });
         }
       }
+
+      log.info("executeMany", `batch end total=${results.length}`);
 
       return results;
     },

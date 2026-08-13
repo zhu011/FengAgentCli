@@ -1,0 +1,13 @@
+{
+  "name": "@fengagent/eval",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./analyzer": "./src/analyzer.ts",
+    "./reporter": "./src/reporter.ts"
+  },
+  "dependencies": {
+    "@fengagent/shared": "workspace:*"
+  }
+}

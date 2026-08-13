@@ -263,6 +263,110 @@ bun test packages/agent/src/__tests__/loop.test.ts
 
 详细开发指南见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，各包接口说明见 [docs/MODULES.md](docs/MODULES.md)，扩展指南见 [docs/EXTENDING.md](docs/EXTENDING.md)。
 
+## 运行日志
+
+FengAgentCli 内置分级日志系统（`@fengagent/shared/logger`），server 和 CLI 共用，自动落盘到本地文件。
+
+### 日志配置
+
+| 配置 | 说明 |
+|------|------|
+| `FENG_LOG_LEVEL` | 日志级别：`debug` / `info`（默认）/ `warn` / `error` |
+
+### 日志文件
+
+所有日志文件位于 `.fengagent/logs/` 目录：
+
+| 文件 | 格式 | 内容 |
+|------|------|------|
+| `fengagent-{date}.log` | 文本 | 运行日志（时间戳+模块+函数名+消息） |
+| `sessions-{date}.jsonl` | JSONL | 会话消息日志（每条消息一行，含 sessionId/role/content/model/toolCalls） |
+| `llm-trace-{date}.jsonl` | JSONL | LLM 请求/回复轨迹（供 eval 模块分析） |
+
+### 会话持久化
+
+| 存储 | 路径 | 说明 |
+|------|------|------|
+| SQLite（主存储） | `.fengagent/sessions.db` | 会话+消息持久化，跨重启恢复 |
+| JSONL（可见副本） | `.fengagent/logs/sessions-{date}.jsonl` | 人工查看/迁移/分析用 |
+
+### 记忆系统
+
+| 类型 | 路径 | 说明 |
+|------|------|------|
+| MEMORY.md | `MEMORY.md` 或 `.fengagent/memory/MEMORY.md` | 主记忆文件（注入系统提示） |
+| 分类记忆 | `.fengagent/memory/*.md` | 按分类存储的记忆文件 |
+| 向量记忆 | `.fengagent/memory/vector-store.json` | TF-IDF 向量化记忆（持久化到 JSON） |
+
+### 上下文压缩
+
+压缩在接近上下文窗口阈值时自动触发，算法优化点：
+
+- **工具结果裁剪**：超过阈值的旧工具结果替换为占位符（非 LLM 操作，减少 token）
+- **分割点优化**：不在 tool-result 消息边界切割（防止孤儿 tool-call）
+- **结构化摘要**：目标 / 约束 / 进展 / 关键决策 / 下一步 / 关键上下文 / 相关文件
+- **迭代更新**：有前次摘要时传入更新而非从头生成
+- **文件操作追踪**：从消息中提取已读/已改文件，附加到摘要
+
+### 同时输出
+
+示例日志行：
+```
+[2026-08-13T15:04:33.013Z] [INFO] [server] [sendMessage] entry method=POST, path=/sessions/xxx/messages
+[2026-08-13T15:04:33.018Z] [INFO] [agent-loop] [run] LLM call start model=deepseek-v4-pro, messageCount=3
+[2026-08-13T15:05:03.761Z] [INFO] [agent-loop] [run] turn end reason=end_turn, step=1
+```
+
+### 覆盖模块
+
+| 模块 | 覆盖点 |
+|------|--------|
+| server | 请求入口、会话 CRUD、SSE 事件、interrupt、权限响应 |
+| session-manager | 会话创建、sendMessage 全链路、interrupt、权限请求 |
+| agent-loop | 循环启动、LLM 调用、工具调用/结果、轮次结束、错误 |
+| tool-executor | 工具执行、权限决策、执行结果（含耗时） |
+| permission | autoApproveTools 分支、允许/拒绝/询问决策 |
+| cli | CLI 启动、配置加载、serve 模式 |
+
+## Agent 测评模块
+
+FengAgentCli 内置 Agent 测评模块，自动记录 LLM 请求/回复轨迹并生成分析报告。
+
+### LLM Trace 日志
+
+每次 LLM 调用自动记录到 `.fengagent/logs/llm-trace-{date}.jsonl`（JSONL 格式），包含：
+- 时间戳、会话 ID、模型名
+- 完整请求（messages、tools、参数）和完整回复（text、tool_calls、token 用量）
+- 耗时、完成原因、是否为工具调用轮
+- 不记录 API key
+
+### 运行测评
+
+```bash
+# 分析今天的日志
+bun run eval
+
+# 分析指定日期
+bun run eval --date=2026-08-13
+
+# 分析所有日志
+bun run eval --all
+
+# 分析指定文件
+bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl
+```
+
+### 报告内容
+
+报告输出到 `.fengagent/logs/eval-report-{date}.md`，覆盖：
+- LLM 调用次数、总耗时、平均耗时
+- Token 用量分布（输入/输出）
+- 工具调用率、工具使用分布
+- 完成原因分布（end_turn / tool_use）
+- 错误率、错误详情
+- 每个会话的完整轨迹
+- 优化建议（工具描述、提示词、模型选择）
+
 ## Docker 部署
 
 ```bash

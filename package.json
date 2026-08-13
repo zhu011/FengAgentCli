@@ -58,11 +58,13 @@
     "build:binary": "bun run scripts/build.ts",
     "dev:server": "bun run packages/server/src/entry.ts",
     "serve": "bun run packages/server/src/entry.ts",
+    "eval": "bun run packages/eval/src/index.ts",
     "prepublishOnly": "bun run build:web-ui && bun run typecheck",
     "publish": "bun run scripts/publish.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
+    "playwright": "^1.62.1",
     "typescript": "^7.0.2"
   },
   "engines": {

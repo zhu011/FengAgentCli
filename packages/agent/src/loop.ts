@@ -6,6 +6,8 @@
  */
 
 import type { LLMClient } from "@fengagent/llm";
+import { createLlmTracer } from "@fengagent/llm";
+import type { LLMEvent } from "@fengagent/llm";
 import type {
   Config,
   Session,
@@ -23,7 +25,10 @@ import { createSystemMessage } from "@fengagent/core";
 import type { ToolRegistry, ToolExecutor } from "@fengagent/tools";
 import type { ContextManager } from "@fengagent/context";
 import { generateId } from "@fengagent/shared/utils";
+import { createLogger } from "@fengagent/shared";
 import { llmEventToAgentEvents } from "./streaming.ts";
+
+const log = createLogger("agent-loop");
 
 /** AgentLoop 构造选项 */
 export interface AgentLoopOptions {
@@ -80,6 +85,8 @@ export class AgentLoop {
     while (needsContinuation && step < maxTurns) {
       step++;
 
+      log.info("run", `loop start step=${step}, model=${session.model}`);
+
       // 1. 组装上下文
       const context = await this.options.contextManager.assemble(session);
 
@@ -116,14 +123,24 @@ export class AgentLoop {
       let llmError: { message: string; code?: string } | null = null;
       let finishReason: FinishReason = "end_turn";
 
-      for await (const event of this.options.llmClient.stream({
+      log.info("run", `LLM call start model=${session.model}, messageCount=${context.messages.length}`);
+
+      // LLM trace：记录请求
+      const llmTracer = createLlmTracer();
+      const llmRequest = {
         model: session.model,
         system: context.system,
         messages: context.messages,
         tools: disableTools ? undefined : tools,
         maxTokens: this.options.config.maxTokens,
         temperature: this.options.config.temperature,
-      })) {
+      };
+      llmTracer.logRequest(session.id, llmRequest);
+      const llmStartTime = Date.now();
+      const llmEvents: LLMEvent[] = [];
+
+      for await (const event of this.options.llmClient.stream(llmRequest)) {
+        llmEvents.push(event);
         // 收集内容
         switch (event.type) {
           case "text-delta":
@@ -144,6 +161,7 @@ export class AgentLoop {
               name: event.name,
               input: event.input,
             });
+            log.debug("run", `tool call name=${event.name}, input=${JSON.stringify(event.input).slice(0, 50)}`);
             break;
           case "finish":
             finishReason = event.reason;
@@ -167,6 +185,9 @@ export class AgentLoop {
         }
       }
 
+      // LLM trace：记录回复
+      llmTracer.logResponse(session.id, session.model, llmEvents, Date.now() - llmStartTime);
+
       // 将累积的 text / thinking 转为 ContentBlock（顺序：thinking → text → tool-use）
       if (thinkingAccumulator) {
         assistantContent.unshift({ type: "thinking", text: thinkingAccumulator });
@@ -185,6 +206,7 @@ export class AgentLoop {
           type: "error",
           error: { message: llmError.message, code: llmError.code },
         };
+        log.error("run", `LLM error: ${llmError.message}`);
         yield { type: "turn-end", reason: "error" };
         return;
       }
@@ -205,6 +227,8 @@ export class AgentLoop {
           toolUseId: string;
           result: ToolResult;
         }> = [];
+
+        log.info("run", `executing tools count=${toolCalls.length}`);
 
         // 准备可执行的工具调用（工具在注册表中存在）
         const calls: Array<{ tool: ToolDefinition; input: unknown }> = [];
@@ -253,6 +277,11 @@ export class AgentLoop {
 
         // 转发工具结果事件
         for (const { toolUseId, result } of toolResults) {
+          if (result.isError) {
+            log.error("run", `tool result: error, content=${String(result.content).slice(0, 50)}`);
+          } else {
+            log.debug("run", `tool result: success, content=${String(result.content).slice(0, 50)}`);
+          }
           yield {
             type: "tool-call-result",
             toolUseId,
@@ -315,6 +344,7 @@ export class AgentLoop {
         turnReason = "tool_use";
       }
       yield { type: "turn-end", reason: turnReason };
+      log.info("run", `turn end reason=${turnReason}, step=${step}`);
     }
   }
 }

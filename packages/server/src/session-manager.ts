@@ -9,6 +9,9 @@
 
 import type { AgentEvent, PermissionResult, Session, SessionMeta } from "@fengagent/core";
 import type { Agent, RequestPermission } from "@fengagent/agent";
+import { createLogger } from "@fengagent/shared";
+
+const log = createLogger("session-manager");
 
 /** 权限请求记录 */
 export interface PermissionRequest {
@@ -40,6 +43,8 @@ interface RunningTask {
 export interface SessionManagerOptions {
   /** Agent 工厂函数（每次创建会话时调用） */
   createAgent: () => Agent;
+  /** 可选的 SessionStore，用于跨重启恢复历史会话 */
+  sessionStore?: import("@fengagent/agent").SessionStore;
 }
 
 /**
@@ -55,6 +60,7 @@ export interface SessionManagerOptions {
  */
 export class SessionManager {
   private createAgent: () => Agent;
+  private sessionStore?: import("@fengagent/agent").SessionStore;
   /** sessionId → Agent 实例 */
   private agents = new Map<string, Agent>();
   /** sessionId → Session 对象（内存缓存） */
@@ -71,6 +77,7 @@ export class SessionManager {
 
   constructor(options: SessionManagerOptions) {
     this.createAgent = options.createAgent;
+    this.sessionStore = options.sessionStore;
   }
 
   /**
@@ -86,6 +93,7 @@ export class SessionManager {
     const session = agent.createSession(title);
     this.agents.set(session.id, agent);
     this.sessions.set(session.id, session);
+    log.info("createSession", `sessionId=${session.id}, title=${title ?? "(none)"}`);
     return session;
   }
 
@@ -93,6 +101,7 @@ export class SessionManager {
    * 获取会话（含消息历史）。
    *
    * 优先从内存缓存读取，回退到 SessionStore 加载。
+   * 加载后缓存到内存并创建 Agent 实例。
    *
    * @param sessionId - 会话 ID
    * @returns 会话对象，不存在则返回 null
@@ -100,20 +109,48 @@ export class SessionManager {
   getSession(sessionId: string): Session | null {
     const cached = this.sessions.get(sessionId);
     if (cached) return cached;
-    const agent = this.agents.get(sessionId);
-    if (!agent) return null;
-    return agent.loadSession(sessionId);
+
+    // 内存缓存未命中 — 尝试从 Agent 实例加载
+    const existingAgent = this.agents.get(sessionId);
+    if (existingAgent) {
+      const loaded = existingAgent.loadSession(sessionId);
+      if (loaded) {
+        this.sessions.set(sessionId, loaded);
+        return loaded;
+      }
+    }
+
+    // Agent 实例也未命中 — 如果有 SessionStore，创建新 Agent 并加载
+    if (this.sessionStore) {
+      try {
+        const loaded = this.sessionStore.loadSession(sessionId);
+        if (loaded) {
+          // 创建 Agent 实例并缓存
+          const agent = this.createAgent();
+          this.agents.set(sessionId, agent);
+          this.sessions.set(sessionId, loaded);
+          return loaded;
+        }
+      } catch {
+        // SessionStore 加载失败
+      }
+    }
+
+    return null;
   }
 
   /**
    * 列出所有会话。
    *
-   * 从内存缓存中返回会话元信息，按更新时间降序。
+   * 优先从内存缓存返回，内存为空时从 SessionStore 加载。
+   * 按更新时间降序排列。
    *
    * @returns 会话元信息列表
    */
   listSessions(): SessionMeta[] {
     const all: SessionMeta[] = [];
+
+    // 内存缓存中的会话
     for (const session of this.sessions.values()) {
       all.push({
         id: session.id,
@@ -125,6 +162,22 @@ export class SessionManager {
         updatedAt: session.updatedAt,
       });
     }
+
+    // 如果有 SessionStore 且内存缓存不足，补充 SQLite 中的历史会话
+    if (this.sessionStore) {
+      try {
+        const stored = this.sessionStore.listSessions();
+        const memIds = new Set(all.map((s) => s.id));
+        for (const s of stored) {
+          if (!memIds.has(s.id)) {
+            all.push(s);
+          }
+        }
+      } catch {
+        // SessionStore 读取失败 — 仅返回内存缓存
+      }
+    }
+
     return all.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -175,6 +228,8 @@ export class SessionManager {
       existing.updatedAt = Date.now();
     }
 
+    log.info("sendMessage", `sessionId=${sessionId}, text preview=${text.slice(0, 50)}, model=${existing.model}`);
+
     // 创建权限回调（将权限请求推送到 SSE 监听器）
     const requestPermission: RequestPermission = async (permission) => {
       return this.requestPermission(sessionId, permission);
@@ -200,9 +255,11 @@ export class SessionManager {
           break;
         }
         yield event;
+        log.debug("sendMessage", `event type=${event.type}`);
       }
     } finally {
       this.runningTasks.delete(sessionId);
+      log.info("sendMessage", `completed sessionId=${sessionId}`);
     }
   }
 
@@ -216,8 +273,12 @@ export class SessionManager {
    */
   interrupt(sessionId: string): boolean {
     const task = this.runningTasks.get(sessionId);
-    if (!task) return false;
+    if (!task) {
+      log.info("interrupt", `sessionId=${sessionId}, result=false`);
+      return false;
+    }
     task.aborted = true;
+    log.info("interrupt", `sessionId=${sessionId}, result=true`);
     return true;
   }
 
@@ -243,6 +304,8 @@ export class SessionManager {
     },
   ): Promise<PermissionResult> {
     const reqId = crypto.randomUUID();
+
+    log.info("requestPermission", `sessionId=${sessionId}, toolName=${permission.toolName}, reqId=${reqId}`);
 
     return new Promise<PermissionResult>((resolve, reject) => {
       const request: PermissionRequest = {
@@ -299,6 +362,7 @@ export class SessionManager {
     const [request] = pending.splice(idx, 1);
     if (!request) return false;
     request.resolve(decision);
+    log.info("respondPermission", `sessionId=${sessionId}, reqId=${reqId}, decision=${decision.decision}`);
     return true;
   }
 

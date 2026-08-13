@@ -16,6 +16,9 @@ import { parseArgs, getHelpText, VERSION, type ArgParseError } from "./args.ts";
 import { createAgent } from "./create-agent.ts";
 import { runPrintMode } from "./print-mode.ts";
 import type { Session } from "@fengagent/core";
+import { createLogger } from "@fengagent/shared";
+
+const log = createLogger("cli");
 
 /**
  * CLI 入口函数。
@@ -27,6 +30,7 @@ import type { Session } from "@fengagent/core";
  * 4. 默认 → Ink TUI 交互模式
  */
 export async function main(argv: string[]): Promise<void> {
+  log.info("main", `CLI start, args=${argv.join(" ").slice(0, 50)}`);
   let parsed;
   try {
     parsed = parseArgs(argv);
@@ -70,6 +74,8 @@ export async function main(argv: string[]): Promise<void> {
 
     const config = await loadConfig();
 
+    log.info("main", `config loaded provider=${config.provider}, model=${config.model}, autoApproveTools=${config.autoApproveTools}`);
+
     // 将 config 中的 API 配置注入为等效环境变量（供 createClientFromEnv 使用）
     const envForLLM: Record<string, string | undefined> = { ...process.env };
     function injectConfigEnv(key: string, configVal: string | undefined) {
@@ -84,6 +90,17 @@ export async function main(argv: string[]): Promise<void> {
     injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
     injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
     injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
+
+    // 权限配置注入：config.autoApproveTools → FENG_AUTO_APPROVE_TOOLS 环境变量
+    if (config.autoApproveTools && !process.env.FENG_AUTO_APPROVE_TOOLS) {
+      process.env.FENG_AUTO_APPROVE_TOOLS = "true";
+    }
+    if (config.allowedTools && !process.env.FENG_ALLOWED_TOOLS) {
+      process.env.FENG_ALLOWED_TOOLS = config.allowedTools;
+    }
+    if (config.deniedTools && !process.env.FENG_DENIED_TOOLS) {
+      process.env.FENG_DENIED_TOOLS = config.deniedTools;
+    }
 
     const { client: llmClient } = createClientFromEnv(envForLLM);
     const workdir = process.cwd();
@@ -158,6 +175,7 @@ export async function main(argv: string[]): Promise<void> {
       "../../web-ui/dist",
     );
 
+    log.info("main", `serve mode starting, staticDir=${staticDir}`);
     startServer({ config, createAgent: createServerAgent, staticDir });
     return;
   }

@@ -66,6 +66,12 @@ export function useSession(client: ApiClient): UseSessionResult {
 
   const abortRef = useRef<AbortController | null>(null);
 
+  // 用 ref 存储最新 activeSessionId，避免闭包陈旧问题
+  const activeSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
   // ──────────────────────────────────────────────
   // 初始化：加载会话列表
   // ──────────────────────────────────────────────
@@ -154,14 +160,14 @@ export function useSession(client: ApiClient): UseSessionResult {
       try {
         await client.deleteSession(id);
         setSessions((prev) => prev.filter((s) => s.id !== id));
-        if (activeSessionId === id) {
+        if (activeSessionIdRef.current === id) {
           setActiveSessionId(null);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to delete session");
       }
     },
-    [client, activeSessionId],
+    [client],
   );
 
   // ──────────────────────────────────────────────
@@ -169,17 +175,67 @@ export function useSession(client: ApiClient): UseSessionResult {
   // ──────────────────────────────────────────────
   const sendMessage = useCallback(
     async (text: string, model?: string) => {
-      if (!activeSessionId || !text.trim()) return;
+      // 使用 ref 读取最新 activeSessionId，避免闭包陈旧
+      let sessionId = activeSessionIdRef.current;
 
-      const sessionId = activeSessionId;
+      // 无活跃会话时自动创建
+      if (!sessionId) {
+        setCreatingSession(true);
+        setError(null);
+        try {
+          const newSession = await client.createSession({});
+          setSessions((prev) => [
+            {
+              id: newSession.id,
+              title: newSession.title,
+              model: newSession.model,
+              status: newSession.status,
+              tokenCount: newSession.tokenCount,
+              createdAt: newSession.createdAt,
+              updatedAt: newSession.updatedAt,
+            },
+            ...prev,
+          ]);
+          setActiveSessionId(newSession.id);
+          activeSessionIdRef.current = newSession.id;
+          sessionId = newSession.id;
+
+          // 设置 activeSession 以让 UI 立即显示输入框
+          setActiveSession(newSession);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Failed to create session");
+          setCreatingSession(false);
+          return;
+        }
+        setCreatingSession(false);
+      }
+
+      if (!sessionId || !text.trim()) return;
+
       const controller = new AbortController();
       abortRef.current = controller;
       setIsStreaming(true);
       setError(null);
 
+      // 超时兜底：30s 无任何 SSE 事件 → abort（防止后端未启动时永久挂起）
+      let firstEventReceived = false;
+      const timeoutTimer = setTimeout(() => {
+        if (!firstEventReceived) {
+          controller.abort();
+          setError("请求超时（30s 无响应），请检查后端服务是否正常启动。");
+        }
+      }, 30_000);
+
       // 立即添加用户消息到 UI
+      // crypto.randomUUID 在非安全上下文（http://192.168.x.x）下不可用，需要 fallback
+      const genId = () => {
+        if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+          return crypto.randomUUID();
+        }
+        return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+      };
       const userMsg: DisplayMessage = {
-        id: crypto.randomUUID(),
+        id: genId(),
         role: "user",
         text,
         toolCalls: [],
@@ -196,6 +252,7 @@ export function useSession(client: ApiClient): UseSessionResult {
       try {
         await consumeSSEStream(client, sessionId, text, controller.signal, {
           onEvent: (event) => {
+            firstEventReceived = true; // 收到任意事件，取消超时
             switch (event.type) {
               case "message-start": {
                 currentMessageId = event.messageId;
@@ -331,6 +388,7 @@ export function useSession(client: ApiClient): UseSessionResult {
           setError(err instanceof Error ? err.message : "Streaming failed");
         }
       } finally {
+        clearTimeout(timeoutTimer);
         setIsStreaming(false);
         abortRef.current = null;
         // 安全清理：标记所有消息为非流式
@@ -340,37 +398,46 @@ export function useSession(client: ApiClient): UseSessionResult {
         void refreshSessions();
       }
     },
-    [client, activeSessionId, refreshSessions],
+    [client, refreshSessions],
   );
 
   const interrupt = useCallback(async () => {
-    if (!activeSessionId) return;
+    // 始终清除 streaming 状态，不依赖 abort 副作用
     abortRef.current?.abort();
+    setIsStreaming(false);
+    // 安全清理：标记所有消息为非流式
+    setDisplayMessages((prev) =>
+      prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+    );
+    // 使用 ref 读取最新 sessionId
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
     try {
-      await client.interrupt(activeSessionId);
+      await client.interrupt(sessionId);
     } catch {
       // 忽略中断错误
     }
-  }, [client, activeSessionId]);
+  }, [client]);
 
   const respondPermission = useCallback(
     async (
       reqId: string,
       result: { decision: "allow" } | { decision: "deny"; reason?: string },
     ) => {
-      if (!activeSessionId) return;
+      const sessionId = activeSessionIdRef.current;
+      if (!sessionId) return;
       setPendingPermissions((prev) =>
         prev.filter((p) => p.reqId !== reqId),
       );
       try {
-        await client.respondPermission(activeSessionId, reqId, result);
+        await client.respondPermission(sessionId, reqId, result);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to respond permission",
         );
       }
     },
-    [client, activeSessionId],
+    [client],
   );
 
   return {

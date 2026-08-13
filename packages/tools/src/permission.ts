@@ -14,12 +14,15 @@ import type { ToolDefinition, ToolContext } from "@fengagent/core/tool";
 import type { PermissionResult } from "@fengagent/core/permission";
 import { ALLOW, deny, ask } from "@fengagent/core/permission";
 import { getEnv, getEnvBoolean } from "@fengagent/shared/utils";
+import { createLogger } from "@fengagent/shared";
 import {
   loadPermissionConfig,
   findMatchingRule,
   EMPTY_PERMISSION_CONFIG,
   type PermissionConfig,
 } from "./permission-config.ts";
+
+const log = createLogger("permission");
 
 export interface PermissionChecker {
   checkPermissions(
@@ -79,6 +82,7 @@ export function createPermissionChecker(
   ): PermissionResult {
     // 1. 自动批准 — 最高优先级
     if (getEnvBoolean("FENG_AUTO_APPROVE_TOOLS", false)) {
+      log.info("checkPermissions", `tool=${tool.name}, decision=allow, reason=autoApproveTools`);
       return ALLOW;
     }
 
@@ -95,6 +99,7 @@ export function createPermissionChecker(
       if (!allowed.includes(tool.name)) {
         const result = deny(`Tool "${tool.name}" is not in FENG_ALLOWED_TOOLS`);
         if (cacheEnabled) decisionCache.set(key, result);
+        log.info("checkPermissions", `tool=${tool.name}, decision=deny, reason=notInAllowedList`);
         return result;
       }
     }
@@ -106,6 +111,7 @@ export function createPermissionChecker(
       if (denied.includes(tool.name)) {
         const result = deny(`Tool "${tool.name}" is in FENG_DENIED_TOOLS`);
         if (cacheEnabled) decisionCache.set(key, result);
+        log.info("checkPermissions", `tool=${tool.name}, decision=deny, reason=inDeniedList`);
         return result;
       }
     }
@@ -152,6 +158,7 @@ export function createPermissionChecker(
 
     // 默认允许非破坏性工具
     if (cacheEnabled) decisionCache.set(key, ALLOW);
+    log.debug("checkPermissions", `tool=${tool.name}, decision=allow, reason=default`);
     return ALLOW;
   }
 
