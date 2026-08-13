@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FengAgentCli — 文档</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ==================== CSS Variables ==================== */
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-secondary: #12121a;
+      --bg-tertiary: #1a1a26;
+      --bg-card: #161622;
+      --bg-hover: #1e1e2e;
+      --border: #2a2a3a;
+      --border-light: #33334a;
+      --text-primary: #e4e4ef;
+      --text-secondary: #9999b0;
+      --text-muted: #666680;
+      --accent-1: #6366f1;
+      --accent-2: #a855f7;
+      --accent-grad: linear-gradient(135deg, #6366f1, #a855f7);
+      --accent-glow: rgba(99, 102, 241, 0.15);
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --sidebar-width: 260px;
+      --font-sans: 'Noto Sans SC', 'Inter', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    }
+
+    /* ==================== Reset ==================== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    a { color: var(--accent-1); text-decoration: none; transition: color 0.2s; }
+    a:hover { color: var(--accent-2); }
+
+    /* ==================== Sidebar ==================== */
+    .sidebar {
+      position: fixed;
+      top: 0; left: 0;
+      width: var(--sidebar-width);
+      height: 100vh;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+      transition: transform 0.3s ease;
+    }
+    .sidebar-header {
+      padding: 24px 20px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-logo {
+      font-size: 1.25rem;
+      font-weight: 700;
+      background: var(--accent-grad);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.02em;
+    }
+    .sidebar-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .sidebar-nav {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 0;
+    }
+    .sidebar-nav::-webkit-scrollbar { width: 4px; }
+    .sidebar-nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      transition: all 0.2s;
+      border-left: 3px solid transparent;
+      cursor: pointer;
+    }
+    .nav-item:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+      border-left-color: var(--accent-1);
+    }
+    .nav-item.active {
+      color: var(--text-primary);
+      background: var(--accent-glow);
+      border-left-color: var(--accent-1);
+    }
+    .nav-item .nav-icon { font-size: 1rem; width: 20px; text-align: center; flex-shrink: 0; }
+    .nav-sub-item {
+      padding: 7px 20px 7px 52px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s;
+      border-left: 3px solid transparent;
+    }
+    .nav-sub-item:hover { color: var(--text-secondary); border-left-color: var(--border-light); }
+    .nav-sub-item.active { color: var(--accent-1); border-left-color: var(--accent-1); }
+    .sidebar-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+    .sidebar-footer a { color: var(--text-secondary); }
+    .sidebar-footer a:hover { color: var(--accent-1); }
+
+    /* ==================== Main Content ==================== */
+    .main {
+      margin-left: var(--sidebar-width);
+      min-height: 100vh;
+      transition: margin-left 0.3s ease;
+    }
+    .content {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 48px 32px 80px;
+    }
+
+    /* ==================== Hamburger ==================== */
+    .hamburger {
+      display: none;
+      position: fixed;
+      top: 16px; left: 16px;
+      z-index: 101;
+      width: 40px; height: 40px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      color: var(--text-primary);
+    }
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 99;
+    }
+
+    /* ==================== Typography ==================== */
+    .section { margin-bottom: 64px; scroll-margin-top: 24px; }
+    .section-title {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--border);
+    }
+    .section-title .sec-icon { margin-right: 8px; }
+    .section-desc {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      margin-bottom: 28px;
+    }
+    h3 {
+      font-size: 1.2rem;
+      font-weight: 600;
+      margin-top: 36px;
+      margin-bottom: 12px;
+      color: var(--text-primary);
+    }
+    h3 .h3-anchor {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 400;
+      margin-left: 8px;
+    }
+    p { margin-bottom: 14px; color: var(--text-secondary); }
+    p strong { color: var(--text-primary); font-weight: 600; }
+    ul, ol { margin-bottom: 14px; padding-left: 24px; color: var(--text-secondary); }
+    li { margin-bottom: 6px; }
+    li strong { color: var(--text-primary); }
+
+    /* ==================== Hero ==================== */
+    .hero {
+      text-align: center;
+      padding: 60px 0 48px;
+    }
+    .hero-badge {
+      display: inline-block;
+      padding: 4px 14px;
+      background: var(--accent-glow);
+      border: 1px solid var(--accent-1);
+      border-radius: 100px;
+      font-size: 0.78rem;
+      color: var(--accent-1);
+      font-weight: 500;
+      margin-bottom: 20px;
+    }
+    .hero-title {
+      font-size: 2.8rem;
+      font-weight: 700;
+      background: var(--accent-grad);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.03em;
+      margin-bottom: 16px;
+    }
+    .hero-desc {
+      font-size: 1.1rem;
+      color: var(--text-secondary);
+      max-width: 560px;
+      margin: 0 auto 32px;
+    }
+    .hero-links {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: var(--accent-grad);
+      color: #fff;
+    }
+    .btn-primary:hover { opacity: 0.9; color: #fff; transform: translateY(-1px); }
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--accent-1); color: var(--accent-1); }
+
+    /* ==================== Feature Grid ==================== */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 16px;
+      margin: 24px 0;
+    }
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      transition: all 0.2s;
+    }
+    .feature-card:hover {
+      border-color: var(--accent-1);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px var(--accent-glow);
+    }
+    .feature-card .fc-icon {
+      font-size: 1.6rem;
+      margin-bottom: 10px;
+    }
+    .feature-card .fc-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+    .feature-card .fc-desc {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* ==================== Code Blocks ==================== */
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+    }
+    :not(pre) > code {
+      background: var(--bg-tertiary);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--accent-2);
+      border: 1px solid var(--border);
+    }
+    pre {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 20px;
+      overflow-x: auto;
+      margin-bottom: 18px;
+    }
+    pre code {
+      font-size: 0.82rem;
+      color: var(--text-primary);
+      line-height: 1.6;
+    }
+    .code-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+    .code-label::before {
+      content: '';
+      width: 3px; height: 14px;
+      background: var(--accent-grad);
+      border-radius: 2px;
+    }
+
+    /* ==================== Tables ==================== */
+    .table-wrap { overflow-x: auto; margin-bottom: 18px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th {
+      text-align: left;
+      padding: 10px 14px;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-weight: 600;
+      border-bottom: 2px solid var(--border-light);
+      white-space: nowrap;
+    }
+    td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+    tr:hover td { background: var(--bg-hover); }
+    td code { font-size: 0.8rem; }
+
+    /* ==================== Cards ==================== */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+      margin: 20px 0;
+    }
+    .info-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .info-card .ic-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+    .info-card .ic-body {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* ==================== Callout ==================== */
+    .callout {
+      background: var(--accent-glow);
+      border: 1px solid var(--accent-1);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin: 18px 0;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+    }
+    .callout::before {
+      content: '💡 ';
+    }
+
+    /* ==================== Badge ==================== */
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 100px;
+      font-size: 0.72rem;
+      font-weight: 500;
+      vertical-align: middle;
+    }
+    .badge-get { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
+    .badge-post { background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
+    .badge-del { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+    .badge-sse { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid rgba(168,85,247,0.3); }
+
+    /* ==================== Responsive ==================== */
+    @media (max-width: 900px) {
+      .sidebar { transform: translateX(-100%); }
+      .sidebar.open { transform: translateX(0); }
+      .main { margin-left: 0; }
+      .hamburger { display: flex; }
+      .overlay.show { display: block; }
+      .content { padding: 60px 20px 60px; }
+      .hero-title { font-size: 2rem; }
+      .hero-desc { font-size: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Hamburger Button -->
+<div class="hamburger" onclick="toggleSidebar()">☰</div>
+<div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+
+<!-- ==================== Sidebar ==================== -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">FengAgentCli</div>
+    <div class="sidebar-sub">开源 AI Agent CLI 文档</div>
+  </div>
+  <nav class="sidebar-nav" id="sidebarNav">
+    <div class="nav-item active" data-target="home"><span class="nav-icon">🏠</span> 首页</div>
+    <div class="nav-item" data-target="quickstart"><span class="nav-icon">🚀</span> 快速开始</div>
+    <div class="nav-sub-item" data-target="quickstart">安装</div>
+    <div class="nav-sub-item" data-target="qs-config">配置 API Key</div>
+    <div class="nav-sub-item" data-target="qs-cli">CLI 模式</div>
+    <div class="nav-sub-item" data-target="qs-webui">WebUI 模式</div>
+    <div class="nav-sub-item" data-target="qs-dev">开发模式</div>
+
+    <div class="nav-item" data-target="config"><span class="nav-icon">⚙️</span> 配置</div>
+    <div class="nav-sub-item" data-target="config">环境变量</div>
+    <div class="nav-sub-item" data-target="cfg-file">config.json</div>
+    <div class="nav-sub-item" data-target="cfg-perms">权限规则</div>
+    <div class="nav-sub-item" data-target="cfg-mcp">MCP 配置</div>
+
+    <div class="nav-item" data-target="features"><span class="nav-icon">✨</span> 核心特性</div>
+    <div class="nav-sub-item" data-target="features">对话系统</div>
+    <div class="nav-sub-item" data-target="feat-agent">多 Agent</div>
+    <div class="nav-sub-item" data-target="feat-tools">工具调用</div>
+    <div class="nav-sub-item" data-target="feat-webui">WebUI</div>
+    <div class="nav-sub-item" data-target="feat-compact">上下文压缩</div>
+    <div class="nav-sub-item" data-target="feat-memory">记忆系统</div>
+    <div class="nav-sub-item" data-target="feat-logging">日志系统</div>
+    <div class="nav-sub-item" data-target="feat-eval">Agent 测评</div>
+
+    <div class="nav-item" data-target="commands"><span class="nav-icon">⌨️</span> 命令参考</div>
+    <div class="nav-sub-item" data-target="commands">CLI 命令</div>
+    <div class="nav-sub-item" data-target="cmd-tui">TUI 交互命令</div>
+    <div class="nav-sub-item" data-target="cmd-eval">Eval 命令</div>
+
+    <div class="nav-item" data-target="api"><span class="nav-icon">🔌</span> API 文档</div>
+    <div class="nav-sub-item" data-target="api">HTTP 端点</div>
+    <div class="nav-sub-item" data-target="api-sse">SSE 事件</div>
+  </nav>
+  <div class="sidebar-footer">
+    <a href="https://github.com/zhu011/FengAgentCli" target="_blank">GitHub 仓库 →</a>
+  </div>
+</aside>
+
+<!-- ==================== Main Content ==================== -->
+<div class="main">
+<div class="content">
+
+<!-- ==================== 首页 ==================== -->
+<section class="section" id="home">
+  <div class="hero">
+    <div class="hero-badge">v0.1.0 · MIT License</div>
+    <h1 class="hero-title">FengAgentCli</h1>
+    <p class="hero-desc">开源本地 AI Agent CLI 工具 — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩与权限审批。</p>
+    <div class="hero-links">
+      <a href="https://github.com/zhu011/FengAgentCli" target="_blank" class="btn btn-primary">📦 GitHub 仓库</a>
+      <a href="#quickstart" class="btn btn-secondary">🚀 快速开始</a>
+    </div>
+  </div>
+
+  <h3>特性亮点</h3>
+  <div class="feature-grid">
+    <div class="feature-card">
+      <div class="fc-icon">💬</div>
+      <div class="fc-title">智能对话</div>
+      <div class="fc-desc">多轮上下文对话，SSE 流式输出，Markdown 渲染</div>
+    </div>
+    <div class="feature-card">
+      <div class="fc-icon">🤖</div>
+      <div class="fc-title">多 Agent</div>
+      <div class="fc-desc">子 Agent 派遣，独立 Session + 角色定义</div>
+    </div>
+    <div class="feature-card">
+      <div class="fc-icon">🔧</div>
+      <div class="fc-title">工具调用</div>
+      <div class="fc-desc">文件读写、Bash、Glob/Grep、Web 抓取、记忆、Skill</div>
+    </div>
+    <div class="feature-card">
+      <div class="fc-icon">🌐</div>
+      <div class="fc-title">WebUI</div>
+      <div class="fc-desc">React + Vite 暗色科技风，3 套主题切换</div>
+    </div>
+    <div class="feature-card">
+      <div class="fc-icon">📦</div>
+      <div class="fc-title">上下文压缩</div>
+      <div class="fc-desc">工具结果裁剪 + 结构化摘要 + 迭代更新</div>
+    </div>
+    <div class="feature-card">
+      <div class="fc-icon">🧠</div>
+      <div class="fc-title">记忆系统</div>
+      <div class="fc-desc">MEMORY.md + 分类记忆 + TF-IDF 向量检索</div>
+    </div>
+    <div class="feature-card">
+      <div class="fc-icon">📋</div>
+      <div class="fc-title">日志系统</div>
+      <div class="fc-desc">运行日志 + 会话 JSONL + LLM Trace 三路落盘</div>
+    </div>
+    <div class="feature-card">
+      <div class="fc-icon">📊</div>
+      <div class="fc-title">Agent 测评</div>
+      <div class="fc-desc">自动记录 LLM 轨迹并生成分析报告</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    FengAgentCli 支持 Anthropic、OpenAI、OpenAI-Compatible（DeepSeek 等）、Google Gemini、AWS Bedrock 五种 LLM 提供商，通过 <code>FENG_PROVIDER</code> 环境变量切换。
+  </div>
+</section>
+
+<!-- ==================== 快速开始 ==================== -->
+<section class="section" id="quickstart">
+  <h2 class="section-title"><span class="sec-icon">🚀</span>快速开始</h2>
+  <p class="section-desc">从零开始，几分钟内跑起你的第一个 AI Agent 对话。</p>
+
+  <h3 id="qs-install">环境要求与安装</h3>
+  <p>需要 <a href="https://bun.sh/" target="_blank">Bun</a> >= 1.3.0 和至少一个 LLM API Key。</p>
+  <div class="code-label">bash</div>
+  <pre><code>git clone https://github.com/zhu011/FengAgentCli.git
+cd FengAgentCli
+bun install</code></pre>
+
+  <h3 id="qs-config">配置 API Key</h3>
+  <p>选择一个 LLM 提供商，设置对应的环境变量：</p>
+  <div class="code-label">bash — Anthropic（默认）</div>
+  <pre><code>export FENG_PROVIDER=anthropic
+export ANTHROPIC_API_KEY=sk-ant-...</code></pre>
+  <div class="code-label">bash — OpenAI</div>
+  <pre><code>export FENG_PROVIDER=openai
+export OPENAI_API_KEY=sk-...</code></pre>
+  <div class="code-label">bash — OpenAI-Compatible（DeepSeek 等）</div>
+  <pre><code>export FENG_PROVIDER=openai-compatible
+export OPENAI_COMPATIBLE_API_KEY=...
+export OPENAI_COMPATIBLE_BASE_URL=https://your-endpoint/v1</code></pre>
+  <div class="code-label">bash — Google Gemini</div>
+  <pre><code>export FENG_PROVIDER=google
+export GOOGLE_API_KEY=...</code></pre>
+
+  <h3 id="qs-cli">CLI 模式</h3>
+  <div class="code-label">bash — 交互式 TUI</div>
+  <pre><code>bun run packages/cli/src/entry.ts</code></pre>
+  <div class="code-label">bash — 管道模式（stdin → stdout）</div>
+  <pre><code>echo "解释这段代码" | bun run packages/cli/src/entry.ts</code></pre>
+  <div class="code-label">bash — 指定模型 / 恢复会话</div>
+  <pre><code>bun run packages/cli/src/entry.ts --model claude-sonnet-4-20250514
+bun run packages/cli/src/entry.ts --session &lt;session-id&gt;</code></pre>
+
+  <h3 id="qs-webui">WebUI 模式</h3>
+  <div class="code-label">bash — 启动服务</div>
+  <pre><code>bun run serve
+# 浏览器访问 http://127.0.0.1:3000</code></pre>
+  <div class="code-label">bash — 一键 Demo（自动构建 + 启动 + 打开浏览器）</div>
+  <pre><code>bash scripts/demo.sh                    # Linux/macOS
+powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows</code></pre>
+
+  <h3 id="qs-dev">开发模式</h3>
+  <p>同时启动后端 server 和前端 Vite dev server（支持热更新）：</p>
+  <div class="code-label">bash</div>
+  <pre><code>bun run dev
+# 后端 Server:  http://127.0.0.1:3000
+# 前端 WebUI:   http://localhost:5180（Vite dev，自动代理 /api 到后端）</code></pre>
+</section>
+
+<!-- ==================== 配置 ==================== -->
+<section class="section" id="config">
+  <h2 class="section-title"><span class="sec-icon">⚙️</span>配置</h2>
+  <p class="section-desc">所有配置通过 <code>FENG_*</code> 环境变量或 JSON 配置文件设置。优先级：环境变量 &gt; 项目配置 &gt; 全局配置 &gt; 默认值。</p>
+
+  <h3>环境变量</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>变量</th><th>默认值</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>FENG_MODEL</code></td><td><code>claude-sonnet-4-20250514</code></td><td>主模型 ID</td></tr>
+      <tr><td><code>FENG_SMALL_MODEL</code></td><td><code>claude-haiku-3</code></td><td>小模型（压缩/摘要用）</td></tr>
+      <tr><td><code>FENG_PROVIDER</code></td><td><code>anthropic</code></td><td>LLM 提供商</td></tr>
+      <tr><td><code>FENG_MAX_TOKENS</code></td><td><code>8192</code></td><td>单次生成最大 token 数</td></tr>
+      <tr><td><code>FENG_TEMPERATURE</code></td><td><code>1.0</code></td><td>生成温度（0–2）</td></tr>
+      <tr><td><code>FENG_CONTEXT_WINDOW</code></td><td><code>200000</code></td><td>上下文窗口大小（token）</td></tr>
+      <tr><td><code>FENG_COMPACT_THRESHOLD</code></td><td><code>0.85</code></td><td>压缩触发阈值（占窗口比例）</td></tr>
+      <tr><td><code>FENG_COMPACT_KEEP_TOKENS</code></td><td><code>8000</code></td><td>压缩后保留的近期 token 数</td></tr>
+      <tr><td><code>FENG_DISABLE_COMPACT</code></td><td><code>false</code></td><td>禁用上下文压缩</td></tr>
+      <tr><td><code>FENG_AUTO_APPROVE_TOOLS</code></td><td><code>false</code></td><td>自动批准工具调用（跳过审批）</td></tr>
+      <tr><td><code>FENG_ALLOWED_TOOLS</code></td><td><code>*</code></td><td>允许的工具列表（逗号分隔）</td></tr>
+      <tr><td><code>FENG_DENIED_TOOLS</code></td><td>—</td><td>禁止的工具列表（逗号分隔）</td></tr>
+      <tr><td><code>FENG_BASH_TIMEOUT</code></td><td><code>120000</code></td><td>Bash 命令超时（毫秒）</td></tr>
+      <tr><td><code>FENG_MAX_TURNS</code></td><td><code>50</code></td><td>Agent 循环最大轮次</td></tr>
+      <tr><td><code>FENG_SERVER_PORT</code></td><td><code>3000</code></td><td>HTTP 服务端口</td></tr>
+      <tr><td><code>FENG_SERVER_HOST</code></td><td><code>127.0.0.1</code></td><td>服务监听地址</td></tr>
+      <tr><td><code>FENG_CORS_ORIGIN</code></td><td><code>*</code></td><td>CORS 允许来源</td></tr>
+      <tr><td><code>FENG_LOG_LEVEL</code></td><td><code>info</code></td><td>日志级别（debug/info/warn/error）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="cfg-file">config.json 配置文件</h3>
+  <p>除了环境变量，还支持 JSON 配置文件：</p>
+  <div class="card-grid">
+    <div class="info-card">
+      <div class="ic-title">全局配置</div>
+      <div class="ic-body"><code>~/.fengagent/config.json</code></div>
+    </div>
+    <div class="info-card">
+      <div class="ic-title">项目配置</div>
+      <div class="ic-body"><code>./.fengagent/config.json</code></div>
+    </div>
+  </div>
+  <div class="code-label">jsonc — ~/.fengagent/config.json</div>
+  <pre><code>{
+  "model": "claude-sonnet-4-20250514",
+  "smallModel": "claude-haiku-3",
+  "provider": "anthropic",
+  "maxTokens": 8192,
+  "temperature": 1.0,
+  "contextWindow": 200000,
+  "compactThreshold": 0.85,
+  "compactKeepTokens": 8000,
+  "disableCompact": false,
+  "autoApproveTools": false,
+  "allowedTools": "*",
+  "bashTimeout": 120000,
+  "maxTurns": 50,
+  "logLevel": "info"
+}</code></pre>
+
+  <h3 id="cfg-perms">权限规则（permissions.json）</h3>
+  <p>在 <code>.fengagent/permissions.json</code> 中定义细粒度权限规则：</p>
+  <div class="code-label">json</div>
+  <pre><code>{
+  "rules": [
+    { "tool": "bash", "action": "ask", "reason": "Shell commands require approval" },
+    { "tool": "file-write", "action": "ask" },
+    { "tool": "file-edit", "action": "ask" },
+    { "tool": "task", "action": "ask" },
+    { "tool": "*", "action": "allow" }
+  ],
+  "cache": true
+}</code></pre>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Action</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>allow</code></td><td>自动批准</td></tr>
+      <tr><td><code>deny</code></td><td>自动拒绝</td></tr>
+      <tr><td><code>ask</code></td><td>询问用户（CLI 弹框 / WebUI SSE 推送）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="cfg-mcp">MCP Server 配置</h3>
+  <p>在 <code>.fengagent/mcp-servers.json</code> 中配置 Model Context Protocol 服务器：</p>
+  <div class="code-label">json</div>
+  <pre><code>{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {}
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
+      }
+    }
+  }
+}</code></pre>
+  <p>或通过环境变量 <code>FENG_MCP_SERVERS</code>（JSON 格式）配置。</p>
+</section>
+
+<!-- ==================== 核心特性 ==================== -->
+<section class="section" id="features">
+  <h2 class="section-title"><span class="sec-icon">✨</span>核心特性</h2>
+  <p class="section-desc">深入了解 FengAgentCli 的核心能力。</p>
+
+  <h3>对话系统</h3>
+  <p>支持多轮上下文对话，通过 SSE（Server-Sent Events）实现流式输出。CLI 模式使用 Ink TUI 渲染，WebUI 模式使用 React + Markdown 渲染。内置思考动画和状态栏提示。</p>
+
+  <h3 id="feat-agent">多 Agent 协作</h3>
+  <p>通过 <strong>Task 工具</strong>派遣子 Agent，支持独立 Session 和角色定义。在 <code>.fengagent/agents/*.md</code> 中创建 Agent 定义文件：</p>
+  <div class="code-label">markdown — .fengagent/agents/code-reviewer.md</div>
+  <pre><code>---
+name: code-reviewer
+description: 代码审查专家
+model: claude-sonnet-4-20250514
+tools:
+  - file-read
+  - grep
+  - glob
+max_turns: 20
+---
+
+你是一个代码审查专家。你的职责：
+1. 阅读代码并识别潜在 bug
+2. 检查代码风格和最佳实践
+3. 提出改进建议</code></pre>
+
+  <h3 id="feat-tools">工具调用</h3>
+  <p>内置工具系统，支持文件操作、Shell 命令、搜索和更多：</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>工具</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>file-read</code></td><td>读取文本文件（自动检测编码）</td></tr>
+      <tr><td><code>file-write</code></td><td>写入/创建文件</td></tr>
+      <tr><td><code>file-edit</code></td><td>精确替换文件内容</td></tr>
+      <tr><td><code>bash</code></td><td>执行 Shell 命令（带超时控制）</td></tr>
+      <tr><td><code>glob</code></td><td>文件模式匹配搜索</td></tr>
+      <tr><td><code>grep</code></td><td>正则表达式内容搜索</td></tr>
+      <tr><td><code>task</code></td><td>派遣子 Agent 执行任务</td></tr>
+      <tr><td><code>memory</code></td><td>记忆读写（MEMORY.md + 向量检索）</td></tr>
+      <tr><td><code>skill</code></td><td>调用已注册的 Skill 模板</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="feat-webui">WebUI</h3>
+  <p>React + Vite + TailwindCSS 构建的本地网页界面，暗色科技风格，内置 3 套主题切换器。通过 SSE 实现流式推送，支持权限审批交互。</p>
+  <ul>
+    <li><strong>实时对话</strong> — SSE 流式输出，Markdown 渲染</li>
+    <li><strong>会话管理</strong> — 创建、切换、导出、删除会话</li>
+    <li><strong>权限审批</strong> — 工具执行前的交互式确认</li>
+    <li><strong>主题切换</strong> — 3 套暗色主题（科技紫 / 深海蓝 / 暗夜绿）</li>
+  </ul>
+
+  <h3 id="feat-compact">上下文压缩</h3>
+  <p>在接近上下文窗口阈值时自动触发压缩，核心算法：</p>
+  <ul>
+    <li><strong>工具结果裁剪</strong> — 超过阈值的旧工具结果替换为占位符（非 LLM 操作，减少 token）</li>
+    <li><strong>分割点优化</strong> — 不在 tool-result 消息边界切割（防止孤儿 tool-call）</li>
+    <li><strong>结构化摘要</strong> — 目标 / 约束 / 进展 / 关键决策 / 下一步 / 关键上下文 / 相关文件</li>
+    <li><strong>迭代更新</strong> — 有前次摘要时传入更新而非从头生成</li>
+    <li><strong>文件操作追踪</strong> — 从消息中提取已读/已改文件，附加到摘要</li>
+  </ul>
+
+  <h3 id="feat-memory">记忆系统</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>类型</th><th>路径</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>MEMORY.md</td><td><code>MEMORY.md</code> 或 <code>.fengagent/memory/MEMORY.md</code></td><td>主记忆文件（注入系统提示）</td></tr>
+      <tr><td>分类记忆</td><td><code>.fengagent/memory/*.md</code></td><td>按分类存储的记忆文件</td></tr>
+      <tr><td>向量记忆</td><td><code>.fengagent/memory/vector-store.json</code></td><td>TF-IDF 向量化记忆（持久化到 JSON）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="feat-logging">日志系统</h3>
+  <p>内置分级日志系统（<code>@fengagent/shared/logger</code>），server 和 CLI 共用，自动落盘。</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>文件</th><th>格式</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td><code>fengagent-{date}.log</code></td><td>文本</td><td>运行日志（时间戳 + 模块 + 函数名 + 消息）</td></tr>
+      <tr><td><code>sessions-{date}.jsonl</code></td><td>JSONL</td><td>会话消息日志（含 sessionId/role/content/model/toolCalls）</td></tr>
+      <tr><td><code>llm-trace-{date}.jsonl</code></td><td>JSONL</td><td>LLM 请求/回复轨迹（供 eval 模块分析）</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>所有日志文件位于 <code>.fengagent/logs/</code> 目录。会话持久化使用 SQLite（<code>.fengagent/sessions.db</code>）作为主存储 + JSONL 作为可见副本。</p>
+
+  <h3 id="feat-eval">Agent 测评</h3>
+  <p>内置 Agent 测评模块，自动记录 LLM 请求/回复轨迹并生成分析报告：</p>
+  <ul>
+    <li>LLM 调用次数、总耗时、平均耗时</li>
+    <li>Token 用量分布（输入/输出）</li>
+    <li>工具调用率、工具使用分布</li>
+    <li>完成原因分布（end_turn / tool_use）</li>
+    <li>错误率、错误详情</li>
+    <li>每个会话的完整轨迹</li>
+    <li>优化建议（工具描述、提示词、模型选择）</li>
+  </ul>
+  <p>报告输出到 <code>.fengagent/logs/eval-report-{date}.md</code>。</p>
+</section>
+
+<!-- ==================== 命令参考 ==================== -->
+<section class="section" id="commands">
+  <h2 class="section-title"><span class="sec-icon">⌨️</span>命令参考</h2>
+  <p class="section-desc">CLI 命令行参数和 TUI 交互命令一览。</p>
+
+  <h3>CLI 命令</h3>
+  <div class="code-label">用法</div>
+  <pre><code>feng [选项] [提示文本]
+feng serve [选项]
+feng acp [选项]</code></pre>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>参数</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>-m, --model &lt;id&gt;</code></td><td>指定模型 ID</td></tr>
+      <tr><td><code>-p, --port &lt;n&gt;</code></td><td>服务端口（默认: 3000）</td></tr>
+      <tr><td><code>-s, --session &lt;id&gt;</code></td><td>恢复已有会话</td></tr>
+      <tr><td><code>--print</code></td><td>强制非交互模式（输出到 stdout）</td></tr>
+      <tr><td><code>-h, --help</code></td><td>显示帮助</td></tr>
+      <tr><td><code>-v, --version</code></td><td>显示版本</td></tr>
+      <tr><td><code>serve</code></td><td>启动 WebUI 服务模式</td></tr>
+      <tr><td><code>acp</code></td><td>启动 ACP 服务模式（Multica 运行时集成）</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="code-label">示例</div>
+  <pre><code>feng "帮我读取 package.json"
+feng --model claude-sonnet-4-20250514 "解释这段代码"
+feng --session abc-123 "继续上次对话"
+echo "修复这个 bug" | feng
+feng serve --port 8080</code></pre>
+
+  <h3 id="cmd-tui">TUI 交互命令</h3>
+  <p>在 CLI 交互模式中，输入以下命令执行操作：</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>命令</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>/help</code></td><td>显示帮助</td></tr>
+      <tr><td><code>/exit</code> · <code>/quit</code></td><td>退出</td></tr>
+      <tr><td><code>/clear</code></td><td>清屏</td></tr>
+      <tr><td><code>/session new [title]</code></td><td>新建会话</td></tr>
+      <tr><td><code>/session list</code></td><td>列出所有会话</td></tr>
+      <tr><td><code>/session switch &lt;id&gt;</code></td><td>切换到指定会话</td></tr>
+      <tr><td><code>/model &lt;id&gt;</code></td><td>切换模型</td></tr>
+      <tr><td><code>/model list</code></td><td>列出常见模型</td></tr>
+      <tr><td><code>/export [file]</code></td><td>导出当前会话为 Markdown</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="cmd-eval">Eval 命令</h3>
+  <div class="code-label">bash</div>
+  <pre><code># 分析今天的日志
+bun run eval
+
+# 分析指定日期
+bun run eval --date=2026-08-13
+
+# 分析所有日志
+bun run eval --all
+
+# 分析指定文件
+bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl</code></pre>
+</section>
+
+<!-- ==================== API 文档 ==================== -->
+<section class="section" id="api">
+  <h2 class="section-title"><span class="sec-icon">🔌</span>API 文档</h2>
+  <p class="section-desc">HTTP API 端点，所有路径以 <code>/api</code> 为前缀。服务默认监听 <code>127.0.0.1:3000</code>。</p>
+
+  <h3>HTTP 端点</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/health</code></td>
+        <td>健康检查，返回 <code>{ status: "ok" }</code></td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-post">POST</span></td>
+        <td><code>/api/sessions</code></td>
+        <td>创建会话，返回 Session 对象</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/sessions</code></td>
+        <td>列出所有会话</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/sessions/:id</code></td>
+        <td>获取会话详情</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-sse">POST</span></td>
+        <td><code>/api/sessions/:id/messages</code></td>
+        <td>发送消息，返回 SSE 流</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-post">POST</span></td>
+        <td><code>/api/sessions/:id/interrupt</code></td>
+        <td>中断当前运行</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/sessions/:id/permissions</code></td>
+        <td>获取待处理权限请求列表</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-post">POST</span></td>
+        <td><code>/api/sessions/:id/permissions/:reqId</code></td>
+        <td>提交权限响应（allow / deny）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/sessions/:id/export</code></td>
+        <td>导出会话为 JSON 文件</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-del">DELETE</span></td>
+        <td><code>/api/sessions/:id</code></td>
+        <td>销毁会话</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/models</code></td>
+        <td>获取可用模型列表</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="api-sse">SSE 事件类型</h3>
+  <p><code>POST /api/sessions/:id/messages</code> 返回 SSE 流，事件类型包括：</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>事件</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>thinking</code></td><td>模型思考中</td></tr>
+      <tr><td><code>text</code></td><td>文本内容（流式分块）</td></tr>
+      <tr><td><code>tool_use</code></td><td>工具调用请求</td></tr>
+      <tr><td><code>tool_result</code></td><td>工具执行结果</td></tr>
+      <tr><td><code>permission_request</code></td><td>权限审批请求</td></tr>
+      <tr><td><code>turn_end</code></td><td>一轮对话结束</td></tr>
+      <tr><td><code>error</code></td><td>错误事件</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="code-label">示例 — 创建会话并发送消息</div>
+  <pre><code># 1. 创建会话
+curl -X POST http://127.0.0.1:3000/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"title": "测试会话"}'
+
+# 2. 发送消息（返回 SSE 流）
+curl -N -X POST http://127.0.0.1:3000/api/sessions/{id}/messages \
+  -H "Content-Type: application/json" \
+  -d '{"content": "你好"}'</code></pre>
+
+  <div class="callout">
+    提示：WebUI 开发模式下，Vite dev server 会自动代理 <code>/api</code> 请求到后端，无需额外配置 CORS。
+  </div>
+</section>
+
+</div>
+</div>
+
+<script>
+  // ==================== Sidebar Toggle ====================
+  function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('overlay').classList.toggle('show');
+  }
+
+  // ==================== Navigation ====================
+  const navItems = document.querySelectorAll('.nav-item, .nav-sub-item');
+  const sections = document.querySelectorAll('.section');
+
+  navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const targetId = item.dataset.target;
+      if (!targetId) return;
+      const target = document.getElementById(targetId);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth' });
+        // Close sidebar on mobile
+        if (window.innerWidth <= 900) {
+          document.getElementById('sidebar').classList.remove('open');
+          document.getElementById('overlay').classList.remove('show');
+        }
+      }
+    });
+  });
+
+  // ==================== Scroll Spy ====================
+  function updateActiveNav() {
+    let current = '';
+    const scrollPos = window.scrollY + 100;
+
+    sections.forEach(section => {
+      const top = section.offsetTop;
+      const height = section.offsetHeight;
+      if (scrollPos >= top && scrollPos < top + height) {
+        current = section.id;
+      }
+    });
+
+    if (!current && sections.length > 0) {
+      current = sections[0].id;
+    }
+
+    navItems.forEach(item => {
+      item.classList.remove('active');
+      if (item.dataset.target === current) {
+        item.classList.add('active');
+      }
+    });
+
+    // Also activate parent nav-item for sub-items
+    if (current) {
+      const activeSubItems = document.querySelectorAll('.nav-sub-item.active');
+      activeSubItems.forEach(sub => {
+        let prev = sub.previousElementSibling;
+        while (prev && !prev.classList.contains('nav-item')) {
+          prev = prev.previousElementSibling;
+        }
+        // parent nav-item gets active via data-target matching section
+      });
+    }
+  }
+
+  let scrollTimer;
+  window.addEventListener('scroll', () => {
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(updateActiveNav, 80);
+  });
+
+  updateActiveNav();
+</script>
+
+</body>
+</html>

@@ -29,3 +29,6 @@ browser-test.*
 test-*.cjs
 screenshot-*.png
 lan-*.png
+
+# 文档站点 — 始终提交（不忽略）
+!docs/site/
