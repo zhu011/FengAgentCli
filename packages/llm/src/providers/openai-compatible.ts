@@ -36,7 +36,7 @@ export function createOpenAICompatibleClient(
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({ ...body, stream: true }),
+          body: JSON.stringify({ ...body, stream: true, stream_options: { include_usage: true } }),
         });
 
         if (!response.ok) {
