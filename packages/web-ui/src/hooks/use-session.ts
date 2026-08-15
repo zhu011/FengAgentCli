@@ -24,6 +24,14 @@ export interface ToolCallInfo {
 }
 
 /** 前端展示用的消息项（含工具调用列表） */
+/** Token 用量统计 */
+export interface TokenStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}
+
 export interface DisplayMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -31,6 +39,8 @@ export interface DisplayMessage {
   toolCalls: ToolCallInfo[];
   streaming: boolean;
   createdAt: number;
+  /** AI 消息的 token 用量统计 */
+  tokenStats?: TokenStats;
 }
 
 export interface UseSessionResult {
@@ -41,6 +51,8 @@ export interface UseSessionResult {
   isStreaming: boolean;
   error: string | null;
   creatingSession: boolean;
+  /** 会话级 token 用量统计 */
+  sessionTokenStats: TokenStats | null;
   createSession: (title?: string) => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -63,6 +75,7 @@ export function useSession(client: ApiClient): UseSessionResult {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [sessionTokenStats, setSessionTokenStats] = useState<TokenStats | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -152,6 +165,7 @@ export function useSession(client: ApiClient): UseSessionResult {
 
   const selectSession = useCallback(async (id: string) => {
     setActiveSessionId(id);
+    setSessionTokenStats(null);
     setPendingPermissions([]);
   }, []);
 
@@ -373,10 +387,37 @@ export function useSession(client: ApiClient): UseSessionResult {
               }
 
               case "session-start":
-              case "usage":
               case "compaction-start":
               case "compaction-end":
                 break;
+
+              case "usage": {
+                // 捕获 token 用量和缓存命中统计
+                const usageStats: TokenStats = {
+                  inputTokens: event.inputTokens,
+                  outputTokens: event.outputTokens,
+                  ...(event.cacheReadTokens ? { cacheReadTokens: event.cacheReadTokens } : {}),
+                  ...(event.cacheCreationTokens ? { cacheCreationTokens: event.cacheCreationTokens } : {}),
+                };
+                // 附加到当前 assistant 消息
+                if (currentMessageId) {
+                  setDisplayMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === currentMessageId
+                        ? { ...m, tokenStats: usageStats }
+                        : m,
+                    ),
+                  );
+                }
+                // 累加到会话级统计
+                setSessionTokenStats((prev) => ({
+                  inputTokens: (prev?.inputTokens ?? 0) + usageStats.inputTokens,
+                  outputTokens: (prev?.outputTokens ?? 0) + usageStats.outputTokens,
+                  cacheReadTokens: (prev?.cacheReadTokens ?? 0) + (usageStats.cacheReadTokens ?? 0),
+                  cacheCreationTokens: (prev?.cacheCreationTokens ?? 0) + (usageStats.cacheCreationTokens ?? 0),
+                }));
+                break;
+              }
             }
           },
           onError: (err) => {
@@ -391,7 +432,7 @@ export function useSession(client: ApiClient): UseSessionResult {
         clearTimeout(timeoutTimer);
         setIsStreaming(false);
         abortRef.current = null;
-        // 安全清理：标记所有消息为非流式
+        // 安全清理：标记所有消息为非流式（保留 tokenStats 等已设置的字段）
         setDisplayMessages((prev) =>
           prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
         );
@@ -448,6 +489,7 @@ export function useSession(client: ApiClient): UseSessionResult {
     isStreaming,
     error,
     creatingSession,
+    sessionTokenStats,
     createSession,
     selectSession,
     deleteSession,

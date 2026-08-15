@@ -11,7 +11,7 @@ import type { ApiClient } from "../api/client.ts";
 import type { PermissionRequest } from "../api/types.ts";
 import { formatValue } from "../lib/format.ts";
 import { useModels } from "../hooks/use-models.ts";
-import type { UseSessionResult } from "../hooks/use-session.ts";
+import type { UseSessionResult, TokenStats } from "../hooks/use-session.ts";
 import { MessageInput } from "../components/message-input.tsx";
 import { MessageList } from "../components/message-list.tsx";
 import { ModelSelector } from "../components/model-selector.tsx";
@@ -123,6 +123,11 @@ export function ChatPage({ client, session }: ChatPageProps) {
         )}
         <div ref={messagesEndRef} />
       </main>
+
+      {/* Token 用量统计栏 */}
+      {session.activeSession && session.sessionTokenStats && (
+        <TokenStatsBar stats={session.sessionTokenStats} />
+      )}
 
       {/* 输入框 */}
       <footer className="chat-page__footer">
@@ -244,6 +249,43 @@ function PermissionCard({
           Deny
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Token 用量统计栏 — 显示会话级累计 token 和缓存命中 */
+function TokenStatsBar({ stats }: { stats: TokenStats }) {
+  const totalInput = stats.inputTokens;
+  const totalOutput = stats.outputTokens;
+  const totalCacheRead = stats.cacheReadTokens ?? 0;
+
+  // 缓存命中率 = cacheRead / (cacheRead + 非缓存输入)
+  const nonCachedInput = totalInput - totalCacheRead;
+  const cacheHitRate = totalCacheRead + nonCachedInput > 0
+    ? Math.round((totalCacheRead / (totalCacheRead + nonCachedInput)) * 100)
+    : 0;
+
+  return (
+    <div className="token-stats-bar">
+      <span className="token-stats-bar__item">
+        📥 输入 <strong>{totalInput.toLocaleString()}</strong>
+      </span>
+      <span className="token-stats-bar__item">
+        📤 输出 <strong>{totalOutput.toLocaleString()}</strong>
+      </span>
+      {totalCacheRead > 0 && (
+        <>
+          <span className="token-stats-bar__item">
+            ⚡ 缓存命中 <strong>{totalCacheRead.toLocaleString()}</strong>
+          </span>
+          <span className="token-stats-bar__item token-stats-bar__item--highlight">
+            🎯 命中率 <strong>{cacheHitRate}%</strong>
+          </span>
+        </>
+      )}
+      <span className="token-stats-bar__item token-stats-bar__item--muted">
+        合计 <strong>{(totalInput + totalOutput).toLocaleString()}</strong> tokens
+      </span>
     </div>
   );
 }

@@ -639,6 +639,41 @@ body {
 /* ──────────────────────────────────────────────
    Chat Footer & Input
    ────────────────────────────────────────────── */
+
+/* Token 用量统计栏 */
+.token-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 20px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.token-stats-bar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.token-stats-bar__item strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.token-stats-bar__item--highlight strong {
+  color: var(--accent-2);
+}
+
+.token-stats-bar__item--muted {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
 .chat-page__footer {
   border-top: 1px solid var(--border-color);
   padding: 16px 20px;

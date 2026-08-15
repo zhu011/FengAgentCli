@@ -30,7 +30,7 @@ export type AgentEvent =
     }
   | { type: "tool-call-result"; toolUseId: string; result: ToolResult }
   | { type: "message-end"; messageId: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number }
+  | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }
   | { type: "turn-end"; reason: FinishReason }
   | { type: "error"; error: AgentError }
   | { type: "compaction-start" }

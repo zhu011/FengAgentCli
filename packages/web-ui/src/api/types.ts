@@ -92,7 +92,7 @@ export type AgentEvent =
       result: { content: string; isError?: boolean; metadata?: unknown };
     }
   | { type: "message-end"; messageId: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number }
+  | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }
   | { type: "turn-end"; reason: FinishReason }
   | { type: "error"; error: AgentError }
   | { type: "compaction-start" }

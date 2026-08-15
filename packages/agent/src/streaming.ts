@@ -53,6 +53,8 @@ export function llmEventToAgentEvents(
           type: "usage",
           inputTokens: event.inputTokens,
           outputTokens: event.outputTokens,
+          ...(event.cacheReadTokens ? { cacheReadTokens: event.cacheReadTokens } : {}),
+          ...(event.cacheCreationTokens ? { cacheCreationTokens: event.cacheCreationTokens } : {}),
         },
       ];
 
