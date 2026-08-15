@@ -132,6 +132,41 @@ export function App({
           return;
         }
 
+        // /clear context — 清空当前会话的消息历史
+        if (result.shouldClearContext) {
+          if (session) {
+            const clearedSession = { ...session, messages: [], tokenCount: 0, updatedAt: Date.now() };
+            setSession(clearedSession);
+            setMessages([]);
+            setUi((prev) => ({ ...prev, tokenCount: 0 }));
+          }
+          return;
+        }
+
+        // /compact — 异步压缩（需要调用 Agent.compactSession）
+        if (result.message === "__COMPACT__") {
+          if (session) {
+            setUi((prev) => ({ ...prev, status: "compacting" }));
+            try {
+              const result = await agent.compactSession(session);
+              addSystemMessage(
+                `上下文已压缩 ✅\n` +
+                `  摘要: ${result.summary.slice(0, 100)}${result.summary.length > 100 ? "..." : ""}\n` +
+                `  保留近期消息: ${result.recentCount} 条\n` +
+                `  Token: ${result.beforeTokens} → ${result.afterTokens} (减少 ${result.beforeTokens - result.afterTokens})`
+              );
+              setSession({ ...session });
+              setMessages([...session.messages]);
+              setUi((prev) => ({ ...prev, status: "idle", tokenCount: session.tokenCount }));
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              addSystemMessage(`压缩失败: ${message}`);
+              setUi((prev) => ({ ...prev, status: "idle" }));
+            }
+          }
+          return;
+        }
+
         if (result.newSession) {
           setSession(result.newSession);
           setMessages(result.newSession.messages);

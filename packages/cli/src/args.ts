@@ -192,9 +192,13 @@ export function getHelpText(): string {
   /session list          列出会话
   /session switch <id>   切换会话
   /model <id>            切换模型
+  /compact               压缩上下文
+  /clear [context]       清屏 / 清空上下文
+  /restore               恢复会话历史
+  /tool list             列出工具
   /export [file]         导出当前会话
-  /clear                 清屏
-  /exit                  退出`;
+  /exit                  退出
+  输入 / 可查看命令补全列表`;
 }
 
 /** 版本号（编译时可通过 --define process.env.FENG_VERSION 注入） */

@@ -11,11 +11,13 @@ import type {
   Session,
   AgentEvent,
 } from "@fengagent/core";
-import { createSession, createUserMessage } from "@fengagent/core";
+import { createSession, createUserMessage, createSystemMessage } from "@fengagent/core";
 import { AgentLoop } from "./loop.ts";
 import type { AgentLoopOptions } from "./loop.ts";
 import type { SessionStore } from "./session.ts";
 import type { ToolContext } from "@fengagent/core/tool";
+import type { ToolRegistry } from "@fengagent/tools";
+import type { ContextManager } from "@fengagent/context";
 import { createLogger, writeSessionLog } from "@fengagent/shared";
 
 const log = createLogger("agent");
@@ -58,12 +60,16 @@ export class Agent {
   private sessionStore?: SessionStore;
   private config: Config;
   private workdir: string;
+  private contextManager: ContextManager;
+  private toolRegistry: ToolRegistry;
 
   constructor(options: AgentOptions) {
     this.loop = new AgentLoop(options);
     this.sessionStore = options.sessionStore;
     this.config = options.config;
     this.workdir = options.workdir;
+    this.contextManager = options.contextManager;
+    this.toolRegistry = options.toolRegistry;
   }
 
   /**
@@ -209,5 +215,82 @@ export class Agent {
   /** 获取配置 */
   getConfig(): Config {
     return this.config;
+  }
+
+  /**
+   * 手动压缩当前会话上下文。
+   *
+   * 调用 ContextManager 的压缩能力，将旧消息摘要化。
+   *
+   * @param session - 当前会话
+   * @returns 压缩结果（摘要 + 保留的近期消息 + 前后 token 数）
+   */
+  async compactSession(session: Session): Promise<{
+    summary: string;
+    recentCount: number;
+    beforeTokens: number;
+    afterTokens: number;
+  }> {
+    const beforeTokens = this.contextManager.estimateTokens(session.messages);
+    const context = await this.contextManager.assemble(session);
+
+    if (!this.contextManager.shouldCompact(context)) {
+      // 即使未超阈值也强制压缩
+      const compacted = await this.contextManager.compact(session.messages, {
+        keepTokens: this.config.compactKeepTokens,
+        smallModel: this.config.smallModel,
+      });
+
+      session.messages = compacted.summary
+        ? [createSystemMessage(compacted.summary), ...compacted.recent]
+        : compacted.recent;
+      session.tokenCount = this.contextManager.estimateTokens(session.messages);
+
+      // 持久化
+      if (this.sessionStore) {
+        this.sessionStore.saveSession(session);
+        this.sessionStore.saveMessages(session.id, session.messages);
+      }
+
+      return {
+        summary: compacted.summary,
+        recentCount: compacted.recent.length,
+        beforeTokens,
+        afterTokens: session.tokenCount,
+      };
+    }
+
+    // 超阈值时正常压缩
+    const compacted = await this.contextManager.compact(session.messages, {
+      keepTokens: this.config.compactKeepTokens,
+      smallModel: this.config.smallModel,
+    });
+
+    session.messages = compacted.summary
+      ? [createSystemMessage(compacted.summary), ...compacted.recent]
+      : compacted.recent;
+    session.tokenCount = this.contextManager.estimateTokens(session.messages);
+
+    if (this.sessionStore) {
+      this.sessionStore.saveSession(session);
+      this.sessionStore.saveMessages(session.id, session.messages);
+    }
+
+    return {
+      summary: compacted.summary,
+      recentCount: compacted.recent.length,
+      beforeTokens,
+      afterTokens: session.tokenCount,
+    };
+  }
+
+  /** 获取所有已注册的工具名列表 */
+  getToolNames(): string[] {
+    return this.toolRegistry.list().map((t) => t.name);
+  }
+
+  /** 获取 ContextManager（供外部调用压缩/估算等） */
+  getContextManager(): ContextManager {
+    return this.contextManager;
   }
 }
