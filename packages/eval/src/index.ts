@@ -28,11 +28,11 @@ export async function runEval(options?: {
   all?: boolean;
   file?: string;
   logDir?: string;
+  excludeModels?: string[];
 }): Promise<void> {
   let files: string[];
 
   if (options?.file) {
-    // --file：直接指定日志文件路径
     files = [options.file];
   } else if (options?.all) {
     files = findAllLogFiles(options?.logDir);
@@ -51,7 +51,17 @@ export async function runEval(options?: {
 
   for (const file of files) {
     console.log(`\n分析日志: ${file}`);
-    const records = parseLogFile(file);
+    let records = parseLogFile(file);
+
+    // 过滤掉指定的模型（如测试 mock 模型）
+    if (options?.excludeModels && options.excludeModels.length > 0) {
+      const before = records.length;
+      records = records.filter((r) => !options.excludeModels!.includes(r.model));
+      const filtered = before - records.length;
+      if (filtered > 0) {
+        console.log(`  已过滤 ${filtered} 条记录（模型: ${options.excludeModels.join(", ")}）`);
+      }
+    }
 
     if (records.length === 0) {
       console.log("  日志为空，跳过");
@@ -66,7 +76,7 @@ export async function runEval(options?: {
 // CLI 入口
 if (import.meta.main) {
   const args = process.argv.slice(2);
-  const options: { date?: string; all?: boolean; file?: string } = {};
+  const options: { date?: string; all?: boolean; file?: string; excludeModels?: string[] } = {};
 
   for (const arg of args) {
     if (arg.startsWith("--date=")) {
@@ -75,6 +85,8 @@ if (import.meta.main) {
       options.all = true;
     } else if (arg.startsWith("--file=")) {
       options.file = arg.slice("--file=".length);
+    } else if (arg.startsWith("--exclude-model=")) {
+      options.excludeModels = arg.slice("--exclude-model=".length).split(",").map((s) => s.trim());
     }
   }
 

@@ -73,8 +73,29 @@ function getLogFile(): string {
   return join(getLogDir(), `llm-trace-${date}.jsonl`);
 }
 
-/** 写入一条 JSONL 记录 */
+/** 检测是否在测试环境中运行（避免 mock 数据污染 trace 日志） */
+function isTestEnvironment(): boolean {
+  // Bun 测试运行器设置 import.meta.env.TEST 或 process.env.NODE_ENV=test
+  // 也可通过 FENG_TRACE_DISABLED 手动禁用
+  if (process.env.FENG_TRACE_DISABLED === "true") return true;
+  if (process.env.NODE_ENV === "test") return true;
+  // Bun test 设置的标志
+  try {
+    // @ts-ignore — import.meta.env 在 Bun 中可用
+    if (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.TEST) return true;
+  } catch {
+    // ignore
+  }
+  // 检测 bun test 运行器（通过 process.argv 中的 test 路径）
+  if (process.argv.some((arg) => arg.includes("__tests__") || arg.endsWith(".test.ts") || arg.endsWith(".test.tsx"))) {
+    return true;
+  }
+  return false;
+}
+
+/** 写入一条 JSONL 记录（测试环境下跳过） */
 function writeRecord(record: LlmTraceRecord): void {
+  if (isTestEnvironment()) return;
   try {
     const line = JSON.stringify(record) + "\n";
     appendFileSync(getLogFile(), line, "utf-8");
