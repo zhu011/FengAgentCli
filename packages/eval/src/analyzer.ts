@@ -17,6 +17,10 @@ export interface TraceRecord {
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** KV cache 读取的 token 数 */
+  cacheReadTokens?: number;
+  /** KV cache 创建的 token 数 */
+  cacheCreationTokens?: number;
   hasToolCalls: boolean;
   toolCalls?: Array<{ name: string; input: unknown }>;
   finishReason?: string;
@@ -26,6 +30,42 @@ export interface TraceRecord {
   responseText?: string;
   maxTokens?: number;
   temperature?: number;
+}
+
+/** 单个模型的对比统计 */
+export interface ModelComparison {
+  /** 模型名称 */
+  model: string;
+  /** 总调用次数（response 记录数） */
+  totalCalls: number;
+  /** 含工具调用的 response 数 */
+  toolCallCount: number;
+  /** 工具调用成功次数（hasToolCalls 且无 error） */
+  toolSuccessCount: number;
+  /** 工具调用失败次数（hasToolCalls 且有 error） */
+  toolFailureCount: number;
+  /** 错误次数 */
+  errorCount: number;
+  /** 错误率（百分比） */
+  errorRate: number;
+  /** 完成原因分布 */
+  finishReasons: Map<string, number>;
+  /** 平均耗时（毫秒） */
+  avgDurationMs: number;
+  /** 平均输入 token */
+  avgInputTokens: number;
+  /** 平均输出 token */
+  avgOutputTokens: number;
+  /** 工具调用成功率（百分比 = toolSuccessCount / toolCallCount * 100） */
+  toolSuccessRate: number;
+  /** 任务完成率（百分比 = finishReason 为 "end_turn" 的调用数 / totalCalls * 100） */
+  taskCompletionRate: number;
+  /** KV cache 读取 token 总数 */
+  cacheReadTokens: number;
+  /** KV cache 创建 token 总数 */
+  cacheCreationTokens: number;
+  /** KV cache 命中率（百分比） */
+  cacheHitRate: number;
 }
 
 /** 一个会话的完整轨迹（请求+回复配对） */
@@ -77,6 +117,14 @@ export interface AnalysisResult {
   sessions: SessionTrace[];
   /** 使用模型 */
   models: string[];
+  /** 模型对比统计 */
+  modelComparisons: ModelComparison[];
+  /** KV cache 读取 token 总数 */
+  totalCacheReadTokens: number;
+  /** KV cache 创建 token 总数 */
+  totalCacheCreationTokens: number;
+  /** KV cache 命中率（百分比 = totalCacheReadTokens / totalInputTokens * 100） */
+  cacheHitRate: number;
 }
 
 /**
@@ -221,6 +269,83 @@ export function analyzeRecords(records: TraceRecord[], logFile: string): Analysi
 
   const models = Array.from(new Set(records.map((r) => r.model)));
 
+  // 按模型分组计算对比指标
+  const responsesByModel = new Map<string, TraceRecord[]>();
+  for (const r of responses) {
+    const list = responsesByModel.get(r.model);
+    if (list) {
+      list.push(r);
+    } else {
+      responsesByModel.set(r.model, [r]);
+    }
+  }
+
+  const modelComparisons: ModelComparison[] = [];
+  for (const [model, modelResponses] of responsesByModel) {
+    const total = modelResponses.length;
+    const toolCallRsps = modelResponses.filter((r) => r.hasToolCalls);
+    const toolCallCount = toolCallRsps.length;
+    const toolSuccessCount = toolCallRsps.filter((r) => !r.error).length;
+    const toolFailureCount = toolCallRsps.filter((r) => r.error).length;
+    const errorCount = modelResponses.filter((r) => r.error).length;
+    const endTurnCount = modelResponses.filter(
+      (r) => r.finishReason === "end_turn",
+    ).length;
+
+    const modelDuration = modelResponses.reduce((sum, r) => sum + (r.durationMs ?? 0), 0);
+    const modelInputTokens = modelResponses.reduce((sum, r) => sum + (r.inputTokens ?? 0), 0);
+    const modelOutputTokens = modelResponses.reduce((sum, r) => sum + (r.outputTokens ?? 0), 0);
+    const modelCacheRead = modelResponses.reduce((sum, r) => sum + (r.cacheReadTokens ?? 0), 0);
+    const modelCacheCreation = modelResponses.reduce(
+      (sum, r) => sum + (r.cacheCreationTokens ?? 0),
+      0,
+    );
+
+    const modelFinishReasons = new Map<string, number>();
+    for (const r of modelResponses) {
+      if (r.finishReason) {
+        modelFinishReasons.set(
+          r.finishReason,
+          (modelFinishReasons.get(r.finishReason) ?? 0) + 1,
+        );
+      }
+    }
+
+    // cacheHitRate = cacheRead / (cacheRead + 非缓存输入) * 100
+    // 非缓存输入 = inputTokens - cacheReadTokens，故分母 = inputTokens
+    const cacheDenom = modelInputTokens;
+    const cacheHitRate =
+      cacheDenom > 0 ? Math.round((modelCacheRead / cacheDenom) * 100) : 0;
+
+    modelComparisons.push({
+      model,
+      totalCalls: total,
+      toolCallCount,
+      toolSuccessCount,
+      toolFailureCount,
+      errorCount,
+      errorRate: total > 0 ? Math.round((errorCount / total) * 100) : 0,
+      finishReasons: modelFinishReasons,
+      avgDurationMs: total > 0 ? Math.round(modelDuration / total) : 0,
+      avgInputTokens: total > 0 ? Math.round(modelInputTokens / total) : 0,
+      avgOutputTokens: total > 0 ? Math.round(modelOutputTokens / total) : 0,
+      toolSuccessRate: toolCallCount > 0 ? Math.round((toolSuccessCount / toolCallCount) * 100) : 0,
+      taskCompletionRate: total > 0 ? Math.round((endTurnCount / total) * 100) : 0,
+      cacheReadTokens: modelCacheRead,
+      cacheCreationTokens: modelCacheCreation,
+      cacheHitRate,
+    });
+  }
+
+  // 全局 KV cache 统计
+  const totalCacheReadTokens = responses.reduce((sum, r) => sum + (r.cacheReadTokens ?? 0), 0);
+  const totalCacheCreationTokens = responses.reduce(
+    (sum, r) => sum + (r.cacheCreationTokens ?? 0),
+    0,
+  );
+  const cacheHitRate =
+    totalInputTokens > 0 ? Math.round((totalCacheReadTokens / totalInputTokens) * 100) : 0;
+
   return {
     logFile,
     totalRecords: records.length,
@@ -241,5 +366,9 @@ export function analyzeRecords(records: TraceRecord[], logFile: string): Analysi
     finishReasons,
     sessions: sessionList,
     models,
+    modelComparisons,
+    totalCacheReadTokens,
+    totalCacheCreationTokens,
+    cacheHitRate,
   };
 }

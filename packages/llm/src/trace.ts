@@ -38,6 +38,10 @@ export interface LlmTraceRecord {
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** KV cache 读取的 token 数 */
+  cacheReadTokens?: number;
+  /** KV cache 创建的 token 数 */
+  cacheCreationTokens?: number;
   hasToolCalls: boolean;
   toolCalls?: Array<{ name: string; input: unknown }>;
   finishReason?: string;
@@ -132,6 +136,8 @@ export function createLlmTracer() {
       const toolCalls: Array<{ name: string; input: unknown }> = [];
       let inputTokens = 0;
       let outputTokens = 0;
+      let cacheReadTokens: number | undefined;
+      let cacheCreationTokens: number | undefined;
       let finishReason: string | undefined;
       let responseText = "";
       let error: string | null = null;
@@ -147,6 +153,8 @@ export function createLlmTracer() {
           case "usage":
             inputTokens = event.inputTokens;
             outputTokens = event.outputTokens;
+            if (event.cacheReadTokens) cacheReadTokens = event.cacheReadTokens;
+            if (event.cacheCreationTokens) cacheCreationTokens = event.cacheCreationTokens;
             break;
           case "finish":
             finishReason = event.reason;
@@ -165,6 +173,8 @@ export function createLlmTracer() {
         durationMs,
         inputTokens,
         outputTokens,
+        ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+        ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
         hasToolCalls: toolCalls.length > 0,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         finishReason,

@@ -104,10 +104,22 @@ export function createOpenAICompatibleClient(
                 }
 
                 if (parsed.usage) {
+                  // 解析 KV cache 字段
+                  // DeepSeek: prompt_cache_hit_tokens / prompt_cache_miss_tokens
+                  // OpenAI: prompt_tokens_details.cached_tokens
+                  const cacheReadTokens =
+                    parsed.usage.prompt_cache_hit_tokens ??
+                    parsed.usage.prompt_tokens_details?.cached_tokens ??
+                    0;
+                  const cacheCreationTokens =
+                    parsed.usage.prompt_cache_miss_tokens ?? 0;
+
                   yield {
                     type: "usage",
                     inputTokens: parsed.usage.prompt_tokens ?? 0,
                     outputTokens: parsed.usage.completion_tokens ?? 0,
+                    ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
+                    ...(cacheCreationTokens > 0 ? { cacheCreationTokens } : {}),
                   };
                 }
 
@@ -188,6 +200,18 @@ export function createOpenAICompatibleClient(
         }
       }
 
+      // 解析 KV cache 字段
+      const usageExt = usage as Record<string, unknown> | undefined;
+      const details = usageExt?.prompt_tokens_details as
+        | Record<string, number>
+        | undefined;
+      const cacheReadTokens =
+        (usageExt?.prompt_cache_hit_tokens as number | undefined) ??
+        details?.cached_tokens ??
+        0;
+      const cacheCreationTokens =
+        (usageExt?.prompt_cache_miss_tokens as number | undefined) ?? 0;
+
       return {
         id: (json.id as string) ?? crypto.randomUUID(),
         model: (json.model as string) ?? request.model,
@@ -195,6 +219,8 @@ export function createOpenAICompatibleClient(
         usage: {
           inputTokens: usage?.prompt_tokens ?? 0,
           outputTokens: usage?.completion_tokens ?? 0,
+          ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
+          ...(cacheCreationTokens > 0 ? { cacheCreationTokens } : {}),
         },
         finishReason: mapFinishReasonCompat((choice?.finish_reason as string) ?? "stop"),
       };

@@ -38,6 +38,62 @@ export function generateMarkdownReport(result: AnalysisResult): string {
   lines.push(`| 平均输出 Token | ${result.avgOutputTokens} |`);
   lines.push("");
 
+  // 模型准确率对比
+  if (result.modelComparisons.length > 0) {
+    lines.push("## 模型准确率对比");
+    lines.push("");
+    const hasCache = result.totalCacheReadTokens > 0 || result.totalCacheCreationTokens > 0;
+    if (hasCache) {
+      lines.push(
+        "| 模型 | 总调用 | 工具调用 | 工具成功率 | 错误率 | 任务完成率 | 平均耗时 | 平均输入 | 平均输出 | Cache 读取 | Cache 命中率 |",
+      );
+      lines.push(
+        "|------|--------|---------|-----------|--------|-----------|---------|---------|---------|-----------|-------------|",
+      );
+    } else {
+      lines.push(
+        "| 模型 | 总调用 | 工具调用 | 工具成功率 | 错误率 | 任务完成率 | 平均耗时 | 平均输入 | 平均输出 |",
+      );
+      lines.push(
+        "|------|--------|---------|-----------|--------|-----------|---------|---------|---------|",
+      );
+    }
+    for (const m of result.modelComparisons) {
+      const row = [
+        m.model,
+        String(m.totalCalls),
+        String(m.toolCallCount),
+        `${m.toolSuccessRate}%`,
+        `${m.errorRate}%`,
+        `${m.taskCompletionRate}%`,
+        `${m.avgDurationMs}ms`,
+        String(m.avgInputTokens),
+        String(m.avgOutputTokens),
+      ];
+      if (hasCache) {
+        row.push(String(m.cacheReadTokens));
+        row.push(`${m.cacheHitRate}%`);
+      }
+      lines.push(`| ${row.join(" | ")} |`);
+    }
+    lines.push("");
+  }
+
+  // KV Cache 命中率
+  if (result.totalCacheReadTokens > 0 || result.totalCacheCreationTokens > 0) {
+    lines.push("## KV Cache 命中率");
+    lines.push("");
+    lines.push("| 指标 | 值 |");
+    lines.push("|------|-----|");
+    lines.push(`| Cache 读取 Token 总数 | ${result.totalCacheReadTokens} |`);
+    lines.push(`| Cache 创建 Token 总数 | ${result.totalCacheCreationTokens} |`);
+    lines.push(`| 总输入 Token | ${result.totalInputTokens} |`);
+    lines.push(`| Cache 命中率 | ${result.cacheHitRate}% |`);
+    lines.push("");
+    lines.push("> Cache 命中率 = Cache 读取 Token / 总输入 Token × 100");
+    lines.push("");
+  }
+
   // 工具调用分析
   lines.push("## 工具调用分析");
   lines.push("");
@@ -190,6 +246,22 @@ export function outputReport(result: AnalysisResult, outputDir?: string): string
   console.log(`输出 Token: ${result.totalOutputTokens} (avg ${result.avgOutputTokens})`);
   console.log(`工具调用: ${result.toolCallCount} (${result.toolCallRate}%)`);
   console.log(`错误: ${result.errorCount} (${result.errorRate}%)`);
+
+  if (result.modelComparisons.length > 1) {
+    console.log("\n模型对比:");
+    for (const m of result.modelComparisons) {
+      console.log(
+        `  ${m.model}: 调用 ${m.totalCalls}, 工具成功率 ${m.toolSuccessRate}%, 任务完成率 ${m.taskCompletionRate}%, 错误率 ${m.errorRate}%`,
+      );
+    }
+  }
+
+  if (result.totalCacheReadTokens > 0 || result.totalCacheCreationTokens > 0) {
+    console.log("\nKV Cache:");
+    console.log(`  读取 Token: ${result.totalCacheReadTokens}`);
+    console.log(`  创建 Token: ${result.totalCacheCreationTokens}`);
+    console.log(`  命中率: ${result.cacheHitRate}%`);
+  }
 
   if (result.toolUsage.size > 0) {
     console.log("\n工具使用分布:");

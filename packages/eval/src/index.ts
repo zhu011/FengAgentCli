@@ -12,7 +12,7 @@
  */
 
 export { parseLogFile, findLogFile, findAllLogFiles, analyzeRecords } from "./analyzer.ts";
-export type { TraceRecord, SessionTrace, AnalysisResult } from "./analyzer.ts";
+export type { TraceRecord, SessionTrace, AnalysisResult, ModelComparison } from "./analyzer.ts";
 export { generateMarkdownReport, outputReport } from "./reporter.ts";
 
 import { findLogFile, findAllLogFiles, parseLogFile, analyzeRecords } from "./analyzer.ts";
