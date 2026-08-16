@@ -477,9 +477,9 @@
 <!-- ==================== 首页 ==================== -->
 <section class="section" id="home">
   <div style="background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.35); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; font-size: 13px; line-height: 1.6;">
-    <strong>📌 当前文档展示分支：<code>refactor/cordis-graph-architecture</code></strong>（Cordis 插件化 + 对话图/可回溯架构，Phase 1–4 已完成：CLI 经 createRuntime 装配、Server/WebUI 接 ctx.storage/ctx.graph、/rollback + /graph + 分支可视化）。
-    <br/><span style="opacity:.75">老分支 <code>main</code> 保持独立可 checkout / 编译 / 运行，功能不回归；差异与隔离方式见
-    <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/ARCHITECTURE-CORDIS.md" target="_blank" style="color:#a5b4fc">docs/ARCHITECTURE-CORDIS.md §6</a>。</span>
+    <strong>📌 当前文档展示分支：<code>refactor/cordis-graph-architecture</code></strong>（Cordis 插件化 + 对话图/可回溯架构，Phase 1–4 已完成：CLI 经 createRuntime 装配、Server/WebUI 接 ctx.storage/ctx.graph、/rollback + /graph + 分支可视化；Phase 0 数据隔离已定稿：数据根 <code>.fengagent-cordis/</code> + 单向幂等导入 + 事件溯源类型）。
+    <br/><span style="opacity:.75">老分支 <code>main</code> 保持独立可 checkout / 编译 / 运行，功能不回归；两分支同机运行数据互不干扰（数据根隔离 + 只读导入），差异与隔离方式见
+    <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/ARCHITECTURE-CORDIS.md" target="_blank" style="color:#a5b4fc">docs/ARCHITECTURE-CORDIS.md §6–§7</a>。</span>
   </div>
   <div class="hero">
     <div class="hero-badge">v0.1.0 · MIT License</div>

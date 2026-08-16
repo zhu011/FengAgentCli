@@ -223,3 +223,93 @@ bun test                    # 全量测试（既有 600+ 全部通过）
 - 验收基线：`main` 检出即用；`refactor/cordis-graph-architecture` 覆盖老分支全部功能
   （CLI/WebUI 对话、记忆、上下文压缩、skill 对话、/联想、/model、/provider、测评、kvCache）
   并新增插件化（换插件换能力）与可回溯（回退到父节点重答、链路溯源）。
+
+### 6.1 数据根隔离（Phase 0，两分支同机运行互不干扰）
+
+**运行时数据根 `resolveDataRoot(workdir)`**（`@fengagent/shared` 提供，全链路收口）：
+
+```
+resolveDataRoot(workdir) =
+  FENG_DATA_DIR（若设置）            # 显式覆盖，优先级最高
+  else 配置文件 dataDir（若自定义）    # .fengagent-cordis/config.json 中的 dataDir
+  else <workdir>/.fengagent-cordis/  # 新分支默认（.gitignore 已加入）
+
+.fengagent-cordis/
+├── sessions.db            # SQLite，表结构不变（schema 层面不破坏 main）
+├── graph.jsonl            # graph 投影快照（Phase 2 起为派生视图，不再整写）
+├── events/{sessionId}.jsonl   # 事件日志（Phase 1 起，每会话单文件，append-only）
+├── logs/                  # fengagent-{date}.log / sessions-{date}.jsonl / llm-trace-{date}.jsonl
+├── memory/                # 记忆写入（新分支只写这里）
+└── config.json            # 分支级配置覆盖（/model /provider 只落这里）
+```
+
+**对 main 的 `.fengagent/` 与 `~/.fengagent/` 一律只读**：仅作导入源、配置分层回退、
+`agents/` `skills/` `plugins/` 共享只读定义、记忆只读回退。
+
+**环境变量**：
+
+| 变量 | 语义 | 变更 |
+|---|---|---|
+| `FENG_DATA_DIR` | 数据根（沿用现有语义，已接线） | 新分支默认 `~/.fengagent` → `<workdir>/.fengagent-cordis` |
+| `FENG_MAIN_DATA_DIR`（新增） | 显式指定 main 遗留数据根（导入源） | 默认按序探测：`FENG_MAIN_DATA_DIR` → `<workdir>/.fengagent` → `~/.fengagent` → `<workdir>/data`（旧 cordis 遗留），首个含 `sessions.db`/`graph.jsonl` 者胜 |
+
+**配置读取优先级（全链）**：`.fengagent-cordis/config.json` > 项目 `.fengagent/config.json` >
+全局 `~/.fengagent/config.json`（其后是环境变量 → CLI 参数）。
+
+### 6.2 两分支数据关系清单
+
+| 数据 | 共用 | 隔离（新分支） | 切回 main |
+|---|---|---|---|
+| `sessions.db` | ❌ | `.fengagent-cordis/sessions.db`（表结构不变） | 删 cordis 目录即回 main |
+| `graph.jsonl` | ❌ | `.fengagent-cordis/graph.jsonl` | 同上 |
+| 事件日志 `events/*.jsonl` | ❌（新格式，main 无） | `.fengagent-cordis/events/` | 同上 |
+| 日志 / llm-trace / session-log | ❌ | `.fengagent-cordis/logs/` | 同上 |
+| 记忆 `memory/` | 读共用（main 只读回退） | 写 `.fengagent-cordis/memory/` | 同上 |
+| `config.json` | 读共用（分层回退） | 写 `.fengagent-cordis/config.json` | 同上 |
+| `agents/` `skills/` `plugins/` | ✅ 共享只读（定义非数据） | — | — |
+| main 的 `.fengagent/`、`~/.fengagent/` | 只读（导入源） | 从不写入 | 原样保留 |
+
+### 6.3 单向幂等导入（首次运行，一次性、只读、幂等）
+
+1. **触发**：数据根内 `events/` 为空 且 `sessions.db` 不存在 → 执行导入；成功后写
+   `import.marker`（来源根 + 时间 + 导入文件数），后续启动跳过。
+2. **导入源探测**：见 6.1 环境变量表。**自环防护**：当 `FENG_DATA_DIR` 被显式指向任一
+   main 数据根时，导入器把 `resolveDataRoot` 自身从探测候选里排除（防自导成环），
+   此时直接跳过导入、绝不写入 main 目录。
+3. **单向兼容（明确写死）**：旧格式 → 新数据根，**只读 main 目录、绝不写回**；
+   main 无需反向读新数据（`sessions.db` 表结构不变、`graph.jsonl` 老读取方由投影可再生成快照兼容）。
+4. **切回 main**：删除/改名 `.fengagent-cordis/`（或清除 `FENG_DATA_DIR`）即回到 main 数据；
+   main 目录零改动，随时独立 checkout/运行。
+
+---
+
+## 7. 事件溯源（Event Sourcing，Phase 0 定稿）
+
+> **Phase 0 状态**：`packages/events` 仅提供事件类型 + 事件名常量 + 运行时注册表接口，
+> **零运行时行为变化**；事件日志写入 / 投影 / 重放自 Phase 1 起实现。
+
+### 7.1 词汇表
+
+| 词 | 含义 |
+|---|---|
+| 事件日志（event log） | 会话事实的唯一来源，`events/{sessionId}.jsonl`，append-only，每行一条事件 |
+| 投影（projection） | 从事件日志派生的读模型：会话消息、graph 节点、head、token 统计等 |
+| 重放（replay） | 按 seq 顺序重放事件重建投影（崩溃后自愈 = 容忍尾部半行并跳过） |
+| head | 会话当前分支的链尾，由事件推导，**不设可变「当前分支」指针**（#4） |
+| 信封（envelope） | 每条事件的公共外壳：version/sessionId/seq/type/timestamp/hash/prevHash（#5） |
+
+### 7.2 核心决策（#1–#6 定稿）
+
+- **#1 运行时校验注册表**：`packages/events` 提供核心事件名常量数组 + `registerEventType(type, validator)` 契约；`isSessionEvent`/append 校验走运行时注册表；`declare module` 仅管编译期类型（两者解耦）。cordis 复用 service 注入：`ctx.events.register()`。
+- **#2 复现语义**：默认 **(a) 逻辑复现** — `step/start` 只存请求参数（model/tools/maxTokens/temperature）+ 派生锚点，messages 由事件重放推导；`assistant/message` 不再单独落事实，由 `assistant/chunk` 投影组装；`FENG_EVENT_FULL_REQUEST=1` 开启字节级（`step/start` 附组装上下文、`turn/end` 落 assembled message）。
+- **#3 会话生命周期入词汇**：新增 `session/created`（含初始 title/status）、`session/title`、`session/status` 事件；事件日志 = 唯一事实源（含元数据），DB 降级为读模型，「以事件为准重建」不丢标题/状态。
+- **#4 head 确定式推导**：`head(session) = 该会话最大 seq 事件所属分支的链尾`；回退/分叉后 = 最新 `rollback`/`fork` 事件声明 branch 的链尾；不设可变「当前分支」指针，`conversationHeads` 可变态从投影中消失。
+- **#5 信封补哈希**：`SessionEventBase` 携带 `hash`/`prevHash`（sha-256(prevHash+seq+type+payload)），Phase 3 导出/导入校验直接可用，不留空项。
+- **#6 图导入区分事实/派生态**：`markQuality` → `node/quality` 事件（事实）；`active`/`rolledBack`/branch 为派生态，导入后由投影重算，不字面写入 meta。
+
+### 7.3 写路径 / 投影 / 重放 / 迁移
+
+- **写路径**：追加事件 → 校验（注册表）→ 计算 hash 链 → append 到 `events/{sessionId}.jsonl`；`turn/end` 后触发投影刷新（读模型）。
+- **投影**：会话消息（#2 逻辑复现）、graph 节点（#6 事实 + 派生态重算）、head（#4）、标题/状态（#3）。
+- **重放**：启动时按 seq 重放；崩溃残留的尾部半行 JSON 跳过 + 启动自愈；双写对账门槛（Phase 1 末尾）：同一批运行中「事件投影产物」与「旧日志/SQLite」逐条等价，绿了才进 Phase 2。
+- **迁移**：main 的 `sessions.db` / `graph.jsonl` → 事件（单向、幂等、只读，见 §6.3）；sessions.db 表结构不变；graph 投影快照 `graph.jsonl` 保持旧读取方兼容（由投影再生成）。
