@@ -287,7 +287,7 @@ resolveDataRoot(workdir) =
 
 > **Phase 0 状态**：`packages/events` 提供事件类型 + 事件名常量 + 运行时注册表接口，零运行时行为变化。
 > **Phase 1 状态（已落地）**：EventStore（每会话单文件 append-only `events/{sessionId}.jsonl`，注册表校验，seq + #5 hash 链，重放，尾部半行崩溃自愈）+ 投影（#2 逻辑复现 / #3 生命周期）+ 双写映射（DualWriteSessionStore）+ 双写对账门槛（reconcile：投影 === 旧 SQLite 逐条等价，绿了才进 Phase 2）+ cordis `ctx.eventLog` 服务（`feng.events` 插件，server 已装配）。
-> **Phase 2 起**：运行时实际接入双写、graph 投影（#4/#6 派生态重算）、rollback/fork 分支感知消息投影。
+> **Phase 2 状态（已落地）**：生产双写（`create-runtime-agent.ts` 把 `DualWriteSessionStore` 挂进 `ctx.storage`，STORAGE 插件装配）；分支感知消息投影（rollback/fork 截断语义）；graph 投影（#4 head 确定式推导、#6 active/rolledBack 派生态重算，`graph.jsonl` 转为派生视图不再整写内存态）；对账门槛扩到含分支/回退会话。
 
 ### 7.1 词汇表
 
@@ -310,7 +310,8 @@ resolveDataRoot(workdir) =
 
 ### 7.3 写路径 / 投影 / 重放 / 迁移
 
-- **写路径**：追加事件 → 校验（注册表）→ 计算 hash 链 → append 到 `events/{sessionId}.jsonl`；`turn/end` 后触发投影刷新（读模型）。
-- **投影**：会话消息（#2 逻辑复现）、graph 节点（#6 事实 + 派生态重算）、head（#4）、标题/状态（#3）。
-- **重放**：启动时按 seq 重放；崩溃残留的尾部半行 JSON 跳过 + 启动自愈；双写对账门槛（Phase 1 末尾）：同一批运行中「事件投影产物」与「旧日志/SQLite」逐条等价，绿了才进 Phase 2。
+- **写路径**：追加事件 → 校验（注册表）→ 计算 hash 链 → append 到 `events/{sessionId}.jsonl`；`turn/end` 后触发投影刷新（读模型）。**Phase 2 生产双写**：`create-runtime-agent.ts` 的 STORAGE 插件包一层 `DualWriteSessionStore`（旧存储 + 事件日志并行写，messageId 幂等）；loop 回合收尾把本回合消息整批落事件（旧存储同步收敛到当前消息集合，rollback/fork 截断同步走 `SessionStore.deleteMessages`）；rollback 以最后一条事件（rollback 事件）时间戳对齐会话 `updatedAt`，保证对账逐条等价。
+- **投影**：会话消息（#2 逻辑复现 + **Phase 2 分支感知**：rollback/fork 事件按「节点 → 消息」截断历史，旧分支消息从读模型移除、事件不可变保留）、graph 节点（**Phase 2 `projectGraph`**：user/message → 用户节点、step/start → 助手节点、rollback/fork → 分支点、node/quality → 质量事实；#6 active/rolledBack 由 head 链推导）、head（#4：最新 rollback/fork 事件声明分支的链尾，无可变指针）。节点 id 采用确定性方案（`<sessionId>::<kind>::<ref>`，`packages/events/src/node-ids.ts`），同一事实重放得到同一节点。
+- **graph.jsonl 派生视图（Phase 2）**：`EventGraphStore`（`packages/events/src/event-graph-store.ts`）以事件日志为事实源，读路径每次重放投影；`flush` 把「派生视图 + 无事件会话的遗留节点」整写到 graph.jsonl（不再整写内存可变态）。无事件会话（导入的 main 遗留数据）读 legacy 节点兼容；一旦产生事件即切换为派生视图。
+- **重放**：启动时按 seq 重放；崩溃残留的尾部半行 JSON 跳过 + 启动自愈；双写对账门槛（Phase 1 末尾，**Phase 2 扩到分支/回退会话**）：同一批运行中「事件投影产物」与「旧日志/SQLite」逐条等价，绿了才进 Phase 2（含 rollback 截断、fork 分叉、回退后重答分支）。
 - **迁移**：main 的 `sessions.db` / `graph.jsonl` → 事件（单向、幂等、只读，见 §6.3）；sessions.db 表结构不变；graph 投影快照 `graph.jsonl` 保持旧读取方兼容（由投影再生成）。
