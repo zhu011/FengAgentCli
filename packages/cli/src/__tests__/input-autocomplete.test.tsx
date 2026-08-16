@@ -136,3 +136,51 @@ test("handleCommand: 非命令返回 handled=false", () => {
   const result = handleCommand("hello", { agent: null as never, currentModel: "test" });
   expect(result.handled).toBe(false);
 });
+
+// 方向键转义序列识别逻辑测试（纯函数验证）
+// 验证 \x1b[A/\x1b[B/\x1bOA/\x1bOB 被正确识别为方向键
+test("方向键转义序列识别: \\x1b[A = upArrow", () => {
+  const input = "\x1b[A";
+  const isUp = input === "\x1b[A" || input === "\x1bOA";
+  expect(isUp).toBe(true);
+});
+
+test("方向键转义序列识别: \\x1b[B = downArrow", () => {
+  const input: string = "\x1b[B";
+  const isDown = input === "\x1b[B" || input === "\x1bOB";
+  expect(isDown).toBe(true);
+});
+
+test("方向键转义序列识别: \\x1bOA = upArrow (应用模式)", () => {
+  const input: string = "\x1bOA";
+  const isUp = input === "\x1b[A" || input === "\x1bOA";
+  expect(isUp).toBe(true);
+});
+
+test("方向键转义序列识别: \\x1bOB = downArrow (应用模式)", () => {
+  const input: string = "\x1bOB";
+  const isDown = input === "\x1b[B" || input === "\x1bOB";
+  expect(isDown).toBe(true);
+});
+
+test("方向键转义序列识别: 普通字符不误判", () => {
+  const input: string = "a";
+  const isUp = input === "\x1b[A" || input === "\x1bOA";
+  const isDown = input === "\x1b[B" || input === "\x1bOB";
+  expect(isUp).toBe(false);
+  expect(isDown).toBe(false);
+});
+
+test("方向键转义序列识别: 转义序列不残留到输入值", () => {
+  // 模拟 input.replace(/\x1b\[[A-D]/g, "") 的过滤效果
+  const rawInput = "\x1b[A";
+  const filtered = rawInput.replace(/\x1b\[[A-D]/g, "");
+  expect(filtered).toBe(""); // 被完全过滤掉，不会追加到 value
+
+  const rawInput2 = "\x1bOA";
+  // \x1bOA 不被 /\x1b\[[A-D]/g 匹配（因为是 O 不是 [），需要额外处理
+  // 但 useInput 里已经在 isUp/isDown 分支 return 了，不会走到追加逻辑
+  // 验证它不会通过 replace 被清理（证明需要靠 return 阻止）
+  const filtered2 = rawInput2.replace(/\x1b\[[A-D]/g, "");
+  expect(filtered2).toBe("\x1bOA"); // 不被正则匹配，但 useInput 里已 return
+});

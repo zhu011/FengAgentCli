@@ -8,7 +8,7 @@
  * 1. 补全列表用 position="absolute" 悬浮层，不占流式布局
  * 2. 滚动窗口：selectedIdx 变化时自动调整可视范围
  * 3. useRef 避免 useInput 闭包陈旧
- * 4. 方向键 debug 输出（临时，帮助定位 Windows/Bun 键位问题）
+ * 4. 方向键转义序列兜底兼容（\x1b[A/\x1b[B/\x1bOA/\x1bOB）
  */
 
 import React, { useState, useRef, useMemo } from "react";
@@ -35,8 +35,6 @@ export function Input({
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
-  // Debug: 方向键原始值（临时，帮助定位问题）
-  const [debugKey, setDebugKey] = useState("");
 
   const showAutoRef = useRef(false);
   const selectedRef = useRef(0);
@@ -77,18 +75,20 @@ export function Input({
 
     // 补全模式下的导航
     if (isAuto && matched.length > 0) {
-      // Debug: 记录方向键原始值
-      if (key.upArrow || key.downArrow) {
-        setDebugKey(`up=${key.upArrow} down=${key.downArrow} input=${JSON.stringify(input)}`);
-      }
+      // 方向键转义序列兜底兼容：
+      // Windows/Bun 下 useInput 可能没把 \x1b[A/\x1b[B 解析成 key.upArrow/downArrow
+      // 而是当普通 input 传进来，导致「按两次才生效」
+      // 显式识别转义序列，等价于 key.upArrow/downArrow
+      const isUp = key.upArrow || input === "\x1b[A" || input === "\x1bOA";
+      const isDown = key.downArrow || input === "\x1b[B" || input === "\x1bOB";
 
-      if (key.upArrow) {
+      if (isUp) {
         const cur = selectedRef.current;
         const newIdx = cur > 0 ? cur - 1 : matched.length - 1;
         updateSelected(newIdx);
         return;
       }
-      if (key.downArrow) {
+      if (isDown) {
         const cur = selectedRef.current;
         const newIdx = cur < matched.length - 1 ? cur + 1 : 0;
         updateSelected(newIdx);
@@ -100,7 +100,6 @@ export function Input({
           setValue(`/${selected.name} `);
           setShowAutocomplete(false);
           showAutoRef.current = false;
-          setDebugKey("");
         }
         return;
       }
@@ -111,13 +110,11 @@ export function Input({
             setValue(`/${selected.name} `);
             setShowAutocomplete(false);
             showAutoRef.current = false;
-            setDebugKey("");
           }
           return;
         }
         setShowAutocomplete(false);
         showAutoRef.current = false;
-        setDebugKey("");
         const trimmed = value.trim();
         if (trimmed) {
           onSubmit(trimmed);
@@ -128,7 +125,6 @@ export function Input({
       if (key.escape) {
         setShowAutocomplete(false);
         showAutoRef.current = false;
-        setDebugKey("");
         return;
       }
     }
@@ -136,7 +132,6 @@ export function Input({
     if (key.return) {
       setShowAutocomplete(false);
       showAutoRef.current = false;
-      setDebugKey("");
       const trimmed = value.trim();
       if (trimmed) {
         onSubmit(trimmed);
@@ -243,7 +238,6 @@ export function Input({
           )}
 
           <Text dimColor italic>  ↑↓选择 · Tab补全 · Esc关闭 · Enter提交</Text>
-          {debugKey && <Text color="yellow" dimColor>  [debug] {debugKey}</Text>}
         </Box>
       )}
 
