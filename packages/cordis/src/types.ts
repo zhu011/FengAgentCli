@@ -35,7 +35,11 @@ import type {
   CompactionResult,
   ContextManager,
 } from "@fengagent/context";
-import type { GraphStore, RollbackStrategy } from "@fengagent/graph";
+import type {
+  ConversationNode,
+  GraphStore,
+  RollbackStrategy,
+} from "@fengagent/graph";
 
 /* ------------------------------ 模型域 ------------------------------ */
 
@@ -185,10 +189,21 @@ export interface LoopService {
 /** 图服务 — 对话可溯源 / 对话即节点 / 可回退 */
 export interface GraphService {
   readonly store: GraphStore;
-  /** 追加用户节点 */
-  appendUserNode(conversationId: string, messageId: string, meta?: Record<string, unknown>): void;
-  /** 追加助手节点 */
-  appendAssistantNode(conversationId: string, messageId: string, meta?: Record<string, unknown>): void;
+  /**
+   * 追加用户节点（幂等：同一会话同一 messageId 只追加一次，重复 run() 不会重复追加）。
+   * @returns 实际落库的节点（若已存在则返回既有节点）
+   */
+  appendUserNode(
+    conversationId: string,
+    messageId: string,
+    meta?: Record<string, unknown>,
+  ): ConversationNode;
+  /** 追加助手节点，返回实际落库的节点（供事件使用真实 nodeId / parentId） */
+  appendAssistantNode(
+    conversationId: string,
+    messageId: string,
+    meta?: Record<string, unknown>,
+  ): ConversationNode;
   /** 标记回答不佳并回退 */
   rollbackPoorAnswer(nodeId: string, reason?: string): boolean;
 }

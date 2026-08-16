@@ -240,4 +240,68 @@ describe("createRuntime — Cordis 一等公民", () => {
 
     await runtime.stop();
   });
+
+  test("graph-node 事件 id 与 store 节点一致（可溯源）", async () => {
+    const { runtime } = createTestRuntime();
+    await runtime.start();
+    const ctx = runtime.ctx as any;
+
+    const session = makeSession([createUserMessage("你好")]);
+    const graphEvents: Array<{ nodeId: string; parentId: string | null; kind: string }> = [];
+    for await (const event of ctx.loop.run(session)) {
+      if (event.type === "graph-node") {
+        graphEvents.push(event);
+      }
+    }
+
+    // 每轮助手回答都会发出 graph-node 事件
+    expect(graphEvents.length).toBeGreaterThan(0);
+    for (const ev of graphEvents) {
+      // 事件 nodeId 必须是 store 中的真实节点（不再是悬空 id）
+      const node = ctx.graph.store.getNode(ev.nodeId);
+      expect(node).toBeDefined();
+      expect(node.type).toBe("assistant");
+      // parentId 与 store 一致（不再是硬编码 null）
+      expect(node.parentId).toBe(ev.parentId);
+      expect(node.messageId).toBeDefined();
+    }
+
+    // 第一个 assistant 节点的父节点是 user 节点（对话即节点链路完整）
+    const first = graphEvents[0]!;
+    const parent = ctx.graph.store.getNode(first.parentId!);
+    expect(parent?.type).toBe("user");
+
+    await runtime.stop();
+  });
+
+  test("同会话多次 run 幂等：user 节点不重复追加", async () => {
+    const { runtime } = createTestRuntime();
+    await runtime.start();
+    const ctx = runtime.ctx as any;
+
+    const session = makeSession([createUserMessage("你好")]);
+
+    // 第一次 run：沉淀 user + assistant 节点
+    for await (const _ of ctx.loop.run(session)) {
+      // 消费完一轮
+    }
+    const userCountAfterFirst = ctx.graph.store
+      .listNodes(session.id)
+      .filter((n: { type: string }) => n.type === "user").length;
+    expect(userCountAfterFirst).toBe(1);
+
+    // 第二次 run（同一会话同一用户消息）：user 节点不重复追加
+    for await (const _ of ctx.loop.run(session)) {
+      // 消费完一轮
+    }
+    const nodes = ctx.graph.store.listNodes(session.id);
+    const userNodes = nodes.filter((n: { type: string }) => n.type === "user");
+    expect(userNodes).toHaveLength(1);
+    // assistant 节点按轮次沉淀（2 轮 → 2 个），且链式相连（可溯源）
+    const assistantNodes = nodes.filter((n: { type: string }) => n.type === "assistant");
+    expect(assistantNodes).toHaveLength(2);
+    expect(assistantNodes[1].parentId).toBe(assistantNodes[0].id);
+
+    await runtime.stop();
+  });
 });

@@ -9,6 +9,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { rmSync } from "node:fs";
 import {
   DefaultRollbackStrategy,
   MemoryGraphStore,
@@ -105,6 +108,41 @@ describe("MemoryGraphStore", () => {
     store.rollbackTo(user2.id, "先回退一次");
     expect(store.rollbackTo(asst2.id)).toBeUndefined();
     expect(store.rollbackTo("nonexistent")).toBeUndefined();
+  });
+
+  test("flush/load 往返：JSONL 持久化后可完整恢复", async () => {
+    const path = join(
+      tmpdir(),
+      `feng-graph-flush-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
+    try {
+      const store = new MemoryGraphStore({ persistPath: path });
+      const { user1, asst1, user2, asst2 } = buildConversation(store, "conv-flush");
+      await store.flush();
+
+      // 新实例从 JSONL 恢复：节点、父子关系、活跃 head/路径 全部还原
+      const restored = new MemoryGraphStore({ loadFrom: path });
+      expect(restored.listNodes("conv-flush")).toHaveLength(4);
+      expect(restored.getNode(user1.id)?.parentId).toBeNull();
+      expect(restored.getNode(asst1.id)?.parentId).toBe(user1.id);
+      expect(restored.getNode(asst2.id)?.parentId).toBe(user2.id);
+      expect(restored.getActiveHead("conv-flush")?.id).toBe(asst2.id);
+      expect(restored.getActivePath("conv-flush").map((n) => n.id)).toEqual([
+        user1.id,
+        asst1.id,
+        user2.id,
+        asst2.id,
+      ]);
+      // 溯源链同样完整
+      expect(restored.getChain(asst2.id).map((n) => n.id)).toEqual([
+        user1.id,
+        asst1.id,
+        user2.id,
+        asst2.id,
+      ]);
+    } finally {
+      rmSync(path, { force: true });
+    }
   });
 });
 

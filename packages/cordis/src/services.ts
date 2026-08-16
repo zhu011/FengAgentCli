@@ -29,7 +29,11 @@ import type {
 } from "@fengagent/context";
 import type { ToolRegistry } from "@fengagent/tools";
 import { AgentLoop } from "@fengagent/agent/loop";
-import type { GraphStore, RollbackStrategy } from "@fengagent/graph";
+import type {
+  ConversationNode,
+  GraphStore,
+  RollbackStrategy,
+} from "@fengagent/graph";
 import { DefaultRollbackStrategy, MemoryGraphStore } from "@fengagent/graph";
 import { generateId } from "@fengagent/shared/utils";
 import type {
@@ -324,7 +328,7 @@ export class LoopServiceImpl extends Service implements LoopService {
       agentDepth: this.options.agentDepth,
     });
 
-    // 对话即节点：为用户输入建立节点
+    // 对话即节点：为用户输入建立节点（幂等：同一 messageId 不会重复追加）
     const conversationId = session.id;
     const lastUser = [...session.messages]
       .reverse()
@@ -339,14 +343,13 @@ export class LoopServiceImpl extends Service implements LoopService {
       switch (event.type) {
         case "message-end": {
           // 对话即节点：每轮助手回答沉淀为图节点（可溯源）
-          const nodeId = `gnode-${generateId()}`;
-          graph.appendAssistantNode(conversationId, event.messageId, {
+          const node = graph.appendAssistantNode(conversationId, event.messageId, {
             model: session.model,
           });
           yield {
             type: "graph-node",
-            nodeId,
-            parentId: null,
+            nodeId: node.id,
+            parentId: node.parentId,
             kind: "assistant",
           };
           break;
@@ -398,9 +401,14 @@ export class GraphServiceImpl extends Service implements GraphService {
     conversationId: string,
     messageId: string,
     meta: Record<string, unknown> = {},
-  ): void {
+  ): ConversationNode {
+    // 幂等：同一会话同一 messageId 只追加一次（重复 run() 不再重复追加 user 节点）
+    const existing = this.store
+      .listNodes(conversationId)
+      .find((n) => n.type === "user" && n.messageId === messageId);
+    if (existing) return existing;
     const head = this.store.getActiveHead(conversationId);
-    this.store.appendNode({
+    return this.store.appendNode({
       id: `gnode-${generateId()}`,
       conversationId,
       type: "user",
@@ -415,9 +423,9 @@ export class GraphServiceImpl extends Service implements GraphService {
     conversationId: string,
     messageId: string,
     meta: Record<string, unknown> = {},
-  ): void {
+  ): ConversationNode {
     const head = this.store.getActiveHead(conversationId);
-    this.store.appendNode({
+    return this.store.appendNode({
       id: `gnode-${generateId()}`,
       conversationId,
       type: "assistant",
