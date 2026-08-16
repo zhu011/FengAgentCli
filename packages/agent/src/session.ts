@@ -120,6 +120,30 @@ export class SessionStore {
     }
   }
 
+  /**
+   * 让旧存储的会话消息集合收敛到「当前消息列表」（Phase 2 分支截断同步）。
+   * 删除该会话中不在 keepMessageIds 内的残留消息行（rollback/fork 截断后旧分支
+   * 消息不再属于当前读模型；会话整体删除仍走 deleteSession）。
+   */
+  deleteMessages(sessionId: string, keepMessageIds: string[]): void {
+    const keep = [...new Set(keepMessageIds)];
+    if (keep.length === 0) {
+      this.db.query("DELETE FROM messages WHERE session_id = ?").run(sessionId);
+      return;
+    }
+    // 分批执行（规避 SQLite 变量数上限）
+    const CHUNK = 500;
+    for (let i = 0; i < keep.length; i += CHUNK) {
+      const chunk = keep.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      this.db
+        .query(
+          `DELETE FROM messages WHERE session_id = ? AND id NOT IN (${placeholders})`,
+        )
+        .run(sessionId, ...chunk);
+    }
+  }
+
   /** 加载完整会话（含所有消息） */
   loadSession(sessionId: string): Session | null {
     const row = this.db

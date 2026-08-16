@@ -99,7 +99,12 @@ export interface GraphStore {
   markQuality(nodeId: string, quality: NodeQuality, note?: string): void;
   /** 回退：把活跃路径回退到 target，旧分支作废，新建分支点 */
   rollbackTo(nodeId: string, reason?: string): RollbackResult | undefined;
-  /** 把节点标记为活跃/非活跃（回退内部使用） */
+  /**
+   * 分叉（Phase 2）：从某节点长出新分支（不动质量评分），旧分支作废但保留。
+   * @returns 分叉结果（branchPoint 为新 head）；节点不存在/不在活跃路径时 undefined
+   */
+  fork(nodeId: string, branch?: string): RollbackResult | undefined;
+  /** 把节点标记为活跃/非活跃（回退内部使用；事件溯源实现为派生态 no-op） */
   setActive(nodeId: string, active: boolean): void;
   /** 持久化（JSONL 追加写） */
   flush(): Promise<void>;

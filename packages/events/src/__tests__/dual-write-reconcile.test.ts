@@ -19,8 +19,10 @@ import { join } from "node:path";
 import type { ContentBlock, Message, Session, SessionMeta } from "@fengagent/core";
 import { createSession, createUserMessage } from "@fengagent/core";
 import { EventStore } from "../event-store.ts";
+import { EventGraphStore } from "../event-graph-store.ts";
 import { DualWriteSessionStore, type SessionStorePort } from "../dual-write.ts";
 import { reconcileAll, reconcileSession, verifyEventChain } from "../reconcile.ts";
+import { assistantNodeId } from "../node-ids.ts";
 
 /* ------------------------------ 旧存储：真实 SQLite（同 SessionStore schema） ------------------------------ */
 
@@ -53,6 +55,15 @@ class SqliteLegacyStore implements SessionStorePort {
   }
   saveMessages(sessionId: string, messages: Message[]): void {
     for (const m of messages) this.saveMessage(sessionId, m);
+  }
+  deleteMessages(sessionId: string, keepMessageIds: string[]): void {
+    const keep = new Set(keepMessageIds);
+    const rows = this.db.query("SELECT id FROM messages WHERE session_id = ?").all(sessionId) as Array<{ id: string }>;
+    for (const row of rows) {
+      if (!keep.has(row.id)) {
+        this.db.query("DELETE FROM messages WHERE id = ?").run(row.id);
+      }
+    }
   }
   loadSession(id: string): Session | null {
     const row = this.db.query("SELECT * FROM sessions WHERE id = ?").get(id) as
@@ -294,5 +305,149 @@ describe("双写对账门槛（旧 SQLite 逐条等价）", () => {
     const r = reconcileSession(events, legacy, session.id);
     expect(r.ok).toBe(false);
     expect(r.diffs[0]!.field).toBe("session");
+  });
+});
+
+/* ------------------------------ Phase 2：分支/回退会话对账门槛 ------------------------------ */
+
+/** 模拟 RuntimeAgent.rollback 的消息截断 + 双写（事件日志为准对齐 updatedAt） */
+function rollbackAndSave(
+  dual: DualWriteSessionStore,
+  session: Session,
+  graph: EventGraphStore,
+  assistantNodeId: string,
+  reason: string,
+) {
+  const assistant = graph.getNode(assistantNodeId)!;
+  // markQuality（事实事件）→ rollbackTo（rollback 事件，回退到父节点）
+  graph.markQuality(assistantNodeId, "poor", reason);
+  const rbNodeId = assistant.parentId ?? assistantNodeId;
+  graph.rollbackTo(rbNodeId, reason);
+
+  // 截断消息到回退点（保留回退点消息）
+  const targetMsgId = graph.getNode(rbNodeId)?.messageId;
+  const idx = session.messages.findIndex((m) => m.id === targetMsgId);
+  if (idx !== -1) session.messages = session.messages.slice(0, idx + 1);
+  session.tokenCount = session.messages.length * 10;
+  // 事件日志为准：updatedAt 取最后一条事件时间戳（保证对账 updatedAt 等价）
+  const evs = dual.replay(session.id);
+  const lastTs = evs.length ? Date.parse(evs[evs.length - 1]!.timestamp) : NaN;
+  if (!Number.isNaN(lastTs)) session.updatedAt = lastTs;
+
+  dual.saveSession(session);
+  dual.saveMessages(session.id, session.messages);
+}
+
+describe("Phase 2 对账门槛扩展：分支/回退会话", () => {
+  test("rollback 后（消息截断 + rollback 事件）：投影 === 旧 SQLite 逐条等价（绿）", () => {
+    const { events, legacy, dual } = setup();
+    const graph = new EventGraphStore({ events });
+    const session = createSession("deepseek-chat", "分支会话");
+    runOneTurn(dual, session, "第一问", [{ type: "text", text: "第一答" }], 60);
+    runOneTurn(dual, session, "第二问", [{ type: "text", text: "第二答" }], 150);
+
+    // 回退到第二轮 assistant（父节点 = 第二问 user 节点）
+    const asst2 = graph.listNodes(session.id).filter((n) => n.type === "assistant")[1]!;
+    expect(session.messages.length).toBe(4);
+
+    rollbackAndSave(dual, session, graph, asst2.id, "回答不佳");
+
+    // 会话消息已截断到第二问
+    expect(session.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    // 门槛：投影 === 旧 SQLite（绿）
+    const r = reconcileSession(events, legacy, session.id);
+    expect(r.diffs).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.projected!.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    expect(r.projected!.messages[2]!.id).toBe(session.messages[2]!.id);
+    // 事件链完整（rollback 事件在链上）
+    expect(verifyEventChain(events.replay(session.id))).toEqual([]);
+    // 图派生态：a-150 作废、分支点为 head
+    const graphAfter = new EventGraphStore({ events });
+    expect(graphAfter.getNode(asst2.id)!.meta.rolledBack).toBe(true);
+    expect(graphAfter.getActiveHead(session.id)?.type).toBe("branch-point");
+
+    // 批量对账仍绿
+    const all = reconcileAll(events, legacy);
+    expect(all.ok).toBe(true);
+    expect(all.total).toBe(1);
+  });
+
+  test("rollback 后重答（新分支消息）：投影 === 旧 SQLite（绿），分支可溯源", () => {
+    const { events, legacy, dual } = setup();
+    const graph = new EventGraphStore({ events });
+    const session = createSession("deepseek-chat", "重答会话");
+    runOneTurn(dual, session, "第一问", [{ type: "text", text: "第一答" }], 60);
+    runOneTurn(dual, session, "第二问", [{ type: "text", text: "第二答" }], 150);
+
+    const asst2 = graph.listNodes(session.id).filter((n) => n.type === "assistant")[1]!;
+    rollbackAndSave(dual, session, graph, asst2.id, "不佳");
+
+    // 重答：新一轮（模拟 rollbackAndRetry 后的 loop 收尾）
+    session.status = "running";
+    dual.saveSession(session);
+    const retryAsst: Message = {
+      id: "a-retry",
+      role: "assistant",
+      content: [{ type: "text", text: "重新回答的内容" }],
+      createdAt: Date.now(),
+    };
+    session.messages.push(retryAsst);
+    session.tokenCount = 200;
+    session.updatedAt = Date.now();
+    session.status = "idle";
+    dual.saveSession(session);
+    dual.saveMessages(session.id, session.messages);
+
+    const r = reconcileSession(events, legacy, session.id);
+    expect(r.diffs).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.projected!.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(r.projected!.messages[3]!.id).toBe("a-retry");
+    expect(r.projected!.messages[3]!.content).toEqual([{ type: "text", text: "重新回答的内容" }]);
+    expect(verifyEventChain(events.replay(session.id))).toEqual([]);
+
+    // 分支可溯源：新回答挂在分支点下
+    const graphAfter = new EventGraphStore({ events });
+    const bp = graphAfter.getActivePath(session.id).find((n) => n.type === "branch-point");
+    expect(bp).toBeDefined();
+    const retryNode = graphAfter.getNode(assistantNodeId(session.id, "a-retry"))!;
+    expect(retryNode.parentId).toBe(bp!.id);
+    // 旧回答作废保留
+    expect(graphAfter.getNode(asst2.id)!.meta.rolledBack).toBe(true);
+  });
+
+  test("fork 后（消息截断 + fork 事件）：投影 === 旧 SQLite（绿）", () => {
+    const { events, legacy, dual } = setup();
+    const graph = new EventGraphStore({ events });
+    const session = createSession("deepseek-chat", "分叉会话");
+    runOneTurn(dual, session, "第一问", [{ type: "text", text: "第一答" }], 60);
+    runOneTurn(dual, session, "第二问", [{ type: "text", text: "第二答" }], 150);
+
+    // 从第一问分叉（父节点 = 第一问 user 节点）
+    const user1 = graph.listNodes(session.id).filter((n) => n.type === "user")[0]!;
+    const result = graph.fork(user1.id, "explore-x");
+    expect(result).toBeDefined();
+
+    // 截断到分叉点（第一问），对齐 updatedAt 后双写
+    const idx = session.messages.findIndex((m) => m.id === user1.messageId);
+    session.messages = session.messages.slice(0, idx + 1);
+    session.tokenCount = 20;
+    const evs = dual.replay(session.id);
+    const lastTs = evs.length ? Date.parse(evs[evs.length - 1]!.timestamp) : NaN;
+    if (!Number.isNaN(lastTs)) session.updatedAt = lastTs;
+    dual.saveSession(session);
+    dual.saveMessages(session.id, session.messages);
+
+    const r = reconcileSession(events, legacy, session.id);
+    expect(r.diffs).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.projected!.messages.map((m) => m.role)).toEqual(["user"]);
+    expect(r.projected!.messages[0]!.id).toBe(user1.messageId);
+    expect(verifyEventChain(events.replay(session.id))).toEqual([]);
+
+    const graphAfter = new EventGraphStore({ events });
+    expect(graphAfter.getActiveHead(session.id)?.type).toBe("branch-point");
+    expect(graphAfter.getActiveHead(session.id)!.meta.branch).toBe("explore-x");
   });
 });

@@ -94,6 +94,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@fengagent/core": "workspace:*",
+        "@fengagent/graph": "workspace:*",
         "@fengagent/shared": "workspace:*",
       },
     },

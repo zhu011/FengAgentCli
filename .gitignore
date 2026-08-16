@@ -38,3 +38,6 @@ data/
 
 # 文档站点 — 始终提交（不忽略）
 !docs/site/
+
+# bun install 本地缓存（沙箱无网络缓存目录时使用）
+.bun-cache/

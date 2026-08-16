@@ -10,7 +10,7 @@
  *   后续追加从正确 seq 继续，不丢已落盘事件。
  */
 
-import { appendFileSync, mkdirSync, readFileSync, truncateSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDataRoot } from "@fengagent/shared";
 import { createEventRegistry } from "./registry.ts";
@@ -133,6 +133,32 @@ export class EventStore {
   lastSeq(sessionId: string): number {
     const events = this.readSessionFile(sessionId).events;
     return events.length > 0 ? events[events.length - 1]!.seq : 0;
+  }
+
+  /**
+   * 列出已有事件日志的全部会话 id（Phase 2：graph 派生视图整写 / 全量投影用）。
+   * 以每个文件首条事件的实际 sessionId 为准（文件名是 sanitize 后的，不可逆）。
+   */
+  listSessionIds(): string[] {
+    let files: string[];
+    try {
+      files = readdirSync(this.dir);
+    } catch {
+      return [];
+    }
+    const ids: string[] = [];
+    for (const f of files) {
+      if (!f.endsWith(".jsonl")) continue;
+      try {
+        const first = readFileSync(join(this.dir, f), "utf8").split("\n")[0];
+        if (!first || !first.trim()) continue;
+        const ev = JSON.parse(first) as { sessionId?: unknown };
+        if (typeof ev.sessionId === "string" && ev.sessionId) ids.push(ev.sessionId);
+      } catch {
+        // 空文件/坏文件跳过
+      }
+    }
+    return ids;
   }
 
   /**

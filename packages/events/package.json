@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@fengagent/core": "workspace:*",
+    "@fengagent/graph": "workspace:*",
     "@fengagent/shared": "workspace:*"
   }
 }

@@ -14,7 +14,7 @@
  * （分支感知投影），本阶段对账覆盖线性会话。
  */
 
-import type { Message, Session } from "@fengagent/core";
+import type { Message, Session, SessionMeta } from "@fengagent/core";
 import { EventStore } from "./event-store.ts";
 import { projectSession, toEventStatus } from "./projection.ts";
 
@@ -25,6 +25,10 @@ export interface SessionStorePort {
   deleteSession(id: string): void;
   saveMessage?(sessionId: string, message: Message): void;
   saveMessages?(sessionId: string, messages: Message[]): void;
+  /** 收敛旧存储消息集合到当前列表（rollback/fork 截断同步；可选） */
+  deleteMessages?(sessionId: string, keepMessageIds: string[]): void;
+  /** 列出会话元信息（批量对账/生产装配用；可选） */
+  listSessions?(): SessionMeta[];
 }
 
 export interface DualWriteSessionStoreOptions {
@@ -107,12 +111,25 @@ export class DualWriteSessionStore implements SessionStorePort {
     this.appendMessageEvent(sessionId, message);
   }
 
-  /** 双写整批消息（按 messageId 幂等，重复保存不重复落事件） */
+  /**
+   * 双写整批消息（按 messageId 幂等，重复保存不重复落事件）。
+   * Phase 2 分支同步：消息列表即「当前读模型消息集合」— 旧存储同步收敛，
+   * 删除不在列表中的残留行（rollback/fork 截断后旧分支消息不再属于当前会话）。
+   */
   saveMessages(sessionId: string, messages: Message[]): void {
     this.legacy.saveMessages?.(sessionId, messages);
+    this.legacy.deleteMessages?.(
+      sessionId,
+      messages.map((m) => m.id),
+    );
     for (const message of messages) {
       this.appendMessageEvent(sessionId, message);
     }
+  }
+
+  /** 会话元信息列表（透传旧存储；生产装配 SessionStoreLike 用） */
+  listSessions(): SessionMeta[] {
+    return this.legacy.listSessions?.() ?? [];
   }
 
   loadSession(id: string): Session | null | undefined {

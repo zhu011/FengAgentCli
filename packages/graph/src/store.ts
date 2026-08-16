@@ -161,6 +161,51 @@ export class MemoryGraphStore implements GraphStore {
     };
   }
 
+  /**
+   * 分叉（Phase 2）：从某节点长出新分支（不动质量评分），旧分支作废但保留。
+   * 语义与 rollbackTo 一致（作废 target 之后的活跃节点 + 新建分支点），
+   * 区别：不写质量、分支标签默认 `fork-<ts>`。
+   */
+  fork(nodeId: string, branch?: string): RollbackResult | undefined {
+    const target = this.nodes.get(nodeId);
+    if (!target) return undefined;
+
+    const conversationId = target.conversationId;
+    const superseded: string[] = [];
+
+    const oldPath = this.getActivePath(conversationId);
+    const targetIdx = oldPath.findIndex((n) => n.id === nodeId);
+    if (targetIdx === -1) return undefined;
+    for (const node of oldPath.slice(targetIdx + 1)) {
+      node.meta.active = false;
+      node.meta.rolledBack = true;
+      superseded.push(node.id);
+    }
+
+    const branchPoint: ConversationNode = {
+      id: `gnode-${generateId()}`,
+      conversationId,
+      type: "branch-point",
+      messageId: target.messageId,
+      parentId: target.id,
+      childrenIds: [],
+      createdAt: Date.now(),
+      meta: {
+        branch: branch ?? `fork-${Date.now()}`,
+        active: true,
+      },
+    };
+    this.appendNode(branchPoint);
+    this.conversationHeads.set(conversationId, branchPoint.id);
+
+    return {
+      target,
+      branchPoint,
+      superseded,
+      activePath: this.getActivePath(conversationId),
+    };
+  }
+
   /** 创建根节点（会话起始） */
   createRootNode(
     conversationId: string,
