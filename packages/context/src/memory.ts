@@ -2,13 +2,14 @@
  * @fengagent/context — MEMORY.md 记忆加载
  *
  * 从工作目录加载 MEMORY.md（max 200 行 / 25KB），
- * 以及 `.fengagent/memory/` 目录下的分类记忆文件。
+ * 以及数据根 `memory/` 目录下的分类记忆文件（新分支先读 `<dataRoot>/memory`，
+ * 空则回退 main 的 `.fengagent/memory`，只读回退、绝不写入）。
  * 注入到系统提示供 Agent 使用。
  *
  * 参考 Hummingbird memdir 和 ARCHITECTURE.md 第 6.7 节。
  */
 
-import { expandTilde } from "@fengagent/shared/utils";
+import { expandTilde, resolveDataRoot } from "@fengagent/shared";
 import { join } from "node:path";
 
 /** MEMORY.md 最大行数 */
@@ -27,7 +28,7 @@ export const MEMORY_CATEGORIES: readonly MemoryCategory[] = [
   "technical",
 ] as const;
 
-/** 记忆目录路径（相对于工作目录） */
+/** main 记忆目录路径（相对工作目录，只读回退） */
 export const MEMORY_DIR = ".fengagent/memory";
 
 /** MEMORY.md 文件名 */
@@ -150,7 +151,7 @@ async function listMdFiles(dirPath: string): Promise<string[]> {
 }
 
 /**
- * 加载 MEMORY.md 和 `.fengagent/memory/` 目录下的记忆文件。
+ * 加载 MEMORY.md 和数据根 `memory/` 目录下的记忆文件。
  *
  * @param workdir - 工作目录
  * @returns 组装后的记忆提示片段
@@ -177,8 +178,16 @@ export async function loadMemory(workdir: string): Promise<LoadedMemory> {
     }
   }
 
-  // 2. 加载 .fengagent/memory/ 目录下的文件
-  const memDirPath = join(workdir, MEMORY_DIR);
+  // 2. 加载数据根 memory/ 目录下的文件（新分支先读 <dataRoot>/memory，
+  //    空则回退 main 的 .fengagent/memory — 只读回退、绝不写入）
+  const dataRoot = resolveDataRoot({ workdir });
+  const cordisMemDir = join(dataRoot, "memory");
+  const mainMemDir = join(workdir, MEMORY_DIR);
+
+  let memDirPath = cordisMemDir;
+  if ((await listMdFiles(cordisMemDir)).length === 0) {
+    memDirPath = mainMemDir;
+  }
   const mdFiles = await listMdFiles(memDirPath);
 
   if (mdFiles.length > 0) {

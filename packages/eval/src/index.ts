@@ -8,7 +8,7 @@
  *   bun run eval                                              # 分析今天的日志
  *   bun run eval --date=2026-08-13                            # 分析指定日期
  *   bun run eval --all                                        # 分析所有日志
- *   bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl  # 分析指定文件
+ *   bun run eval --file=<dataRoot>/logs/llm-trace-2026-08-13.jsonl  # 分析指定文件
  */
 
 export { parseLogFile, findLogFile, findAllLogFiles, analyzeRecords } from "./analyzer.ts";
@@ -17,6 +17,8 @@ export { generateMarkdownReport, outputReport } from "./reporter.ts";
 
 import { findLogFile, findAllLogFiles, parseLogFile, analyzeRecords } from "./analyzer.ts";
 import { outputReport } from "./reporter.ts";
+import { resolveDataRoot } from "@fengagent/shared";
+import { join } from "node:path";
 
 /**
  * 运行评测分析。
@@ -44,7 +46,7 @@ export async function runEval(options?: {
   if (files.length === 0) {
     const date = options?.date ?? new Date().toISOString().slice(0, 10);
     console.error(`未找到日志文件。请先运行对话生成 llm-trace-${date}.jsonl`);
-    console.error(`日志目录: ${options?.logDir ?? ".fengagent/logs/"}`);
+    console.error(`日志目录: ${options?.logDir ?? join(resolveDataRoot(), "logs")}`);
     console.error(`也可使用 --file=<路径> 指定日志文件`);
     process.exit(1);
   }

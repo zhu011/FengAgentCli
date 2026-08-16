@@ -6,7 +6,8 @@
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { join } from "node:path";
+import { resolveDataRoot } from "@fengagent/shared";
 
 /** 单条 LLM trace 记录（与 llm/trace.ts 中的 LlmTraceRecord 对应） */
 export interface TraceRecord {
@@ -157,12 +158,12 @@ export function parseLogFile(logFile: string): TraceRecord[] {
 /**
  * 查找指定日期的日志文件。
  *
- * @param logsDir - 日志目录（默认 .fengagent/logs）
+ * @param logsDir - 日志目录（默认 <dataRoot>/logs，dataRoot 见 resolveDataRoot）
  * @param date - 日期（YYYY-MM-DD），默认今天
  * @returns 日志文件路径，不存在返回 null
  */
 export function findLogFile(logsDir?: string, date?: string): string | null {
-  const dir = logsDir ?? resolve(process.cwd(), ".fengagent/logs");
+  const dir = logsDir ?? join(resolveDataRoot(), "logs");
   const targetDate = date ?? new Date().toISOString().slice(0, 10);
   const file = join(dir, `llm-trace-${targetDate}.jsonl`);
   return existsSync(file) ? file : null;
@@ -175,7 +176,7 @@ export function findLogFile(logsDir?: string, date?: string): string | null {
  * @returns 日志文件路径数组（按日期排序）
  */
 export function findAllLogFiles(logsDir?: string): string[] {
-  const dir = logsDir ?? resolve(process.cwd(), ".fengagent/logs");
+  const dir = logsDir ?? join(resolveDataRoot(), "logs");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f) => f.startsWith("llm-trace-") && f.endsWith(".jsonl"))

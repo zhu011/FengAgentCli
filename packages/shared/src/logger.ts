@@ -5,7 +5,7 @@
  * 每条日志包含时间戳、模块名、函数名，便于快速定位问题。
  *
  * 日志级别通过环境变量 FENG_LOG_LEVEL 控制（默认 info）。
- * 日志文件路径：{workdir}/.fengagent/logs/fengagent-{date}.log
+ * 日志文件路径：{dataRoot}/logs/fengagent-{date}.log（dataRoot 见 resolveDataRoot）
  *
  * 用法：
  * ```ts
@@ -16,9 +16,10 @@
  * ```
  */
 
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 import { mkdirSync, appendFileSync, existsSync } from "node:fs";
 import { getEnv } from "./utils.ts";
+import { resolveLogsDir } from "./data-root.ts";
 
 /** 日志级别 */
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -43,10 +44,9 @@ function timestamp(): string {
   return new Date().toISOString();
 }
 
-/** 日志目录路径 */
+/** 日志目录路径（数据根隔离：默认 <workdir>/.fengagent-cordis/logs） */
 function getLogDir(): string {
-  const workdir = process.cwd();
-  const logDir = resolve(workdir, ".fengagent/logs");
+  const logDir = resolveLogsDir();
   if (!existsSync(logDir)) {
     try {
       mkdirSync(logDir, { recursive: true });

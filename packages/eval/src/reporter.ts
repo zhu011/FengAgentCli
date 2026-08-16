@@ -4,8 +4,9 @@
  * 将分析结果输出为 console 表格 + Markdown 文件报告。
  */
 
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { resolveDataRoot } from "@fengagent/shared";
 import type { AnalysisResult } from "./analyzer.ts";
 
 /**
@@ -229,7 +230,7 @@ export function generateMarkdownReport(result: AnalysisResult): string {
  * 将分析结果输出到控制台 + Markdown 文件。
  *
  * @param result - 分析结果
- * @param outputDir - 报告输出目录（默认 .fengagent/logs/）
+ * @param outputDir - 报告输出目录（默认 <dataRoot>/logs/，dataRoot 见 resolveDataRoot）
  * @returns Markdown 文件路径
  */
 export function outputReport(result: AnalysisResult, outputDir?: string): string {
@@ -278,12 +279,17 @@ export function outputReport(result: AnalysisResult, outputDir?: string): string
   }
 
   // 写入 Markdown 文件
-  const dir = outputDir ?? resolve(process.cwd(), ".fengagent/logs");
+  const dir = outputDir ?? join(resolveDataRoot(), "logs");
   const date = new Date().toISOString().slice(0, 10);
   const filename = `eval-report-${date}.md`;
   const filepath = resolve(dir, filename);
 
   const markdown = generateMarkdownReport(result);
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    // 目录创建失败 — 由 writeFileSync 抛真实错误
+  }
   writeFileSync(filepath, markdown, "utf-8");
 
   console.log(`\n报告已保存: ${filepath}`);

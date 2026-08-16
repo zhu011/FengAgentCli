@@ -364,9 +364,9 @@ describe("handleCommand — /model", () => {
       expect(result.message).toContain("new-model-id");
       expect(result.message).toContain("config.json");
 
-      // 已持久化到项目配置
+      // 已持久化到分支级配置（.fengagent-cordis/config.json）
       const raw = JSON.parse(
-        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+        readFileSync(join(tmp, ".fengagent-cordis", "config.json"), "utf-8"),
       ) as Record<string, unknown>;
       expect(raw["model"]).toBe("new-model-id");
     } finally {
@@ -396,7 +396,7 @@ describe("handleCommand — /model", () => {
       expect(result.newModel).toBe("deepseek-reasoner");
 
       const raw = JSON.parse(
-        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+        readFileSync(join(tmp, ".fengagent-cordis", "config.json"), "utf-8"),
       ) as Record<string, unknown>;
       expect(raw["model"]).toBe("deepseek-reasoner");
       expect(raw["openaiCompatibleModel"]).toBe("deepseek-reasoner");
@@ -481,9 +481,9 @@ describe("handleCommand — /provider", () => {
       // newModel 返回新模型（供 App 更新会话模型）
       expect(result.newModel).toBe("deepseek-v4-pro");
 
-      // 文件已持久化且包含正确字段
+      // 文件已持久化且包含正确字段（分支级 .fengagent-cordis/config.json）
       const raw = JSON.parse(
-        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+        readFileSync(join(tmp, ".fengagent-cordis", "config.json"), "utf-8"),
       ) as Record<string, unknown>;
       expect(raw["provider"]).toBe("openai-compatible");
       expect(raw["openaiCompatibleApiKey"]).toBe("sk-1349d75cc2a14d53af7880718d694200");
@@ -516,7 +516,7 @@ describe("handleCommand — /provider", () => {
       expect(result.message).toContain("sk-a****");
       expect(result.message).not.toContain("abcdef123456");
       const raw = JSON.parse(
-        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+        readFileSync(join(tmp, ".fengagent-cordis", "config.json"), "utf-8"),
       ) as Record<string, unknown>;
       expect(raw["anthropicApiKey"]).toBe("sk-ant-abcdef123456");
     } finally {

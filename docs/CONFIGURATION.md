@@ -71,10 +71,14 @@
 | 环境变量 | 配置键 | 默认值 | 说明 |
 |----------|--------|--------|------|
 | `FENG_CONFIG_FILE` | — | `.fengagent/config.json` | 配置文件路径 |
-| `FENG_DATA_DIR` | `dataDir` | `~/.fengagent` | 数据存储目录 |
+| `FENG_DATA_DIR` | `dataDir` | `.fengagent-cordis`（相对 workdir） | 数据存储目录（refactor/cordis 分支默认数据根；`~/.fengagent` 为 main 遗留数据根，仅作导入源/只读回退） |
+| `FENG_MAIN_DATA_DIR` | — | — | 显式指定 main 遗留数据根（导入源）。探测顺序：`FENG_MAIN_DATA_DIR` → `<workdir>/.fengagent` → `~/.fengagent` → `<workdir>/data`，首个含 `sessions.db`/`graph.jsonl` 者胜 |
 | `FENG_LOG_LEVEL` | `logLevel` | `info` | 日志级别（debug/info/warn/error） |
-| `FENG_LOG_DIR` | — | `~/.fengagent/logs` | 日志目录 |
+| `FENG_LOG_DIR` | — | `<dataRoot>/logs` | 日志目录 |
 | `FENG_MCP_SERVERS` | — | — | MCP 服务器配置（JSON 格式） |
+
+**配置读取优先级（全链）**：`.fengagent-cordis/config.json`（分支级，`/model` `/provider` 只写这里）>
+项目 `.fengagent/config.json` > 全局 `~/.fengagent/config.json`（其后是环境变量 → CLI 参数）。
 
 ## 配置文件格式
 

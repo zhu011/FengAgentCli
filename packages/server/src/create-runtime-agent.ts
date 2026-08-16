@@ -42,7 +42,12 @@ import {
 import type { HookRegistry, McpRegistrationResult, ToolRegistry } from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
-import { deepMerge, expandTilde, writeSessionLog } from "@fengagent/shared";
+import {
+  deepMerge,
+  importMainData,
+  resolveDataRoot,
+  writeSessionLog,
+} from "@fengagent/shared";
 // 注意：cordis/graph 携带 file:./vendor 依赖，bun 从其他 workspace 包按包名解析会失败，
 // 因此此处用相对路径直接引用（tsconfig paths 对 tsc 同样生效）。
 import { createRuntime } from "../../cordis/src/runtime.ts";
@@ -237,10 +242,17 @@ export async function createRuntimeAgent(
   });
 
   // 6. 会话存储 + 图存储（走 ctx.storage / ctx.graph 插件）
+  //    数据根隔离：resolveDataRoot（FENG_DATA_DIR > 配置 dataDir > workdir/.fengagent-cordis）
   let sessionStore: SessionStore | null = null;
   const enableStore = options.enableSessionStore ?? true;
-  const dataDir = expandTilde(config.dataDir);
+  const dataDir = resolveDataRoot({
+    workdir,
+    env: options.env,
+    configDataDir: config.dataDir,
+  });
   if (enableStore) {
+    // 首次运行单向幂等导入 main 遗留数据（只读 main、import.marker 去重、自环防护）
+    importMainData({ workdir, env: options.env, configDataDir: config.dataDir });
     try {
       mkdirSync(dataDir, { recursive: true });
     } catch {

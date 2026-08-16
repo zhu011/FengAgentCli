@@ -4,7 +4,7 @@
  * 将每次 LLM 请求/回复以 JSONL 格式写入独立日志文件，
  * 供 eval 模块分析工具选择准确率、token 用量、耗时等。
  *
- * 日志路径：{workdir}/.fengagent/logs/llm-trace-{date}.jsonl
+ * 日志路径：{dataRoot}/logs/llm-trace-{date}.jsonl（dataRoot 见 resolveDataRoot）
  *
  * 每条记录格式（一行 JSON）：
  * {
@@ -25,8 +25,9 @@
  * }
  */
 
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 import { mkdirSync, appendFileSync, existsSync } from "node:fs";
+import { resolveLogsDir } from "@fengagent/shared";
 import type { LLMRequest, LLMEvent } from "./types.ts";
 
 /** 追踪记录类型 */
@@ -53,10 +54,9 @@ export interface LlmTraceRecord {
   temperature?: number;
 }
 
-/** 获取日志目录 */
+/** 获取日志目录（数据根隔离：默认 <workdir>/.fengagent-cordis/logs） */
 function getLogDir(): string {
-  const workdir = process.cwd();
-  const logDir = resolve(workdir, ".fengagent/logs");
+  const logDir = resolveLogsDir();
   if (!existsSync(logDir)) {
     try {
       mkdirSync(logDir, { recursive: true });

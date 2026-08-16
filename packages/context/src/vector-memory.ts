@@ -8,15 +8,15 @@
  * - 本地 TF-IDF（默认，零外部依赖）
  * - 外部 embeddings API（通过 EmbeddingsProvider 接口注入）
  *
- * 存储格式：JSON 文件（`.fengagent/memory/vector-store.json`）
+ * 存储格式：JSON 文件（`<dataRoot>/memory/vector-store.json`，dataRoot 见 resolveDataRoot；
+ * 新分支记忆写入只落数据根，不写 main 的 `.fengagent/memory`）
  *
  * 参考 hermes-agent memory_manager 和 ARCHITECTURE.md 第 6.7 节。
  */
 
 import { join } from "node:path";
-import { expandTilde } from "@fengagent/shared/utils";
+import { expandTilde, resolveDataRoot } from "@fengagent/shared";
 import { generateId } from "@fengagent/shared/utils";
-import { MEMORY_DIR } from "./memory.ts";
 
 // ──────────────────────────────────────────────
 // 类型定义
@@ -183,8 +183,8 @@ export interface VectorMemoryOptions {
  */
 export function createVectorMemory(options: VectorMemoryOptions) {
   const storePath = join(
-    options.workdir,
-    MEMORY_DIR,
+    resolveDataRoot({ workdir: options.workdir }),
+    "memory",
     options.storeFilename ?? "vector-store.json",
   );
 

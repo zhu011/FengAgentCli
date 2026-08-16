@@ -4,7 +4,7 @@
  * 将每次对话消息以 JSONL 格式写入独立日志文件，
  * 与 SQLite 并行，作为人工可见的追加副本。
  *
- * 日志路径：{workdir}/.fengagent/logs/sessions-{date}.jsonl
+ * 日志路径：{dataRoot}/logs/sessions-{date}.jsonl（dataRoot 见 resolveDataRoot）
  *
  * 每条记录格式（一行 JSON）：
  * {
@@ -20,8 +20,9 @@
  * }
  */
 
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 import { mkdirSync, appendFileSync, existsSync } from "node:fs";
+import { resolveLogsDir } from "./data-root.ts";
 
 /** 会话日志记录 */
 export interface SessionLogRecord {
@@ -37,8 +38,7 @@ export interface SessionLogRecord {
 }
 
 function getLogDir(): string {
-  const workdir = process.cwd();
-  const logDir = resolve(workdir, ".fengagent/logs");
+  const logDir = resolveLogsDir();
   if (!existsSync(logDir)) {
     try { mkdirSync(logDir, { recursive: true }); } catch { /* ignore */ }
   }

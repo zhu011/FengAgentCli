@@ -35,7 +35,7 @@ import type {
   RollbackStrategy,
 } from "@fengagent/graph";
 import { DefaultRollbackStrategy, MemoryGraphStore } from "@fengagent/graph";
-import { generateId } from "@fengagent/shared/utils";
+import { generateId, resolveDataRoot } from "@fengagent/shared";
 import type {
   CompactionStrategy,
   ContextService,
@@ -49,6 +49,7 @@ import type {
   ToolChoiceStrategy,
   ToolService,
 } from "./types.ts";
+import { join } from "node:path";
 
 /* ------------------------------ 模型服务 ------------------------------ */
 
@@ -215,7 +216,7 @@ export class StorageServiceImpl extends Service implements StorageService {
     super(ctx, "storage");
     this.graph =
       options.graph ??
-      new MemoryGraphStore({ persistPath: "./data/graph.jsonl" });
+      new MemoryGraphStore({ persistPath: join(resolveDataRoot(), "graph.jsonl") });
   }
 
   saveSession(session: Session): void {

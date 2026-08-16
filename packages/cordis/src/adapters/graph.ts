@@ -10,9 +10,11 @@ import type { GraphStore } from "@fengagent/graph";
 import { MemoryGraphStore } from "@fengagent/graph";
 import { GraphServiceImpl } from "../services.ts";
 import type { GraphService } from "../types.ts";
+import { resolveDataRoot } from "@fengagent/shared";
+import { join } from "node:path";
 
 export interface GraphPluginOptions {
-  /** 图存储（默认内存 + JSONL 落盘 ./data/graph.jsonl） */
+  /** 图存储（默认内存 + JSONL 落盘 <dataRoot>/graph.jsonl） */
   store?: GraphStore;
   /** JSONL 落盘路径 */
   persistPath?: string;
@@ -24,7 +26,7 @@ export function graphPlugin(options: GraphPluginOptions = {}) {
     const store =
       options.store ??
       new MemoryGraphStore({
-        persistPath: options.persistPath ?? "./data/graph.jsonl",
+        persistPath: options.persistPath ?? join(resolveDataRoot(), "graph.jsonl"),
       });
     const service = new GraphServiceImpl(ctx, store);
     return service as GraphService;

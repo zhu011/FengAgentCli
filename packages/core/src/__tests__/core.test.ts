@@ -32,7 +32,7 @@ describe("ConfigSchema", () => {
     expect(config.serverHost).toBe("127.0.0.1");
     expect(config.maxTurns).toBe(50);
     expect(config.logLevel).toBe("info");
-    expect(config.dataDir).toBe("~/.fengagent");
+    expect(config.dataDir).toBe(".fengagent-cordis");
     expect(config.autoApproveTools).toBe(false);
     expect(config.allowedTools).toBe("*");
   });

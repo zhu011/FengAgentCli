@@ -412,7 +412,7 @@ describe("CLI 交付验证：Slash 命令全覆盖", () => {
       expect(result.message).toContain("config.json");
 
       const raw = JSON.parse(
-        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+        readFileSync(join(tmp, ".fengagent-cordis", "config.json"), "utf-8"),
       ) as Record<string, unknown>;
       expect(raw["model"]).toBe("gpt-4o");
     } finally {

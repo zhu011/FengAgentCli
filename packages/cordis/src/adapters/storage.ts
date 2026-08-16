@@ -12,9 +12,11 @@ import type { GraphStore } from "@fengagent/graph";
 import { MemoryGraphStore } from "@fengagent/graph";
 import { StorageServiceImpl } from "../services.ts";
 import type { SessionStoreLike, StorageService } from "../types.ts";
+import { resolveDataRoot } from "@fengagent/shared";
+import { join } from "node:path";
 
 export interface StoragePluginOptions {
-  /** SQLite 路径（默认 ./data/fengagent.db） */
+  /** SQLite 路径（默认 <dataRoot>/sessions.db） */
   dbPath?: string;
   /** 复用既有 SessionStore（或内存会话存储） */
   sessionStore?: SessionStoreLike;
@@ -27,11 +29,13 @@ export interface StoragePluginOptions {
 /** 存储插件 — 提供 ctx.storage */
 export function storagePlugin(options: StoragePluginOptions = {}) {
   return function storagePluginEntry(ctx: Context) {
-    const store = options.sessionStore ?? new SessionStore(options.dbPath ?? "./data/fengagent.db");
+    const store =
+      options.sessionStore ??
+      new SessionStore(options.dbPath ?? join(resolveDataRoot(), "sessions.db"));
     const graph =
       options.graph ??
       new MemoryGraphStore({
-        persistPath: options.graphPath ?? "./data/graph.jsonl",
+        persistPath: options.graphPath ?? join(resolveDataRoot(), "graph.jsonl"),
       });
     const service = new StorageServiceImpl(ctx, store, { graph });
     return service as StorageService;

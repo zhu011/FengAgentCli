@@ -55,8 +55,20 @@ export const MAX_TURNS = 50 as const;
 /** 默认日志级别 */
 export const DEFAULT_LOG_LEVEL = "info" as const;
 
-/** 默认数据存储目录 */
-export const DEFAULT_DATA_DIR = "~/.fengagent" as const;
+/** 默认数据存储目录（新分支默认数据根，相对 workdir） */
+export const DEFAULT_DATA_DIR = ".fengagent-cordis" as const;
+
+/** 新分支数据目录名（相对 workdir） */
+export const CORDIS_DATA_DIR = ".fengagent-cordis" as const;
+
+/** main 分支数据目录名（相对 workdir，只读 / 导入源） */
+export const MAIN_DATA_DIR = ".fengagent" as const;
+
+/** main 分支全局数据根（~/.fengagent，只读 / 导入源） */
+export const MAIN_GLOBAL_DATA_DIR = "~/.fengagent" as const;
+
+/** 配置文件路径（分支级） */
+export const CORDIS_CONFIG_PATH = ".fengagent-cordis/config.json" as const;
 
 /** 配置文件路径（项目级） */
 export const PROJECT_CONFIG_PATH = ".fengagent/config.json" as const;

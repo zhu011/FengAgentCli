@@ -14,6 +14,9 @@ dist
 .fengagent/plugins/
 .fengagent/skills/
 
+# 新分支（cordis）数据根 — 与 main 的 .fengagent/ 隔离
+.fengagent-cordis/
+
 # 开发工具配置
 .opencode/
 .kimi/
