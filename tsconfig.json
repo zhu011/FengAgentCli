@@ -24,6 +24,8 @@
     "paths": {
       "@fengagent/shared": ["./packages/shared/src/index.ts"],
       "@fengagent/shared/*": ["./packages/shared/src/*"],
+      "@fengagent/events": ["./packages/events/src/index.ts"],
+      "@fengagent/events/*": ["./packages/events/src/*"],
       "@fengagent/core": ["./packages/core/src/index.ts"],
       "@fengagent/core/*": ["./packages/core/src/*"],
       "@fengagent/tools": ["./packages/tools/src/index.ts"],

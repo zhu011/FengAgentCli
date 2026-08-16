@@ -1,0 +1,22 @@
+{
+  "name": "@fengagent/events",
+  "version": "0.1.0",
+  "description": "事件溯源类型与注册表契约（Phase 0：类型 + 常量 + 接口，零运行时行为变化）",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src/**/*.ts"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhu011/FengAgentCli.git",
+    "directory": "packages/events"
+  },
+  "dependencies": {}
+}
