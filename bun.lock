@@ -66,6 +66,7 @@
         "@fengagent/agent": "workspace:*",
         "@fengagent/context": "workspace:*",
         "@fengagent/core": "workspace:*",
+        "@fengagent/events": "workspace:*",
         "@fengagent/graph": "workspace:*",
         "@fengagent/llm": "workspace:*",
         "@fengagent/shared": "workspace:*",
@@ -85,6 +86,14 @@
       "name": "@fengagent/eval",
       "version": "0.1.0",
       "dependencies": {
+        "@fengagent/shared": "workspace:*",
+      },
+    },
+    "packages/events": {
+      "name": "@fengagent/events",
+      "version": "0.1.0",
+      "dependencies": {
+        "@fengagent/core": "workspace:*",
         "@fengagent/shared": "workspace:*",
       },
     },
@@ -266,6 +275,8 @@
     "@fengagent/core": ["@fengagent/core@workspace:packages/core"],
 
     "@fengagent/eval": ["@fengagent/eval@workspace:packages/eval"],
+
+    "@fengagent/events": ["@fengagent/events@workspace:packages/events"],
 
     "@fengagent/graph": ["@fengagent/graph@workspace:packages/graph"],
 
