@@ -32,3 +32,4 @@ export * from "./event-graph-store.ts";
 export * from "./dual-write.ts";
 export * from "./reconcile.ts";
 export * from "./migration.ts";
+export * from "./rebuild.ts";

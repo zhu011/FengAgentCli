@@ -340,6 +340,12 @@ export async function createRuntimeAgent(
       { id: BUILTIN_PLUGINS.GRAPH, config: { store: graphStore } },
       // Phase 2：事件服务（写路径/重放/自愈 + 运行时注册表），与双写/图共享同一 EventStore
       { id: BUILTIN_PLUGINS.EVENTS, config: { store: eventStore } },
+      // Phase 3：重建服务（「以事件为准重建」）— sessionStore 传裸读模型（SQLite），
+      // 不传双写包装：重建路径脱双写依赖，SQLite 完全降级为读模型
+      {
+        id: BUILTIN_PLUGINS.REBUILD,
+        config: { store: eventStore, sessionStore: storageBackend },
+      },
       {
         id: BUILTIN_PLUGINS.LOOP,
         config: {

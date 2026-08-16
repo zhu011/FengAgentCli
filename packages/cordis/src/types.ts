@@ -44,6 +44,9 @@ import type {
   AnySessionEvent,
   AppendEventInput,
   EventStore,
+  RebuildAllOptions,
+  RebuildResult,
+  RebuildSummary,
   SessionEvent,
   SessionEventRegistry,
   SessionEventValidator,
@@ -273,6 +276,23 @@ export interface EventService {
   pathFor(sessionId: string): string;
 }
 
+/* ------------------------------ 重建域（Phase 3） ------------------------------ */
+
+/**
+ * 重建服务 — 「以事件为准重建」：SQLite 完全降级为读模型。
+ *
+ * 从事件日志全量投影重写读模型（含 title/status/meta，#3 不丢），
+ * 脱双写依赖（重建只读事件日志 + 写读模型，绝不追加事件）。
+ */
+export interface RebuildService {
+  /** 事件日志存储（事实源，只读） */
+  readonly store: EventStore;
+  /** 重建单个会话读模型（事件日志 → 全量投影 → 整写） */
+  session(sessionId: string): RebuildResult;
+  /** 重建全部会话；prune=true 时删除事件日志中不存在的遗留会话 */
+  all(options?: RebuildAllOptions): RebuildSummary;
+}
+
 /* ------------------------------ 运行时 ------------------------------ */
 
 /** 插件注册项 — config 驱动加载（可插拔积木） */
@@ -313,6 +333,7 @@ export const BUILTIN_PLUGINS = {
   LOOP: "feng.loop",
   GRAPH: "feng.graph",
   EVENTS: "feng.events",
+  REBUILD: "feng.rebuild",
 } as const;
 
 /* ------------------------------ Context 服务增强 ------------------------------ */
@@ -334,5 +355,10 @@ declare module "@deepseek-ai/cordis" {
      * 「ctx.events.register()」的语义由 `ctx.eventLog.register()` 承担。
      */
     eventLog: EventService;
+    /**
+     * 重建服务（Phase 3）—「以事件为准重建」：SQLite 完全降级为读模型，
+     * 从事件日志全量投影重写（含 title/status/meta，#3 不丢），脱双写依赖。
+     */
+    rebuild: RebuildService;
   }
 }

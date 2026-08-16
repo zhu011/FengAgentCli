@@ -36,10 +36,14 @@ import type {
 } from "@fengagent/graph";
 import { DefaultRollbackStrategy, MemoryGraphStore } from "@fengagent/graph";
 import { generateId, resolveDataRoot } from "@fengagent/shared";
+import { rebuildAll, rebuildSession } from "@fengagent/events";
 import type {
   AnySessionEvent,
   AppendEventInput,
   EventStore,
+  RebuildAllOptions,
+  RebuildResult,
+  RebuildSummary,
   SessionEvent,
   SessionEventRegistry,
   SessionEventValidator,
@@ -52,6 +56,7 @@ import type {
   LoopEvent,
   LoopService,
   ModelService,
+  RebuildService,
   SessionStoreLike,
   StorageService,
   StrategyService,
@@ -113,6 +118,35 @@ export class EventsServiceImpl extends Service implements EventService {
 
   pathFor(sessionId: string): string {
     return this.eventStore.pathFor(sessionId);
+  }
+}
+
+/* ------------------------------ 重建服务（Phase 3） ------------------------------ */
+
+/**
+ * 重建服务实现 — 「以事件为准重建」：SQLite（或任意旧读模型）完全降级为读模型，
+ * 从事件日志全量投影重写（含 title/status/meta，#3 不丢），脱双写依赖
+ * （重建只读事件日志 + 写读模型，绝不追加事件）。
+ */
+export class RebuildServiceImpl extends Service implements RebuildService {
+  constructor(
+    ctx: Context,
+    private readonly eventStore: EventStore,
+    private readonly sessionStore: SessionStoreLike,
+  ) {
+    super(ctx, "rebuild");
+  }
+
+  get store(): EventStore {
+    return this.eventStore;
+  }
+
+  session(sessionId: string): RebuildResult {
+    return rebuildSession(this.eventStore, this.sessionStore, sessionId);
+  }
+
+  all(options?: RebuildAllOptions): RebuildSummary {
+    return rebuildAll(this.eventStore, this.sessionStore, options);
   }
 }
 

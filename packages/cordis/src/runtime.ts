@@ -14,6 +14,7 @@ import { strategyPlugin } from "./adapters/strategy.ts";
 import { loopPlugin } from "./adapters/loop.ts";
 import { graphPlugin } from "./adapters/graph.ts";
 import { eventsPlugin } from "./adapters/events.ts";
+import { rebuildPlugin } from "./adapters/rebuild.ts";
 import { BUILTIN_PLUGINS, type FengRuntime, type FengRuntimeConfig, type RuntimePluginEntry } from "./types.ts";
 
 /** 内置插件注册表 — 插件 id → 插件工厂（config 驱动） */
@@ -61,6 +62,11 @@ export const BUILTIN_PLUGIN_REGISTRY: Record<string, BuiltinPluginFactory> = {
     eventsPlugin({
       dir: config.dir as string | undefined,
       store: config.store as never,
+    }),
+  [BUILTIN_PLUGINS.REBUILD]: (config) =>
+    rebuildPlugin({
+      store: config.store as never,
+      sessionStore: config.sessionStore as never,
     }),
 };
 
