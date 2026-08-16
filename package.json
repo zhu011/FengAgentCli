@@ -59,6 +59,7 @@
     "dev:server": "bun run packages/server/src/entry.ts",
     "serve": "bun run packages/server/src/entry.ts",
     "eval": "bun run packages/eval/src/index.ts",
+    "events:migrate": "bun run scripts/events-migrate.ts",
     "prepublishOnly": "bun run build:web-ui && bun run typecheck",
     "publish": "bun run scripts/publish.ts"
   },

@@ -200,12 +200,25 @@ interface ConversationNode {
 
 ```bash
 bun test packages/graph     # Graph 机制测试（溯源/节点/回退/策略）
+bun test packages/events    # 事件溯源测试（EventStore/投影/双写对账/导出导入/重建/迁移 e2e）
 bun test packages/cordis    # Cordis 运行时集成测试（插件装载/loop/工具/回退/换插件换能力）
 bun test packages/cli       # CLI 测试（含 RuntimeAgent 回退/重答/热切换）
 bun test packages/server    # Server 测试（含图/回退端点）
 bun run typecheck           # 全量类型检查
 bun test                    # 全量测试（既有 600+ 全部通过）
 ```
+
+事件溯源命令行工具（导出 / 导入 / 重建 / 对账，小白可直接照抄）：
+
+```bash
+bun run scripts/events-migrate.ts list                      # 列出有事件日志的会话
+bun run scripts/events-migrate.ts verify                    # 事件链校验 + 双写对账（投影 === SQLite）
+bun run scripts/events-migrate.ts export --dir ./export     # 整库导出可移植事件文件
+bun run scripts/events-migrate.ts import ./export           # 导入（幂等去重）
+bun run scripts/events-migrate.ts rebuild [--prune]         # 以事件为准重建读模型
+```
+
+完整小白操作手册见 `docs/GUIDE-CORDIS.md`。
 
 ---
 

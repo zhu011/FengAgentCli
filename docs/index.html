@@ -440,6 +440,13 @@
     <div class="nav-sub-item" data-target="qs-webui">WebUI 模式</div>
     <div class="nav-sub-item" data-target="qs-dev">开发模式</div>
 
+    <div class="nav-item" data-target="guide"><span class="nav-icon">📖</span> 新手手册（cordis）</div>
+    <div class="nav-sub-item" data-target="guide">保姆级上手路径</div>
+    <div class="nav-sub-item" data-target="guide-commands">斜杠命令 / 联想</div>
+    <div class="nav-sub-item" data-target="guide-graph">对话图 /graph 与回退 /rollback</div>
+    <div class="nav-sub-item" data-target="guide-events">事件溯源（导出/导入/重建/迁移）</div>
+    <div class="nav-sub-item" data-target="guide-isolation">分支隔离</div>
+
     <div class="nav-item" data-target="config"><span class="nav-icon">⚙️</span> 配置</div>
     <div class="nav-sub-item" data-target="config">环境变量</div>
     <div class="nav-sub-item" data-target="cfg-file">config.json</div>
@@ -451,6 +458,8 @@
     <div class="nav-sub-item" data-target="feat-agent">多 Agent</div>
     <div class="nav-sub-item" data-target="feat-tools">工具调用</div>
     <div class="nav-sub-item" data-target="feat-webui">WebUI</div>
+    <div class="nav-sub-item" data-target="feat-graph">对话图与回退</div>
+    <div class="nav-sub-item" data-target="feat-tokenstats">Token / KV Cache 统计</div>
     <div class="nav-sub-item" data-target="feat-compact">上下文压缩</div>
     <div class="nav-sub-item" data-target="feat-memory">记忆系统</div>
     <div class="nav-sub-item" data-target="feat-logging">日志系统</div>
@@ -477,8 +486,9 @@
 <!-- ==================== 首页 ==================== -->
 <section class="section" id="home">
   <div style="background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.35); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; font-size: 13px; line-height: 1.6;">
-    <strong>📌 当前文档展示分支：<code>refactor/cordis-graph-architecture</code></strong>（Cordis 插件化 + 对话图/可回溯架构，Phase 1–4 已完成：CLI 经 createRuntime 装配、Server/WebUI 接 ctx.storage/ctx.graph、/rollback + /graph + 分支可视化；Phase 0 数据隔离已定稿：数据根 <code>.fengagent-cordis/</code> + 单向幂等导入 + 事件溯源类型）。
-    <br/><span style="opacity:.75">老分支 <code>main</code> 保持独立可 checkout / 编译 / 运行，功能不回归；两分支同机运行数据互不干扰（数据根隔离 + 只读导入），差异与隔离方式见
+    <strong>📌 当前文档展示分支：<code>refactor/cordis-graph-architecture</code></strong>（Cordis 插件化 + 对话图/可回溯 + 事件溯源架构，Phase 1–4 已完成：CLI 经 createRuntime 装配、Server/WebUI 接 ctx.storage/ctx.graph、/rollback + /graph + 分支可视化；Phase 0 数据隔离已定稿：数据根 <code>.fengagent-cordis/</code> + 单向幂等导入 + 事件溯源类型；Phase 3 事件导出/导入/重建/跨数据根迁移已落地）。
+    <br/><span style="opacity:.75">👶 <b>小白用户请直接看 <a href="#guide" style="color:#a5b4fc">📖 新手手册</a></b>（保姆级可照抄命令），完整手册见
+    <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/GUIDE-CORDIS.md" target="_blank" style="color:#a5b4fc">docs/GUIDE-CORDIS.md</a>。老分支 <code>main</code> 保持独立可 checkout / 编译 / 运行，功能不回归；两分支同机运行数据互不干扰（数据根隔离 + 只读导入），差异与隔离方式见
     <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/ARCHITECTURE-CORDIS.md" target="_blank" style="color:#a5b4fc">docs/ARCHITECTURE-CORDIS.md §6–§7</a>。</span>
   </div>
   <div class="hero">
@@ -593,6 +603,78 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows</code></pre
 # 前端 WebUI:   http://localhost:5180（Vite dev，自动代理 /api 到后端）</code></pre>
 </section>
 
+<!-- ==================== 新手手册（cordis 分支保姆级） ==================== -->
+<section class="section" id="guide">
+  <h2 class="section-title"><span class="sec-icon">📖</span>新手手册（cordis 分支保姆级）</h2>
+  <p class="section-desc">照抄命令即可跑通。完整版（含每个命令的预期输出与截图）见
+    <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/GUIDE-CORDIS.md" target="_blank">docs/GUIDE-CORDIS.md</a>。</p>
+
+  <h3 id="guide-commands">斜杠命令 + / 联想</h3>
+  <p>在 CLI 交互界面（<code>bun run packages/cli/src/entry.ts</code>）里输入 <code>/</code> 即可弹出命令补全列表（按前缀过滤，↑↓ 选择，Tab/Enter 补全，Esc 关闭）。常用命令：</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>命令</th><th>作用</th><th>示例</th></tr></thead>
+    <tbody>
+      <tr><td><code>/provider show / set</code></td><td>查看 / 配置 Provider（apiKey 打码、热加载免重启）</td><td><code>/provider set openai-compatible --api-key sk-xxx --base-url https://api.deepseek.com --model deepseek-chat</code></td></tr>
+      <tr><td><code>/model list / &lt;id&gt;</code></td><td>列出 / 切换模型（持久化 + 热加载）</td><td><code>/model deepseek-reasoner</code></td></tr>
+      <tr><td><code>/graph</code></td><td>查看对话图（节点 / 活跃路径 / 溯源链）</td><td><code>/graph</code></td></tr>
+      <tr><td><code>/rollback [节点id]</code></td><td>回退到父节点并重答（旧分支保留）</td><td><code>/rollback</code></td></tr>
+      <tr><td><code>/compact</code></td><td>手动压缩上下文</td><td><code>/compact</code></td></tr>
+      <tr><td><code>/clear [context]</code></td><td>清屏 / 清空上下文</td><td><code>/clear context</code></td></tr>
+      <tr><td><code>/restore</code></td><td>从存储恢复会话历史</td><td><code>/restore</code></td></tr>
+      <tr><td><code>/session new|list|switch</code></td><td>会话管理</td><td><code>/session list</code></td></tr>
+      <tr><td><code>/export [file]</code></td><td>导出会话为 Markdown</td><td><code>/export chat.md</code></td></tr>
+      <tr><td><code>/tool list</code></td><td>列出已注册工具</td><td><code>/tool list</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><strong>配置写入位置</strong>：<code>/model</code>、<code>/provider</code> 持久化到分支级
+    <code>.fengagent-cordis/config.json</code>（不影响 main 的 <code>.fengagent/config.json</code>），重启自动加载、立即生效。</p>
+
+  <h3 id="guide-graph">对话图 /graph 与回退 /rollback</h3>
+  <p>每轮「用户提问 → 助手回答」沉淀为图节点（user / assistant / tool / branch-point），可完整溯源。
+    聊过一轮后输入 <code>/graph</code> 查看；回答不满意时 <code>/rollback</code> 回退到最近一次回答
+    （或 <code>/rollback &lt;节点id&gt;</code> 回退到指定节点），自动截断并重答，旧分支作废保留。</p>
+  <div class="code-label">bash — /graph 预期输出（节点 id 以实际为准）</div>
+  <pre><code>对话图节点 (3) — 活跃路径 2 个节点:
+  🧑 5fb984ec-3ea  type=user  msg=05f75336 (active)
+  🤖 5fb984ec-3ea  type=assistant  msg=a2d20d86 (rolled-back)
+  🔀 5fb984ec-3ea  type=branch-point  msg=05f75336 ← head
+
+溯源链 (2): 5fb984ec → 5fb984ec
+
+提示: /rollback &lt;节点id&gt; 回退到该节点的父节点并重答（旧分支保留可溯源）。</code></pre>
+  <p>WebUI 侧有可视化图面板（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显），对话、回退、图三者实时联动。</p>
+
+  <h3 id="guide-events">事件溯源（导出 / 导入 / 重建 / 跨数据根迁移）</h3>
+  <p>事件日志位于 <code>.fengagent-cordis/events/{sessionId}.jsonl</code>（append-only，seq + sha-256 hash 链，可查篡改、崩溃自愈）。
+    仓库内置迁移 CLI，照抄即可：</p>
+  <div class="code-label">bash — 事件溯源命令</div>
+  <pre><code>bun run scripts/events-migrate.ts list                      # 列出有事件日志的会话
+bun run scripts/events-migrate.ts verify                    # 事件链校验 + 双写对账（投影 === SQLite）
+bun run scripts/events-migrate.ts export --dir ./export     # 整库导出（每会话一个 .fengevents.jsonl，机器无关）
+bun run scripts/events-migrate.ts import ./export           # 导入可移植事件文件（幂等去重）
+bun run scripts/events-migrate.ts rebuild [--prune]         # 以事件为准重建读模型</code></pre>
+  <p><strong>跨数据根 / 跨机迁移</strong>：源根 <code>export</code> → 拷贝目录 → 新根
+    <code>import</code> → <code>rebuild</code> → <code>verify</code>（全绿即迁移成功，新根可继续写事件、seq 无缝续接）。</p>
+
+  <h3 id="guide-isolation">分支隔离（main ↔ cordis）</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>数据</th><th>main</th><th>cordis（本分支）</th></tr></thead>
+    <tbody>
+      <tr><td>会话库</td><td><code>.fengagent/sessions.db</code></td><td><code>.fengagent-cordis/sessions.db</code></td></tr>
+      <tr><td>对话图</td><td><code>.fengagent/graph.jsonl</code></td><td><code>.fengagent-cordis/graph.jsonl</code></td></tr>
+      <tr><td>事件日志</td><td>无</td><td><code>.fengagent-cordis/events/*.jsonl</code></td></tr>
+      <tr><td>日志 / 记忆 / 配置</td><td><code>.fengagent/logs|memory|config.json</code></td><td><code>.fengagent-cordis/…</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>数据根解析：<code>FENG_DATA_DIR</code> &gt; 配置 <code>dataDir</code> &gt; 默认 <code>&lt;项目根&gt;/.fengagent-cordis</code>。
+    首次运行把 main 遗留数据<strong>只读、一次性、幂等</strong>导入（写 <code>import.marker</code>），绝不写回 main；
+    切回 main 分支数据原样保留，删掉 <code>.fengagent-cordis/</code> 即彻底回归。</p>
+</section>
+
 <!-- ==================== 配置 ==================== -->
 <section class="section" id="config">
   <h2 class="section-title"><span class="sec-icon">⚙️</span>配置</h2>
@@ -623,6 +705,8 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows</code></pre
       <tr><td><code>FENG_SERVER_HOST</code></td><td><code>127.0.0.1</code></td><td>服务监听地址</td></tr>
       <tr><td><code>FENG_CORS_ORIGIN</code></td><td><code>*</code></td><td>CORS 允许来源</td></tr>
       <tr><td><code>FENG_LOG_LEVEL</code></td><td><code>info</code></td><td>日志级别（debug/info/warn/error）</td></tr>
+      <tr><td><code>FENG_DATA_DIR</code></td><td><code>.fengagent-cordis</code></td><td>数据根（会话/事件/图/日志/记忆落盘目录；main 的 <code>.fengagent</code> 只读回退）</td></tr>
+      <tr><td><code>FENG_MAIN_DATA_DIR</code></td><td>—</td><td>显式指定 main 遗留数据根（首次运行导入源）。探测顺序：<code>FENG_MAIN_DATA_DIR</code> → <code>&lt;workdir&gt;/.fengagent</code> → <code>~/.fengagent</code> → <code>&lt;workdir&gt;/data</code></td></tr>
     </tbody>
   </table>
   </div>
@@ -754,9 +838,23 @@ max_turns: 20
   <ul>
     <li><strong>实时对话</strong> — SSE 流式输出，Markdown 渲染</li>
     <li><strong>会话管理</strong> — 创建、切换、导出、删除会话</li>
+    <li><strong>对话图面板</strong> — 节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显保留（cordis 分支）</li>
+    <li><strong>Token / KV Cache 统计栏</strong> — 实时显示输入/输出/缓存命中/命中率（cordis 分支）</li>
     <li><strong>权限审批</strong> — 工具执行前的交互式确认</li>
     <li><strong>主题切换</strong> — 3 套暗色主题（科技紫 / 深海蓝 / 暗夜绿）</li>
   </ul>
+
+  <h3 id="feat-graph">对话图与回退（Graph / Rollback，cordis 分支）</h3>
+  <p>每轮「用户提问 → 助手回答」沉淀为对话图节点（user / assistant / tool / branch-point），节点记录
+    模型、工具调用、token、质量标记，可完整溯源。回答不满意可 <code>/rollback</code> 回退到父节点自动重答，
+    旧分支作废但保留（可审计），新回答从分支点长出。CLI 用 <code>/graph</code> 查看，WebUI 用图面板可视化。
+    图数据由事件日志投影派生（<code>.fengagent-cordis/graph.jsonl</code> 为派生视图），重启可恢复。</p>
+
+  <h3 id="feat-tokenstats">Token 与 KV Cache 统计（cordis 分支）</h3>
+  <p>每次 LLM 调用回带用量：输入/输出 token + KV Cache 读取/创建 token（DeepSeek 等厂商返回）。
+    WebUI 统计栏实时累计：<code>📥 输入 · 📤 输出 · ⚡ 缓存命中 · 🎯 命中率 · 合计 tokens</code>；
+    命中率 = 缓存读取 / (缓存读取 + 非缓存输入)。完整 usage 同时写入
+    <code>.fengagent-cordis/logs/llm-trace-{date}.jsonl</code> 供测评模块分析，数据来源科学可溯源。</p>
 
   <h3 id="feat-compact">上下文压缩</h3>
   <p>在接近上下文窗口阈值时自动触发压缩，核心算法：</p>
@@ -792,20 +890,30 @@ max_turns: 20
     </tbody>
   </table>
   </div>
-  <p>所有日志文件位于 <code>.fengagent/logs/</code> 目录。会话持久化使用 SQLite（<code>.fengagent/sessions.db</code>）作为主存储 + JSONL 作为可见副本。</p>
+  <p>所有日志文件位于 <code>&lt;数据根&gt;/logs/</code>（本分支默认 <code>.fengagent-cordis/logs/</code>）。
+    会话持久化使用 SQLite（<code>.fengagent-cordis/sessions.db</code>）作为读模型 + 事件日志
+    <code>.fengagent-cordis/events/*.jsonl</code> 作为事实源（双写，事件为准）。</p>
 
   <h3 id="feat-eval">Agent 测评</h3>
   <p>内置 Agent 测评模块，自动记录 LLM 请求/回复轨迹并生成分析报告：</p>
   <ul>
     <li>LLM 调用次数、总耗时、平均耗时</li>
     <li>Token 用量分布（输入/输出）</li>
+    <li>KV Cache 读取/创建 Token 与命中率</li>
     <li>工具调用率、工具使用分布</li>
     <li>完成原因分布（end_turn / tool_use）</li>
     <li>错误率、错误详情</li>
+    <li>模型准确率对比表（不同模型/提示词横向对比）</li>
     <li>每个会话的完整轨迹</li>
     <li>优化建议（工具描述、提示词、模型选择）</li>
   </ul>
-  <p>报告输出到 <code>.fengagent/logs/eval-report-{date}.md</code>。</p>
+  <div class="code-label">bash — 运行测评</div>
+  <pre><code>bun run eval                                   # 分析今天的日志
+bun run eval --date=2026-08-16                 # 分析指定日期
+bun run eval --all                             # 分析全部日志
+bun run eval --file=.fengagent-cordis/logs/llm-trace-2026-08-16.jsonl  # 指定文件
+bun run eval --exclude-model=test-model,custom-model   # 排除 mock 模型</code></pre>
+  <p>报告输出到 <code>&lt;数据根&gt;/logs/eval-report-{date}.md</code>。</p>
 </section>
 
 <!-- ==================== 命令参考 ==================== -->
@@ -849,9 +957,13 @@ feng serve --port 8080</code></pre>
       <tr><td><code>/help</code></td><td>显示帮助</td></tr>
       <tr><td><code>/exit</code> · <code>/quit</code></td><td>退出</td></tr>
       <tr><td><code>/clear</code></td><td>清屏</td></tr>
+      <tr><td><code>/clear context</code></td><td>清空当前会话上下文（会话 ID 保留，可用 /restore 恢复）</td></tr>
+      <tr><td><code>/compact</code></td><td>手动压缩上下文</td></tr>
+      <tr><td><code>/restore</code></td><td>从存储恢复会话历史</td></tr>
       <tr><td><code>/session new [title]</code></td><td>新建会话</td></tr>
       <tr><td><code>/session list</code></td><td>列出所有会话</td></tr>
       <tr><td><code>/session switch &lt;id&gt;</code></td><td>切换到指定会话</td></tr>
+      <tr><td><code>/tool list</code></td><td>列出已注册工具</td></tr>
       <tr><td><code>/model &lt;id&gt;</code></td><td>切换模型（持久化并立即生效，后续对话真实走新模型）</td></tr>
       <tr><td><code>/model list</code></td><td>列出当前 Provider 实际可用/已配置的模型（openai-compatible 拉取服务端真实目录）</td></tr>
       <tr><td><code>/provider show</code> · <code>/provider set &lt;type&gt;</code></td><td>查看/配置 Provider（apiKey 自动打码）</td></tr>
@@ -861,6 +973,7 @@ feng serve --port 8080</code></pre>
     </tbody>
   </table>
   </div>
+  <p><strong>/ 联想（命令补全）</strong>：输入 <code>/</code> 或 <code>/</code>+前缀，输入框上方弹出命令补全列表（按命令名前缀或描述过滤）；<code>↑</code><code>↓</code> 选择，<code>Tab</code>/<code>Enter</code> 补全，<code>Esc</code> 关闭，列表可滚动（带「↑ 还有 N 个命令」指示）。</p>
 
   <h3 id="cmd-eval">Eval 命令</h3>
   <div class="code-label">bash</div>
@@ -874,7 +987,10 @@ bun run eval --date=2026-08-13
 bun run eval --all
 
 # 分析指定文件
-bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl</code></pre>
+bun run eval --file=.fengagent-cordis/logs/llm-trace-2026-08-13.jsonl
+
+# 排除 mock 模型（如测试用 test-model）
+bun run eval --date=2026-08-16 --exclude-model=test-model,custom-model</code></pre>
 </section>
 
 <!-- ==================== API 文档 ==================== -->

@@ -104,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 /provider set openai-compatible
 ```
 
-- **持久化**：写入 `./.fengagent/config.json`（项目级，与现有配置 deepMerge 合并），下次启动自动加载；
+- **持久化**：写入 `./.fengagent-cordis/config.json`（分支级，与现有配置 deepMerge 合并；main 的 `.fengagent/config.json` 只读回退，两分支互不干扰），下次启动自动加载；
 - **立即生效**：配置后自动重建 LLM Client 并热替换到当前 Agent，下一条消息即走新 Provider；
 - **安全**：apiKey 只显示前 4 位 + `****`，输入时不回显，不写入运行日志 / llm-trace。
 
@@ -125,7 +125,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 ```
 
 - **真实生效**：切换后更新 `config.model`（openai-compatible 同时写 `openaiCompatibleModel`），重建并热替换 LLM Client，同时更新当前会话 `session.model`——Agent Loop 每次请求都以 `session.model` 作为请求模型；
-- **持久化**：写入 `./.fengagent/config.json`，重启后自动加载；
+- **持久化**：写入 `./.fengagent-cordis/config.json`（分支级，不影响 main），重启后自动加载；
 - **离线兜底**：`/model list` 拉取失败或未配置 baseUrl 时，自动回退到常见模型目录并注明。
 
 ### TUI 界面
@@ -191,8 +191,9 @@ bun run clean            # 清理构建产物
 | 文档 | 说明 |
 |------|------|
 | [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档（暗色主题，当前展示 refactor/cordis-graph-architecture 分支状态） |
+| [小白保姆级操作手册](docs/GUIDE-CORDIS.md) | **新手推荐**：从安装到 /graph /rollback /provider /model /compact /clear /联想、事件溯源、分支隔离、测评、KV Cache 统计，每个功能都有可照抄命令 + 预期输出 |
 | [架构设计](docs/ARCHITECTURE.md) | 系统架构与模块设计（main 老架构） |
-| [Cordis 架构（重构分支）](docs/ARCHITECTURE-CORDIS.md) | 插件化 + 对话图/可回溯架构（refactor/cordis-graph-architecture，Phase 1–4 完成；与 main 隔离说明见 §6） |
+| [Cordis 架构（重构分支）](docs/ARCHITECTURE-CORDIS.md) | 插件化 + 对话图/可回溯架构（refactor/cordis-graph-architecture，Phase 1–4 完成；与 main 隔离说明见 §6，事件溯源见 §7） |
 | [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件、权限规则 |
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建流程 |
 | [模块接口](docs/MODULES.md) | 各包 API 接口说明 |

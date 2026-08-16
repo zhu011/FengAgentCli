@@ -242,8 +242,8 @@ trigger: review|审查|code review
 
 ### 行为说明
 
-- **持久化路径**：写入项目级 `./.fengagent/config.json`（与现有配置 deepMerge 合并，保留其他键）；
-  下次启动 `loadConfig` 自动读取。
+- **持久化路径**：写入分支级 `./.fengagent-cordis/config.json`（与现有配置 deepMerge 合并，保留其他键；
+  main 的 `.fengagent/config.json` 只读回退，不被覆盖）；下次启动 `loadConfig` 自动读取。
 - **立即生效**：配置后自动调用 `createClientFromEnv` 重建 LLM Client，并通过
   `ReloadableLLMClient.setClient` 热替换到当前 Agent（`packages/llm/src/reloadable.ts`），
   无需重建 Agent；下一条消息即走新 Provider。
@@ -268,11 +268,11 @@ trigger: review|审查|code review
 | 命令 | 说明 |
 |------|------|
 | `/model list` | 列出当前 Provider 实际可用/已配置的模型。openai-compatible 会尝试拉取 `{baseUrl}/models` 真实目录（3s 超时），失败或未配置时回退到常见模型目录并标注当前模型 |
-| `/model <id>` | 切换模型：写入 `config.model`（openai-compatible 同时写 `openaiCompatibleModel`）→ 持久化到 `./.fengagent/config.json` → `reloadProvider` 重建并热替换 LLM Client → 更新当前会话 `session.model` |
+| `/model <id>` | 切换模型：写入 `config.model`（openai-compatible 同时写 `openaiCompatibleModel`）→ 持久化到 `./.fengagent-cordis/config.json` → `reloadProvider` 重建并热替换 LLM Client → 更新当前会话 `session.model` |
 
 ### 生效链路
 
-1. **持久化**：`writeConfigFile({ model, openaiCompatibleModel? })` 写入项目级 `./.fengagent/config.json`；
+1. **持久化**：`writeConfigFile({ model, openaiCompatibleModel? })` 写入分支级 `./.fengagent-cordis/config.json`；
 2. **热替换**：`reloadProvider`（`packages/cli/src/create-agent.ts`）重建 LLM Client 并 `setClient` 原子替换；
 3. **会话同步**：App 层把 `newModel` 写回 `session.model`；Agent Loop
    （`packages/agent/src/loop.ts`）每次 LLM 请求都以 `session.model` 作为 `request.model`，
@@ -280,3 +280,31 @@ trigger: review|审查|code review
 
 > 提示：`/model list` 在 openai-compatible 下返回的是服务端真实模型目录（如 DeepSeek 的
 > `deepseek-chat` / `deepseek-reasoner`），非硬编码列表。
+
+## 测评模块（`bun run eval`）
+
+读取 LLM Trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`）分析工具成功率 / 任务完成率 /
+错误率 / Token 用量 / KV Cache 命中率 / 模型对比，报告输出 `<数据根>/logs/eval-report-{date}.md`：
+
+| 命令 | 说明 |
+|------|------|
+| `bun run eval` | 分析今天的日志 |
+| `bun run eval --date=2026-08-16` | 分析指定日期 |
+| `bun run eval --all` | 分析全部日志 |
+| `bun run eval --file=<路径>` | 分析指定文件 |
+| `bun run eval --exclude-model=test-model,custom-model` | 排除某些模型（如测试 mock） |
+
+## 事件溯源 CLI（`scripts/events-migrate.ts`）
+
+把 `packages/events` 的导出 / 导入 / 重建 / 对账能力暴露为命令行（数据根默认
+`<workdir>/.fengagent-cordis`，可用 `FENG_DATA_DIR` 覆盖）：
+
+| 命令 | 说明 |
+|------|------|
+| `bun run scripts/events-migrate.ts list` | 列出有事件日志的会话 |
+| `bun run scripts/events-migrate.ts verify [--session <id>]` | 事件链校验 + 双写对账（投影 === 读模型） |
+| `bun run scripts/events-migrate.ts export [--dir <目录>] [--session <id>]` | 整库/单会话导出可移植事件文件 |
+| `bun run scripts/events-migrate.ts import <目录>` | 导入可移植事件文件（幂等去重，只写事件日志） |
+| `bun run scripts/events-migrate.ts rebuild [--prune]` | 以事件为准重建读模型（SQLite 降级为读模型） |
+
+完整的小白操作步骤与预期输出见 [GUIDE-CORDIS.md](./GUIDE-CORDIS.md) 第 14 节。
