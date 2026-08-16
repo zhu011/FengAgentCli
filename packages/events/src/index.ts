@@ -26,3 +26,5 @@ export * from "./registry.ts";
 export * from "./hash.ts";
 export * from "./event-store.ts";
 export * from "./projection.ts";
+export * from "./dual-write.ts";
+export * from "./reconcile.ts";
