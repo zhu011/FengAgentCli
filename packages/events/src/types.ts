@@ -108,6 +108,17 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = Sessio
   payload: SessionEventPayloads[T];
 };
 
+/**
+ * 遍历/重放用判别联合：type ↔ payload 相关性保留（switch(e.type) 可收窄 payload）。
+ * 区别于 SessionEvent（默认泛型展开后为非相关对象类型，无法收窄）。
+ */
+export type AnySessionEvent = {
+  [T in SessionEventType]: SessionEventBase & {
+    type: T;
+    payload: SessionEventPayloads[T];
+  };
+}[SessionEventType];
+
 /** 事件校验器（返回 false 表示校验失败） */
 export type SessionEventValidator<T extends SessionEvent = SessionEvent> = (
   event: T,

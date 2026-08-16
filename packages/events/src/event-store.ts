@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { resolveDataRoot } from "@fengagent/shared";
 import { createEventRegistry } from "./registry.ts";
 import { computeEventHash } from "./hash.ts";
-import type { SessionEvent, SessionEventRegistry, SessionEventType } from "./types.ts";
+import type { AnySessionEvent, SessionEvent, SessionEventRegistry, SessionEventType } from "./types.ts";
 
 /** 追加事件的输入（seq/hash/prevHash 由存储计算） */
 export interface AppendEventInput {
@@ -124,8 +124,8 @@ export class EventStore {
     return event;
   }
 
-  /** 重放：按 seq 返回会话全部事件（尾部半行已自愈跳过） */
-  replay(sessionId: string): SessionEvent[] {
+  /** 重放：按 seq 返回会话全部事件（尾部半行已自愈跳过；type↔payload 判别联合） */
+  replay(sessionId: string): AnySessionEvent[] {
     return this.readSessionFile(sessionId).events;
   }
 
@@ -149,7 +149,7 @@ export class EventStore {
    * - 中间损坏行 → 保守停在损坏行前，不截断。
    */
   private readSessionFile(sessionId: string): {
-    events: SessionEvent[];
+    events: AnySessionEvent[];
     healedBytes: number;
   } {
     const path = this.pathFor(sessionId);
@@ -162,7 +162,7 @@ export class EventStore {
     if (text.length === 0) return { events: [], healedBytes: 0 };
 
     const lines = text.split("\n");
-    const events: SessionEvent[] = [];
+    const events: AnySessionEvent[] = [];
     let idx = 0;
     let goodEnd = 0;
     let healed = false;
@@ -179,7 +179,7 @@ export class EventStore {
         if (isLast && this.selfHeal) healed = true;
         break;
       }
-      events.push(parsed as SessionEvent);
+      events.push(parsed as AnySessionEvent);
       goodEnd = isLast ? idx : idx + 1; // 含行尾换行符（若有）
       idx += isLast ? 0 : 1;
     }

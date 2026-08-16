@@ -25,3 +25,4 @@ export * from "./types.ts";
 export * from "./registry.ts";
 export * from "./hash.ts";
 export * from "./event-store.ts";
+export * from "./projection.ts";

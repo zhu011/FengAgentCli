@@ -19,6 +19,7 @@
     "directory": "packages/events"
   },
   "dependencies": {
+    "@fengagent/core": "workspace:*",
     "@fengagent/shared": "workspace:*"
   }
 }
