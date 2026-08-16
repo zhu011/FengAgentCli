@@ -1,4 +1,8 @@
-# 开发指南
+# 开发指南（refactor/cordis-graph-architecture）
+
+> 本文档适用于 `refactor/cordis-graph-architecture` 分支（Cordis 插件化 + 对话图/可回溯 +
+> 事件溯源架构）。架构总览见 [ARCHITECTURE.md](./ARCHITECTURE.md)，
+> 重构设计细节见 [ARCHITECTURE-CORDIS.md](./ARCHITECTURE-CORDIS.md)。
 
 ## 开发环境搭建
 
@@ -13,6 +17,7 @@
 ```bash
 git clone https://github.com/zhu011/FengAgentCli.git
 cd FengAgentCli
+git checkout refactor/cordis-graph-architecture   # 切到新分支
 bun install
 ```
 
@@ -26,6 +31,9 @@ bun run typecheck
 bun test
 ```
 
+> 提示：本分支运行时数据落在 `.fengagent-cordis/`（数据根，见 ARCHITECTURE.md §7.2），
+> 与 main 的 `.fengagent/` 完全隔离，两分支同机运行互不干扰。
+
 ## Monorepo 结构
 
 项目使用 Bun Workspaces 管理 monorepo。根 `package.json` 定义了 `workspaces: ["packages/*"]`，每个子包有自己的 `package.json`。
@@ -34,15 +42,19 @@ bun test
 
 | 包 | 路径 | 职责 |
 |---|------|------|
-| `@fengagent/shared` | `packages/shared/` | 工具函数、常量 |
+| `@fengagent/shared` | `packages/shared/` | 工具函数、常量、数据根解析（resolveDataRoot） |
 | `@fengagent/core` | `packages/core/` | 核心类型定义、配置 Schema |
-| `@fengagent/llm` | `packages/llm/` | LLM Provider 抽象 |
+| `@fengagent/llm` | `packages/llm/` | LLM Provider 抽象、ReloadableLLMClient |
 | `@fengagent/tools` | `packages/tools/` | 工具系统、内置工具、MCP、权限、Hook |
 | `@fengagent/context` | `packages/context/` | 上下文管理、压缩、记忆 |
 | `@fengagent/agent` | `packages/agent/` | Agent Loop、SessionStore、子 Agent |
-| `@fengagent/cli` | `packages/cli/` | CLI 入口、Ink TUI |
-| `@fengagent/server` | `packages/server/` | HTTP API、SSE |
-| `@fengagent/web-ui` | `packages/web-ui/` | React 前端 |
+| `@fengagent/cordis` | `packages/cordis/` | ★ Cordis 集成层：插件域 + 服务 + 适配器 + createRuntime |
+| `@fengagent/graph` | `packages/graph/` | ★ 对话图机制：节点/溯源/回退（零运行时依赖） |
+| `@fengagent/events` | `packages/events/` | ★ 事件溯源：EventStore/投影/双写/导出导入/重建/迁移 |
+| `@fengagent/cli` | `packages/cli/` | CLI 入口、Ink TUI、createRuntimeAgent 装配 |
+| `@fengagent/server` | `packages/server/` | HTTP API、SSE、/graph /rollback 端点 |
+| `@fengagent/eval` | `packages/eval/` | Agent 测评模块（LLM Trace 分析） |
+| `@fengagent/web-ui` | `packages/web-ui/` | React 前端（含对话图面板） |
 
 ### 包间依赖规则
 
@@ -55,7 +67,10 @@ llm / tools / context ← 各依赖 core
   ↑
 agent ← 依赖 llm + tools + context + core
   ↑
-server / cli ← 各依赖 agent
+graph ← 零运行时依赖；events ← 依赖 shared + agent
+cordis ← vendored cordis + 依赖各既有实现包
+  ↑
+server / cli ← 各依赖 agent + cordis（+ graph / events）
 web-ui ← 独立（HTTP 通信）
 ```
 
@@ -100,6 +115,8 @@ import { generateId } from "@fengagent/shared";
 | `bun run serve` | 生产模式启动（后端 + 静态前端） |
 | `bun run build:web-ui` | 构建前端到 `packages/web-ui/dist/` |
 | `bun run build:binary` | 编译独立二进制到 `dist/` |
+| `bun run eval` | 运行 Agent 测评（分析 LLM Trace 日志） |
+| `bun run scripts/events-migrate.ts …` | 事件溯源 CLI（list / verify / export / import / rebuild） |
 | `bun run clean` | 清理所有构建产物 |
 
 ### 单包测试
@@ -110,6 +127,10 @@ bun test packages/agent
 bun test packages/tools
 bun test packages/llm
 bun test packages/context
+bun test packages/cordis      # Cordis 运行时集成测试
+bun test packages/graph       # 对话图机制测试
+bun test packages/events      # 事件溯源测试（含迁移 e2e）
+bun test packages/cli
 bun test packages/server
 ```
 
@@ -216,7 +237,21 @@ bun run typecheck
 bun test
 
 # 3. 无未使用的导入和变量（tsc 已配置）
+
+# 4. 事件对账（如改动 events / storage）
+bun run scripts/events-migrate.ts verify
 ```
+
+## 本分支特有开发要点
+
+- **新功能先想清楚落在哪个域**：模型/工具/策略/存储/上下文/Loop/图/事件 —— 尽量以 Cordis
+  插件（`ctx.*` 服务）表达，而不是直接改 Agent 类（见 ARCHITECTURE.md §3）；
+- **对话可溯源是默认行为**：改对话流程时保持「每回合沉淀 graph 节点 + 落事件」；
+- **改动 events 事件类型**：必须同步 `packages/events/src/registry.ts` 注册表 +
+  `types.ts` 类型 + `projection.ts` 投影，并跑 `bun test packages/events`（含对账/迁移 e2e）；
+- **数据根隔离**：新分支只写 `.fengagent-cordis/`，main 的 `.fengagent/` 只读导入源，
+  绝不写回；新增持久化路径一律走 `resolveDataRoot`；
+- **双写对账**：任何会话写路径改动后跑 `verify` 保证事件投影 === SQLite 读模型。
 
 ## 构建与部署
 

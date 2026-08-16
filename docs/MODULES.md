@@ -1,4 +1,6 @@
-# 模块文档
+# 模块文档（refactor/cordis-graph-architecture）
+
+> 本文档描述 `refactor/cordis-graph-architecture` 分支的包模块。★ 为分支新增包。
 
 ## `@fengagent/core` — 核心类型定义
 
@@ -153,7 +155,7 @@ interface LLMRequest {
 | `CompactionEngine` | `compaction.ts` | 摘要 head 段 + 保留 recent 段 |
 | `TokenCounter` | `token-counter.ts` | Token 估算（chars / 4 启发式） |
 | `SystemContextLoader` | `system-context.ts` | 加载 AGENTS.md、日期、MEMORY.md |
-| `MemoryManager` | `memory.ts` | MEMORY.md 加载/注入 + `.fengagent/memory/` 目录 |
+| `MemoryManager` | `memory.ts` | MEMORY.md 加载/注入 + `<数据根>/memory/` 目录（先读数据根，空则只读回退 main 的 `.fengagent/memory`） |
 | `VectorMemory` | `vector-memory.ts` | 向量化存储 + 检索 |
 
 ### 压缩策略
@@ -173,7 +175,7 @@ interface LLMRequest {
 | `Agent` | `agent.ts` | Agent 类：状态管理、事件发射、会话生命周期 |
 | `SessionStore` | `session.ts` | SQLite 会话持久化（`bun:sqlite`） |
 | `AgentDefinition` | `agent-definition.ts` | 从 `.fengagent/agents/*.md` 加载 Agent 定义 |
-| `PluginLoader` | `plugin-loader.ts` | 从 `.fengagent/plugins/` 加载插件 |
+| `PluginLoader` | `plugin-loader.ts` | 兼容旧插件加载器（从 `.fengagent/plugins/` 加载 `FengPlugin` 类）；本分支推荐 Cordis 插件 `ctx.plugin`（见下） |
 
 ### Agent Loop 流程
 
@@ -190,6 +192,9 @@ while (needsContinuation && step < maxTurns) {
 }
 ```
 
+> 在 Cordis 分支上，AgentLoop 被 `ctx.loop` 插件薄包裹（`packages/cordis/src/adapters/loop.ts`），
+> 行为不变，但每回合额外沉淀对话图节点 + 落事件日志。
+
 ### 内置 Agent 定义
 
 | Agent | 描述 | 工具 |
@@ -200,26 +205,109 @@ while (needsContinuation && step < maxTurns) {
 
 ---
 
+## `@fengagent/cordis` ★ — Cordis 集成层
+
+Cordis 元框架集成：插件生命周期 + 依赖注入 + 服务注册，Agent 各能力全部挂到 `ctx.*` 服务。
+
+| 文件 | 职责 |
+|------|------|
+| `runtime.ts` | `createRuntime()`：配置驱动装配插件（`feng.model` / `feng.tools` / …），start/stop 生命周期 |
+| `services.ts` | 插件域服务实现：model / tools / strategy / storage / context / loop / graph / eventLog / rebuild |
+| `adapters/*.ts` | 薄适配器：`model.ts`、`tools.ts`、`strategy.ts`、`storage.ts`、`context.ts`、`loop.ts`、`graph.ts`、`events.ts`、`rebuild.ts` |
+| `types.ts` | 插件域类型（服务接口、配置类型） |
+| `index.ts` | 公共导出 |
+
+### 插件域服务
+
+| 服务名 | 职责 |
+|--------|------|
+| `ctx.model` | LLM 调用、provider/model 热切换（ReloadableLLMClient） |
+| `ctx.tools` | 工具注册 / 查询 / 物化 / 执行 |
+| `ctx.strategy` | 压缩策略 / 工具选择策略 / 回退策略 |
+| `ctx.storage` | 会话持久化 + 图存储（DualWriteSessionStore 双写） |
+| `ctx.context` | 上下文组装 / 压缩 / 记忆 |
+| `ctx.loop` | Agent Loop 插件（注入上述服务驱动循环） |
+| `ctx.graph` | 对话可溯源 / 对话即节点 / 可回退 |
+| `ctx.eventLog` | 事件溯源服务（`feng.events` 插件） |
+| `ctx.rebuild` | 以事件为准重建读模型（`feng.rebuild` 插件） |
+
+---
+
+## `@fengagent/graph` ★ — 对话图机制
+
+Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖）。
+
+| 文件 | 职责 |
+|------|------|
+| `types.ts` | `ConversationNode`、`GraphStore` 接口、`RollbackStrategy` |
+| `store.ts` | `MemoryGraphStore`：appendNode / getChain / getActivePath / markQuality / rollbackTo，JSONL 落盘 |
+| `rollback.ts` | `DefaultRollbackStrategy`、`qualityToSignal` |
+
+### 节点类型
+
+| 类型 | 含义 |
+|------|------|
+| `user` | 用户提问节点 |
+| `assistant` | 助手回答节点（可含工具调用） |
+| `tool` | 工具执行节点 |
+| `branch-point` | 回退/分叉产生的分支点 |
+
+---
+
+## `@fengagent/events` ★ — 事件溯源
+
+事件日志为准（append-only）+ 投影（读模型）+ 双写对账 + 导出/导入/重建/迁移。
+
+| 文件 | 职责 |
+|------|------|
+| `event-store.ts` | EventStore：每会话单文件 `events/{sessionId}.jsonl`，注册表校验，seq + hash 链，重放，尾部半行自愈，`importEvents` 幂等去重 |
+| `types.ts` | 事件类型 + `SessionEventBase` 信封（version/sessionId/seq/type/timestamp/hash/prevHash） |
+| `registry.ts` | 运行时校验注册表（`registerEventType`）+ 核心事件名常量 |
+| `projection.ts` | `projectSession` 投影（逻辑复现 + 生命周期元数据）+ head 推导 |
+| `graph-projection.ts` | 事件 → 对话图节点投影（active/rolledBack 派生态重算） |
+| `dual-write.ts` | `DualWriteSessionStore`：旧存储 + 事件日志并行写，rollback/fork 截断同步 |
+| `reconcile.ts` | 双写对账（事件投影 === SQLite 读模型逐条等价） |
+| `event-graph-store.ts` | `EventGraphStore`：事件为事实源，graph.jsonl 为派生视图 |
+| `migration.ts` | 事件导出/导入（可移植文件 + 校验链 + 幂等去重）+ 整库迁移 |
+| `rebuild.ts` | `rebuildSession` / `rebuildAll`：以事件为准重建读模型（脱双写依赖） |
+| `node-ids.ts` | 节点 id 确定性方案 |
+| `hash.ts` | sha-256 事件链哈希 |
+
+---
+
 ## `@fengagent/cli` — CLI 终端交互
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | 入口 | `entry.ts` | 参数解析、模式路由（TUI / print / serve） |
-| TUI App | `tui/app.tsx` | Ink 主应用 |
+| 装配 | `create-runtime-agent.ts` | `createRuntimeAgent()`：Cordis 插件装配 RuntimeAgent（对话即节点） |
+| 兼容 | `create-agent.ts` | 旧接口 `createAgent` / `reloadProvider`，委托给 RuntimeAgent |
+| TUI App | `tui/app.tsx` | Ink 主应用（标题卡片、动态图标、状态栏） |
 | Chat View | `tui/chat-view.tsx` | 对话视图（Markdown + 代码高亮） |
 | Tool View | `tui/tool-view.tsx` | 工具调用卡片 |
-| Input | `tui/input.tsx` | 多行输入框 |
+| Input | `tui/input.tsx` | 多行输入框 + `/` 命令补全列表 |
 | Status Bar | `tui/status-bar.tsx` | 状态栏（模型、Token、压缩状态） |
+| 命令表 | `commands.ts` | 集中维护 `COMMANDS` 元数据（/ 联想数据源） |
 
 ### CLI 命令
 
 | 命令 | 说明 |
 |------|------|
 | `/session` | 管理会话（新建、切换、列出） |
-| `/model` | 切换当前模型 |
-| `/export` | 导出当前会话 |
-| `/clear` | 清屏 |
+| `/model` | 切换当前模型（持久化 + 热加载） |
+| `/provider` | 查看/配置 Provider（apiKey 不回显） |
+| `/graph` | 查看对话图（节点/活跃路径/溯源链） |
+| `/rollback [节点id]` | 回退到父节点并重答（旧分支保留） |
+| `/compact` | 手动压缩上下文 |
+| `/clear [context]` | 清屏 / 清空上下文 |
+| `/restore` | 从存储恢复会话历史 |
+| `/tool list` | 查看已注册工具 |
+| `/export [file]` | 导出当前会话 |
 | `/help` | 帮助菜单 |
+| `/exit` / `/quit` | 退出 |
+
+> `/` 联想（命令补全）：输入 `/` 或前缀，输入框上方弹出补全列表（前缀/描述过滤，
+> ↑↓ 选择，Tab/Enter 补全，Esc 关闭，列表可滚动）。数据源为 `commands.ts` 的 `COMMANDS` 表。
 
 ---
 
@@ -228,10 +316,10 @@ while (needsContinuation && step < maxTurns) {
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | Server | `server.ts` | Hono 应用创建、端口监听、静态文件 |
-| Session Routes | `routes/sessions.ts` | 会话 CRUD + 消息 SSE + 权限 |
+| Session Routes | `routes/sessions.ts` | 会话 CRUD + 消息 SSE + 权限 + 图/回退端点 |
 | Model Routes | `routes/models.ts` | 模型列表 |
 | SSE | `sse.ts` | AgentEvent → SSE 帧转换 |
-| SessionManager | `session-manager.ts` | Agent 实例池、权限桥接 |
+| SessionManager | `session-manager.ts` | RuntimeAgent 实例池、权限桥接、getGraph / rollbackSession / getAgent |
 
 ### API 端点
 
@@ -246,6 +334,8 @@ while (needsContinuation && step < maxTurns) {
 | GET | `/api/sessions/:id/permissions` | 获取待处理权限请求 |
 | GET | `/api/sessions/:id/export` | 导出会话 |
 | DELETE | `/api/sessions/:id` | 销毁会话 |
+| GET | `/api/sessions/:id/graph` | 获取对话图（节点/活跃路径） |
+| POST | `/api/sessions/:id/rollback` | 回退到指定节点并重答 |
 | GET | `/api/models` | 获取可用模型列表 |
 
 ---
@@ -255,28 +345,45 @@ while (needsContinuation && step < maxTurns) {
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | App | `app.tsx` | 应用入口、主题切换、SessionSidebar + ChatPage |
-| Chat Page | `pages/chat.tsx` | 聊天页面、模型选择、Inspector 面板 |
+| Chat Page | `pages/chat.tsx` | 聊天页面、模型选择、Inspector 面板、Token 统计栏 |
 | Message List | `components/message-list.tsx` | 消息列表（Markdown 渲染、流式指示器） |
 | Message Input | `components/message-input.tsx` | 多行输入框 |
 | Tool Call Card | `components/tool-call-card.tsx` | 工具调用卡片（展开/折叠） |
 | Markdown Renderer | `components/markdown-renderer.tsx` | Markdown + 代码高亮 |
 | Model Selector | `components/model-selector.tsx` | 模型下拉选择 |
 | Session Sidebar | `components/session-sidebar.tsx` | 会话列表侧边栏 |
+| Graph Panel | `components/graph-panel.tsx` | ★ 对话图可视化（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显） |
 
 ### Hooks
 
 | Hook | 文件 | 职责 |
 |------|------|------|
-| `useSession` | `hooks/use-session.ts` | 会话 CRUD + 消息状态管理 |
-| `useSse` | `hooks/use-sse.ts` | SSE 事件流消费 |
+| `useSession` | `hooks/use-session.ts` | 会话 CRUD + 消息状态管理 + `graph` / `refreshGraph` / `rollback` / `refreshSession` |
+| `useSse` | `hooks/use-sse.ts` | SSE 事件流消费（含 usage 事件 → KV Cache 统计） |
 | `useModels` | `hooks/use-models.ts` | 模型列表加载 |
 
 ### API 客户端
 
-`api/client.ts` — `ApiClient` 类封装所有 HTTP 交互（fetch + ReadableStream 手动解析 SSE）。
+`api/client.ts` — `ApiClient` 类封装所有 HTTP 交互（fetch + ReadableStream 手动解析 SSE），
+新增 `getGraph` / `rollbackSession`。
 
 ### 构建
 
 - Vite 6+ 构建配置
 - Dev 模式：Vite proxy 转发 `/api` 到后端 server
 - Prod 模式：构建产物由 server 静态托管
+
+---
+
+## `@fengagent/eval` — Agent 测评模块
+
+读取 LLM Trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`）自动分析：
+
+| 指标 | 说明 |
+|------|------|
+| 工具调用成功率 / 任务完成率 / 错误率 | 模型工具选择质量 |
+| Token 用量（输入/输出） | 成本分析 |
+| KV Cache 命中率 | 缓存复用效率（读取/创建 token） |
+| 模型对比表 | 不同模型/提示词版本横向对比 |
+
+报告输出 `<数据根>/logs/eval-report-{date}.md`。命令：`bun run eval`（详见 CONFIGURATION.md）。

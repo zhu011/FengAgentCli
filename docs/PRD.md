@@ -3,6 +3,10 @@
 > 版本：1.0  
 > 日期：2026-08-09  
 > 状态：草案
+>
+> **分支说明**：本 PRD 为产品需求总纲。`refactor/cordis-graph-architecture` 分支在此之上
+> 落地了 Cordis 插件化 + 对话图/可回溯 + 事件溯源架构（对应「对话可溯源、回答可回退」需求），
+> 架构与操作见 [ARCHITECTURE.md](./ARCHITECTURE.md) / [GUIDE-CORDIS.md](./GUIDE-CORDIS.md)。
 
 ---
 
@@ -681,10 +685,10 @@ WebUI (React) ──── HTTP + SSE ───────────── Se
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `FENG_CONFIG_FILE` | `.fengagent/config.json` | 配置文件路径 |
-| `FENG_DATA_DIR` | `~/.fengagent` | 数据存储目录 |
+| `FENG_CONFIG_FILE` | `.fengagent-cordis/config.json` | 分支级配置文件（/model /provider 写入层；`.fengagent/config.json` 仅只读回退） |
+| `FENG_DATA_DIR` | `.fengagent-cordis`（相对 workdir） | 数据根（事件 / 图 / 会话 / 日志 / 记忆 / 配置） |
 | `FENG_LOG_LEVEL` | `info` | 日志级别（debug/info/warn/error） |
-| `FENG_LOG_DIR` | `~/.fengagent/logs` | 日志目录 |
+| `FENG_LOG_DIR` | `<数据根>/logs` | 日志目录 |
 | `FENG_MAX_TURNS` | `50` | 单次对话最大轮次 |
 | `FENG_MCP_SERVERS` | - | MCP 服务器配置（JSON） |
 
@@ -693,10 +697,11 @@ WebUI (React) ──── HTTP + SSE ───────────── Se
 从低到高（高优先级覆盖低优先级）：
 
 1. **内置默认值**（代码中的 `DEFAULT_CONFIG`）
-2. **全局配置**：`~/.fengagent/config.json`
-3. **项目配置**：`./.fengagent/config.json`
-4. **环境变量**：`FENG_*` 系列变量
-5. **命令行参数**：`--model`、`--port` 等
+2. **全局配置**：`~/.fengagent/config.json`（main 遗留，只读回退）
+3. **项目配置**：`./.fengagent/config.json`（main 遗留，只读回退）
+4. **分支级配置**：`./.fengagent-cordis/config.json`（refactor/cordis 分支写入层，/model /provider 只落这里）
+5. **环境变量**：`FENG_*` 系列变量
+6. **命令行参数**：`--model`、`--port` 等
 
 ---
 

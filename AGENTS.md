@@ -82,11 +82,10 @@ bun test packages/server
 - 添加新模型 Provider：实现 `LLMClient` 接口 → 注册到 Provider 注册表（`packages/llm/src/providers/`）
 - 添加新工具：实现 `ToolDefinition` 接口 → 注册到 `ToolRegistry`（`packages/tools/src/builtin/`）
 - 添加新 Agent：在 `.fengagent/agents/*.md` 创建定义文件
-- 添加插件：在 `.fengagent/plugins/` 创建插件目录，导出 `FengPlugin` 类
+- 添加插件：写 Cordis 插件（函数/类/对象），`ctx.plugin(plugin, config)` 装载（见 `docs/EXTENDING.md`；旧 `.fengagent/plugins/` + `FengPlugin` 类仍兼容）
 - 添加 Skill：在 `.fengagent/skills/*.md` 创建 Skill 定义
 
 详细扩展指南：`docs/EXTENDING.md`
-
 
 <!-- BEGIN MULTICA-RUNTIME (auto-managed; do not edit) -->
 # Multica Agent Runtime

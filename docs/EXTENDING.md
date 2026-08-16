@@ -1,4 +1,9 @@
-# 扩展指南
+# 扩展指南（refactor/cordis-graph-architecture）
+
+> 本文档适用于 `refactor/cordis-graph-architecture` 分支。本分支的扩展以 **Cordis 插件**为
+> 一等公民：模型/工具/策略/存储/上下文/Loop/图/事件全部是 `ctx.*` 服务，换插件即换能力。
+> 旧的直接注册方式（`createAgent` / `registerBuiltinTools`）仍然可用（经适配器薄包裹），
+> 但**推荐走 Cordis 插件**。
 
 ## 添加新模型 Provider
 
@@ -6,8 +11,12 @@
 
 1. 在 `packages/llm/src/providers/` 下创建 Provider 文件
 2. 实现 `LLMClient` 接口
-3. 在 `packages/llm/src/providers/index.ts` 注册
-4. 通过 `FENG_PROVIDER` 环境变量使用
+3. 在 `packages/llm/src/providers/index.ts` 注册（`createProvider`）
+4. 通过 `FENG_PROVIDER` 环境变量使用（`ctx.model` / `feng.model` 插件经 `createClient` 装配）
+
+> 在 Cordis 分支上，`ctx.model`（`feng.model` 插件）调用 `createClient` 创建 LLM Client，
+> 并支持 `ReloadableLLMClient` 热切换（`/provider`、`/model` 命令底座）。
+> 新 Provider 注册后即可在 `/provider set <type>` 中使用。
 
 ### 示例
 
@@ -108,11 +117,12 @@ export MY_PROVIDER_BASE_URL=https://api.example.com
 
 ## 添加新工具
 
-### 步骤
+### 步骤（Cordis 分支推荐：插件注册）
 
-1. 在 `packages/tools/src/builtin/` 下创建工具文件
+1. 在 `packages/tools/src/builtin/` 下创建工具文件（或直接写在用户插件里）
 2. 实现 `ToolDefinition` 接口
-3. 在 `packages/tools/src/builtin/index.ts` 注册
+3. 在 `packages/tools/src/builtin/index.ts` 注册（`registerBuiltinTools`），
+   或经 Cordis 插件 `ctx.tools` 注册（见「添加插件」）
 4. 工具自动出现在 LLM 的可用工具列表中
 
 ### 示例
@@ -229,78 +239,86 @@ task({
 
 ---
 
-## 添加插件
+## 添加插件（Cordis 插件模型）
 
-### 步骤
+本分支的插件是 **Cordis 插件**：函数/类/对象三种形态，通过 `ctx.plugin(plugin, config)` 装载；
+插件声明 `inject` 依赖的服务，依赖就绪后才 start（声明式装配，顺序无关）。
 
-1. 在 `.fengagent/plugins/<name>/` 下创建插件目录
-2. 创建 `index.ts`，导出 `FengPlugin` 类
-3. 插件在启动时自动加载
+### 内置插件
 
-### 插件接口
+| 插件 id | 服务 | 说明 |
+|---------|------|------|
+| `feng.model` | `ctx.model` | LLM 调用、provider/model 热切换 |
+| `feng.tools` | `ctx.tools` | 工具注册 / 查询 / 物化 / 执行 |
+| `feng.strategy` | `ctx.strategy` | 压缩 / 工具选择 / 回退策略 |
+| `feng.context` | `ctx.context` | 上下文组装 / 压缩 / 记忆 |
+| `feng.storage` | `ctx.storage` | 会话持久化 + 图存储（双写） |
+| `feng.loop` | `ctx.loop` | Agent Loop 插件 |
+| `feng.graph` | `ctx.graph` | 对话图（节点/溯源/回退） |
+| `feng.events` | `ctx.eventLog` | 事件溯源服务 |
+| `feng.rebuild` | `ctx.rebuild` | 以事件为准重建读模型 |
 
-```typescript
-interface FengPlugin {
-  name: string;
-  version: string;
-
-  init?(context: PluginContext): Promise<void>;
-  registerTools?(registry: ToolRegistry): void;
-  registerProviders?(registry: ProviderRegistry): void;
-  registerHooks?(registry: HookRegistry): void;
-  registerCommands?(registry: CommandRegistry): void;
-}
-
-interface PluginContext {
-  config: Config;
-  workdir: string;
-  logger: Logger;
-}
-```
-
-### 示例
+### 示例：用户插件（模块路径装载）
 
 ```typescript
-// .fengagent/plugins/my-plugin/index.ts
+// .fengagent/plugins/my-plugin.ts
+import type { Context } from "@fengagent/cordis";
 
-import type { FengPlugin, PluginContext } from "@fengagent/core";
-import { z } from "zod";
-
-export default class MyPlugin implements FengPlugin {
-  name = "my-plugin";
-  version = "1.0.0";
-
-  async init(ctx: PluginContext) {
-    ctx.logger.info("MyPlugin initialized");
-  }
-
-  registerTools(registry: ToolRegistry) {
-    registry.register({
+export default function myPlugin(ctx: Context, config: { greeting?: string }) {
+  // 依赖注入：声明需要 ctx.tools / ctx.graph，就绪后才执行
+  ctx.inject(["tools", "graph"], () => {
+    // 注册一个自定义工具到 ctx.tools
+    ctx.tools.register({
       name: "my-tool",
       description: "自定义工具",
-      inputSchema: z.object({ input: z.string() }),
-      isReadOnly: () => true,
+      inputSchema: /* zod schema */,
       async execute(input) {
         return { content: `Processed: ${input.input}` };
       },
     });
-  }
-
-  registerHooks(registry: HookRegistry) {
-    registry.register("pre-tool-use", async (toolName, input) => {
-      console.log(`Tool ${toolName} about to execute`);
-      return { allowed: true };
-    });
-
-    registry.register("post-tool-use", async (toolName, input, result) => {
-      console.log(`Tool ${toolName} completed`);
-      return result;
-    });
-  }
+  });
 }
 ```
 
+### 装配（createRuntime 配置里加载）
+
+```ts
+// packages/cli/src/create-runtime-agent.ts（或你自己的入口）
+const runtime = createRuntime({
+  workdir: ".",
+  plugins: [
+    { id: "feng.model", config: { provider, model, createClient } },
+    { id: "feng.tools", config: { tools: [/* 内置工具 */] } },
+    { id: "feng.strategy", config: { contextWindow, compactThreshold } },
+    { id: "feng.context", config: { manager } },
+    { id: "feng.storage", config: { dbPath, graphPath } },
+    { id: "feng.graph" },
+    { id: "feng.loop", config: { config: { maxTurns, maxTokens, temperature }, workdir } },
+    // 用户插件：id 为模块路径，动态 import
+    { id: "./.fengagent/plugins/my-plugin.ts", config: { greeting: "hi" } },
+  ],
+});
+await runtime.start();
+```
+
+> 插件生命周期：load → start（依赖满足后）→ effect / dispose（逆序卸载）。
+> 换插件即换能力：把 `feng.loop` 换成 Graph 编排器、把 `feng.strategy` 换成
+> LLM-as-judge 回退策略，其余插件不受影响。
+
+### 扩展点：对话图回退策略
+
+实现 `RollbackStrategy` 接口（`packages/graph/src/types.ts`）：
+`shouldRollback(signal)` / `chooseTarget(node)`，替换 `feng.strategy` 的默认
+`DefaultRollbackStrategy`，即可把回退策略换成 LLM-as-judge 自动评估。
+
+### 扩展点：事件类型注册
+
+在 `packages/events/src/registry.ts` 用 `registerEventType(type, validator)` 注册新事件类型，
+并同步 `types.ts` 类型 + `projection.ts` 投影（含对账/迁移测试）。
+
 ---
+
+## 添加 Skill
 
 ## 添加 Skill
 

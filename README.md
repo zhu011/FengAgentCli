@@ -1,6 +1,8 @@
 # FengAgentCli
 
-> 开源本地 AI Agent CLI 工具 — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩与权限审批。
+> 开源本地 AI Agent CLI 工具（`refactor/cordis-graph-architecture` 分支）— **Cordis 插件化** +
+> **对话图（Graph Engineering）/可回溯** + **事件溯源（Event Sourcing）** 架构。
+> 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩、权限审批、对话节点溯源与回退重答。
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8+-3178C6?logo=typescript&logoColor=white)
 ![Bun](https://img.shields.io/badge/Bun-1.3+-000000?logo=bun&logoColor=white)
@@ -9,6 +11,10 @@
 
 📖 **[在线文档](https://zhu011.github.io/FengAgentCli/)** · 📦 **[Releases](https://github.com/zhu011/FengAgentCli/releases)** · 🐛 **[Issues](https://github.com/zhu011/FengAgentCli/issues)**
 
+> **分支说明**：本 README 描述 `refactor/cordis-graph-architecture` 分支（Cordis 插件化 + 对话图/可回溯 +
+> 事件溯源架构）。`main` 分支为老架构（Loop 直连），数据/配置与本分支完全隔离
+> （本分支数据根 `.fengagent-cordis/`，见 [ARCHITECTURE-CORDIS.md §6](docs/ARCHITECTURE-CORDIS.md)）。
+
 ---
 
 ## 特性
@@ -16,13 +22,17 @@
 | 图标 | 特性 | 说明 |
 |:---:|------|------|
 | 💬 | **智能对话** | 多轮上下文对话，SSE 流式输出，Markdown 渲染 |
+| 🕸️ | **对话图（Graph）** | 每轮「提问→回答」沉淀为节点，可溯源、可分支、可回退（`/graph`） |
+| ↩️ | **回退重答（Rollback）** | `/rollback` 回退到任意节点重答，旧分支保留可审计 |
+| 🧩 | **Cordis 插件化** | 模型/工具/策略/存储/上下文/Loop/图全部为可插拔服务（`ctx.*`），换插件即换能力 |
+| 📜 | **事件溯源** | 会话事实以 append-only 事件日志为准（`events/{sessionId}.jsonl`），可导出/导入/重建/跨机迁移 |
 | 🤖 | **多 Agent** | Task 工具派遣子 Agent，独立 Session + 角色定义 |
 | 🔧 | **工具调用** | 文件读写、Bash、Glob/Grep、Web 抓取、记忆、Skill |
-| 🌐 | **WebUI** | React + Vite 暗色科技风，3 套主题切换 |
+| 🌐 | **WebUI** | React + Vite 暗色科技风，3 套主题切换 + 对话图可视化面板 |
 | 📦 | **上下文压缩** | 工具结果裁剪 + 结构化摘要 + 迭代更新 + 文件追踪 |
 | 🧠 | **记忆系统** | MEMORY.md + 分类记忆 + TF-IDF 向量检索 |
 | 📋 | **日志系统** | 运行日志 + 会话 JSONL + LLM Trace 三路落盘 |
-| 📊 | **Agent 测评** | `bun run eval` 自动生成调用分析报告 |
+| 📊 | **Agent 测评** | `bun run eval` 自动生成调用分析报告（工具成功率 / KV Cache 命中率 / 模型对比） |
 
 <details>
 <summary>更多特性</summary>
@@ -30,9 +40,12 @@
 - **多模型支持** — Anthropic、OpenAI、OpenAI-Compatible（DeepSeek 等）、Google Gemini、AWS Bedrock
 - **MCP 集成** — Model Context Protocol 客户端，自动发现外部工具
 - **权限系统** — 工具执行前交互式审批（CLI 弹框 / WebUI SSE 推送）
-- **插件系统** — 第三方插件加载，注册工具 / Provider / Hook / 命令
+- **插件系统** — Cordis 插件（`ctx.plugin(plugin, config)`），内置 `feng.model` / `feng.tools` /
+  `feng.strategy` / `feng.context` / `feng.storage` / `feng.loop` / `feng.graph` / `feng.events` / `feng.rebuild`
 - **Skills 系统** — 可复用 Prompt 模板，关键词触发
-- **会话持久化** — SQLite 主存储 + JSONL 可见副本，跨重启恢复
+- **会话持久化** — 事件日志为准 + SQLite 读模型，跨重启恢复，`/restore` 可重建
+- **/ 联想（命令补全）** — 输入 `/` 弹出补全列表（前缀过滤、↑↓ 选择、Tab/Enter 补全）
+- **KV Cache 统计** — WebUI 实时显示 📥 输入 / 📤 输出 / ⚡ 缓存命中 / 🎯 命中率 / 合计 tokens
 - **Multica ACP** — 原生支持 Multica 平台 Agent 运行时集成
 - **编译二进制** — `bun build --compile` 生成独立可执行文件
 </details>
@@ -91,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 
 ### 配置 Provider（`/provider` 命令）
 
-在 CLI 交互模式中可用 `/provider` 命令查看或切换 LLM Provider（Anthropic / OpenAI / OpenAI-Compatible / Google），配置写入项目级 `.fengagent/config.json`，**无需改环境变量、无需重启**即可生效：
+在 CLI 交互模式中可用 `/provider` 命令查看或切换 LLM Provider（Anthropic / OpenAI / OpenAI-Compatible / Google），配置写入**分支级** `.fengagent-cordis/config.json`，**无需改环境变量、无需重启**即可生效：
 
 ```bash
 # 查看当前 Provider（apiKey 自动打码，只显示前 4 位）
@@ -120,7 +133,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 # - 其他 Provider：显示常用真实模型 ID，并标注当前模型
 /model list
 
-# 切换模型（持久化到 .fengagent/config.json，热加载生效，后续对话真实走新模型）
+# 切换模型（持久化到 .fengagent-cordis/config.json，热加载生效，后续对话真实走新模型）
 /model deepseek-reasoner
 ```
 
@@ -144,15 +157,18 @@ CLI 交互模式（Ink TUI）借鉴 dsh-TUI 的 Gentle Mist Blue 设计语言做
 ```
 packages/
 ├── core/       — 核心类型定义（Config, Session, AgentEvent, Tool, Permission）
-├── shared/     — 共享工具函数、常量、日志
-├── llm/        — LLM 客户端（Anthropic, OpenAI, Bedrock, Google）
+├── shared/     — 共享工具函数、常量、日志、数据根解析（resolveDataRoot）
+├── llm/        — LLM 客户端（Anthropic, OpenAI, Bedrock, Google）+ ReloadableLLMClient
 ├── tools/      — 内置工具 + MCP 集成 + 权限系统 + Hook
 ├── context/    — 上下文管理（压缩、记忆、系统上下文）
-├── agent/      — Agent 运行时（Loop, SessionStore, 子 Agent, 插件）
-├── cli/        — CLI 入口（Ink TUI + print 模式）
-├── server/     — HTTP 服务（Hono + SSE + 权限交互）
+├── agent/      — Agent 运行时（Loop, SessionStore, 子 Agent）
+├── cordis/     — Cordis 集成层：插件域类型 + 服务实现 + 适配器 + 配置驱动运行时（vendored @deepseek-ai/cordis）
+├── graph/      — Graph Engineering 机制：对话即节点 / 可溯源 / 可回退（零运行时依赖）
+├── events/     — 事件溯源：EventStore（append-only 事件日志）+ 投影 + 双写 + 导出/导入/重建/迁移
+├── cli/        — CLI 入口（Ink TUI + print 模式，经 createRuntimeAgent 装配）
+├── server/     — HTTP 服务（Hono + SSE + 权限交互 + /graph /rollback 端点）
 ├── eval/       — Agent 测评模块（LLM Trace 分析报告）
-└── web-ui/     — Web 前端（React + Vite + TailwindCSS）
+└── web-ui/     — Web 前端（React + Vite + TailwindCSS + 对话图面板）
 ```
 
 ## 环境变量
@@ -170,6 +186,8 @@ packages/
 | `FENG_SERVER_HOST` | `127.0.0.1` | 服务监听地址 |
 | `FENG_LOG_LEVEL` | `info` | 日志级别（debug/info/warn/error） |
 | `FENG_MAX_TURNS` | `50` | Agent 循环最大轮次 |
+| `FENG_DATA_DIR` | `.fengagent-cordis` | 数据根（会话/事件/图/日志/记忆/配置；main 遗留数据仅作只读导入源） |
+| `FENG_MAIN_DATA_DIR` | — | 显式指定 main 遗留数据根（导入源） |
 
 完整配置参考：[docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 
@@ -183,6 +201,7 @@ bun run dev              # 启动开发环境
 bun run build:web-ui     # 构建前端
 bun run build:binary     # 编译二进制
 bun run eval             # 运行 Agent 测评
+bun run scripts/events-migrate.ts verify   # 事件链校验 + 双写对账
 bun run clean            # 清理构建产物
 ```
 
@@ -192,12 +211,12 @@ bun run clean            # 清理构建产物
 |------|------|
 | [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档（暗色主题，当前展示 refactor/cordis-graph-architecture 分支状态） |
 | [小白保姆级操作手册](docs/GUIDE-CORDIS.md) | **新手推荐**：从安装到 /graph /rollback /provider /model /compact /clear /联想、事件溯源、分支隔离、测评、KV Cache 统计，每个功能都有可照抄命令 + 预期输出 |
-| [架构设计](docs/ARCHITECTURE.md) | 系统架构与模块设计（main 老架构） |
-| [Cordis 架构（重构分支）](docs/ARCHITECTURE-CORDIS.md) | 插件化 + 对话图/可回溯架构（refactor/cordis-graph-architecture，Phase 1–4 完成；与 main 隔离说明见 §6，事件溯源见 §7） |
-| [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件、权限规则 |
-| [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建流程 |
-| [模块接口](docs/MODULES.md) | 各包 API 接口说明 |
-| [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent |
+| [架构设计（本分支）](docs/ARCHITECTURE.md) | 本分支（refactor/cordis-graph-architecture）系统架构：Cordis 插件化 + 对话图/可回溯 + 事件溯源 + 模块设计 |
+| [Cordis 架构设计细节](docs/ARCHITECTURE-CORDIS.md) | 重构设计文档：插件域、Graph 机制、事件溯源、迁移路线、分支隔离（§6）、数据根隔离（§6.1） |
+| [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件（含分支级 `.fengagent-cordis/config.json`）、权限规则 |
+| [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建流程（含新包 cordis/graph/events） |
+| [模块接口](docs/MODULES.md) | 各包 API 接口说明（含 cordis/events/graph） |
+| [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件（Cordis 插件模型）/ Agent / Skill / Hook / MCP |
 | [产品需求](docs/PRD.md) | 产品需求文档 |
 
 ## Docker

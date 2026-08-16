@@ -70,7 +70,7 @@
 
 | 环境变量 | 配置键 | 默认值 | 说明 |
 |----------|--------|--------|------|
-| `FENG_CONFIG_FILE` | — | `.fengagent/config.json` | 配置文件路径 |
+| `FENG_CONFIG_FILE` | — | `.fengagent-cordis/config.json` | 分支级配置文件（`/model` `/provider` 只写这里；`.fengagent/config.json` 仅只读回退） |
 | `FENG_DATA_DIR` | `dataDir` | `.fengagent-cordis`（相对 workdir） | 数据存储目录（refactor/cordis 分支默认数据根；`~/.fengagent` 为 main 遗留数据根，仅作导入源/只读回退） |
 | `FENG_MAIN_DATA_DIR` | — | — | 显式指定 main 遗留数据根（导入源）。探测顺序：`FENG_MAIN_DATA_DIR` → `<workdir>/.fengagent` → `~/.fengagent` → `<workdir>/data`，首个含 `sessions.db`/`graph.jsonl` 者胜 |
 | `FENG_LOG_LEVEL` | `logLevel` | `info` | 日志级别（debug/info/warn/error） |
@@ -82,7 +82,7 @@
 
 ## 配置文件格式
 
-### 全局配置（`~/.fengagent/config.json`）
+### 全局配置（`~/.fengagent/config.json` — main 遗留，本分支仅只读回退）
 
 ```jsonc
 {
@@ -103,7 +103,7 @@
 }
 ```
 
-### 项目配置（`./.fengagent/config.json`）
+### 项目配置（`./.fengagent/config.json` — main 遗留，本分支仅只读回退；写入层为 `.fengagent-cordis/config.json`）
 
 ```jsonc
 {
@@ -179,28 +179,34 @@ max_turns: 20
 3. 提出改进建议
 ```
 
-### 插件（`./.fengagent/plugins/<name>/index.ts`）
+### 插件（Cordis 插件模型）
+
+本分支的插件是 **Cordis 插件**（函数 / 类 / 对象三种形态），通过 `ctx.plugin(plugin, config)` 装载；
+插件声明 `inject` 依赖的服务，依赖就绪后才 start（声明式装配、顺序无关）。内置插件
+`feng.model / feng.tools / feng.strategy / feng.context / feng.storage / feng.loop /
+feng.graph / feng.events / feng.rebuild` 分别挂到 `ctx.*` 服务（见 [EXTENDING.md](./EXTENDING.md)）。
+
+用户插件以模块路径装载：
 
 ```typescript
-import type { FengPlugin, PluginContext } from "@fengagent/core";
+// 示例：.fengagent/plugins/my-plugin.ts
+import type { Context } from "@fengagent/cordis";
 
-export default class MyPlugin implements FengPlugin {
-  name = "my-plugin";
-  version = "1.0.0";
-
-  async init(ctx: PluginContext) {
-    // 初始化逻辑
-  }
-
-  registerTools(registry: ToolRegistry) {
-    // 注册自定义工具
-  }
-
-  registerHooks(registry: HookRegistry) {
-    // 注册生命周期 Hook
-  }
+export default function myPlugin(ctx: Context, config: { greeting?: string }) {
+  // 依赖注入：声明需要 ctx.tools / ctx.graph，就绪后才执行
+  ctx.inject(["tools", "graph"], () => {
+    // 注册自定义工具到 ctx.tools；同时接入对话图 ctx.graph
+    ctx.tools.register({ /* ToolDefinition */ });
+  });
 }
 ```
+
+```typescript
+// 装配：createRuntime({ plugins: [{ id: "./.fengagent/plugins/my-plugin.ts", config: { greeting: "hi" } }] })
+```
+
+> 兼容：旧的 `.fengagent/plugins/<name>/index.ts`（导出 `FengPlugin` 类）加载器
+> （`packages/agent/src/plugin-loader.ts`）仍可用（经适配器薄包裹），但**推荐走 Cordis 插件**。
 
 ### Skills（`./.fengagent/skills/*.md`）
 

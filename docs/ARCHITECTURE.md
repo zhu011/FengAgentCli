@@ -1,65 +1,70 @@
-# FengAgentCli 架构设计文档
+# FengAgentCli 架构设计文档（refactor/cordis-graph-architecture）
 
-> 版本：1.0  
-> 日期：2026-08-09  
-> 状态：草案
+> **本文档描述 `refactor/cordis-graph-architecture` 分支（当前分支）的架构**：
+> **Cordis 插件化（Plugin-as-a-First-Class）+ 对话图（Graph Engineering，可溯源/可回退）+
+> 事件溯源（Event Sourcing）**。
+>
+> - 重构设计全过程与迁移路线见 [ARCHITECTURE-CORDIS.md](./ARCHITECTURE-CORDIS.md)；
+> - 小白操作手册（照抄命令）见 [GUIDE-CORDIS.md](./GUIDE-CORDIS.md)；
+> - `main` 分支为老架构（Loop 直连），数据/配置与本分支隔离，互不干扰（见 §9 分支隔离）。
 
 ---
 
 ## 目录
 
-1. [整体架构图](#1-整体架构图)
+1. [整体架构](#1-整体架构)
 2. [核心模块依赖关系](#2-核心模块依赖关系)
-3. [数据流设计](#3-数据流设计)
-4. [扩展点设计](#4-扩展点设计)
-5. [配置系统设计](#5-配置系统设计)
-6. [关键技术方案](#6-关键技术方案)
+3. [Cordis 插件化运行时](#3-cordis-插件化运行时)
+4. [对话图（Graph Engineering）](#4-对话图graph-engineering)
+5. [事件溯源（Event Sourcing）](#5-事件溯源event-sourcing)
+6. [数据流设计](#6-数据流设计)
+7. [配置系统设计](#7-配置系统设计)
+8. [关键技术方案](#8-关键技术方案)
+9. [分支隔离（与 main）](#9-分支隔离与-main)
+10. [运行与验证](#10-运行与验证)
+11. [设计决策记录（ADR）](#11-设计决策记录adr)
 
 ---
 
-## 1. 整体架构图
+## 1. 整体架构
 
 ### 1.1 系统全景
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        FengAgentCli 系统全景                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐  │
-│  │   CLI TUI    │    │  Web Browser │    │   Multica Platform   │  │
-│  │  (Ink/React) │    │   (React)    │    │     (Agent 管理)      │  │
-│  └──────┬───────┘    └──────┬───────┘    └──────────┬───────────┘  │
-│         │ 进程内调用          │ HTTP + SSE            │ CLI 交互       │
-│         │                    │                       │               │
-│         ▼                    ▼                       ▼               │
-│  ┌─────────────┐    ┌────────────────┐     ┌─────────────────┐     │
-│  │   Agent     │◄──►│   HTTP Server  │◄───►│   Agent         │     │
-│  │  (直接引用)  │    │   (Hono + SSE) │     │  (直接引用)      │     │
-│  └──────┬──────┘    └────────────────┘     └─────────────────┘     │
-│         │                                                           │
-│         │                                                           │
-│  ┌──────┴──────────────────────────────────────────────────────┐   │
-│  │                     Agent Runtime 核心                       │   │
-│  │  ┌─────────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐  │   │
-│  │  │ Agent Loop  │─►│ Context  │  │  Tools   │  │  LLM    │  │   │
-│  │  │  (循环驱动)  │  │ Manager  │  │ Registry │  │ Client  │  │   │
-│  │  └──────┬──────┘  └────┬─────┘  └────┬─────┘  └────┬────┘  │   │
-│  │         │              │             │              │        │   │
-│  │         ▼              ▼             ▼              ▼        │   │
-│  │  ┌──────────┐   ┌───────────┐  ┌──────────┐  ┌─────────┐   │   │
-│  │  │ Session  │   │Compaction │  │Executor  │  │Provider │   │   │
-│  │  │ Storage  │   │ + Memory  │  │+Permission│  │Adapter  │   │   │
-│  │  │ (SQLite) │   │           │  │          │  │         │   │   │
-│  │  └──────────┘   └───────────┘  └──────────┘  └─────────┘   │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                      Shared / Core                           │   │
-│  │     类型定义  •  Zod Schema  •  工具函数  •  常量             │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          FengAgentCli 系统全景（Cordis 分支）                │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                            │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────┐    │
+│  │   CLI TUI    │    │  Web Browser │    │  Multica Platform / ACP   │    │
+│  │  (Ink/React) │    │   (React)    │    │     (Agent 运行时管理)      │    │
+│  └──────┬───────┘    └──────┬───────┘    └───────────┬──────────────┘    │
+│         │ 进程内调用          │ HTTP + SSE              │ CLI 交互            │
+│         ▼                    ▼                        ▼                    │
+│  ┌──────────────────────────────────────────────────────────────────┐    │
+│  │                 Cordis 运行时（createRuntime）                     │    │
+│  │   ┌──────────────────────────────────────────────────────────┐   │    │
+│  │   │ ctx.model    ctx.tools   ctx.strategy   ctx.context     │   │    │
+│  │   │ ctx.storage  ctx.loop    ctx.graph      ctx.eventLog    │   │    │
+│  │   │ ctx.rebuild                                            │   │    │
+│  │   └───────────────┬──────────────────────────────────────────┘   │    │
+│  │     插件域 = 可插拔服务（换插件即换能力）                           │    │
+│  │   ┌──────────────────────────────────────────────────────────┐   │    │
+│  │   │  RuntimeAgent（CLI/Server 每会话一个）                     │   │    │
+│  │   │  AgentLoop 驱动 · 对话即节点 · 事件落日志                   │   │    │
+│  │   └──────────────────────────────────────────────────────────┘   │    │
+│  └──────────────────────────────────────────────────────────────────┘    │
+│                                                                            │
+│  ┌───────────────────────────────────────────────────────────────┐        │
+│  │  数据根 .fengagent-cordis/                                    │        │
+│  │  sessions.db（读模型）· graph.jsonl（派生视图）· events/*.jsonl │        │
+│  │  logs/（运行/会话/llm-trace）· memory/ · config.json          │        │
+│  └───────────────────────────────────────────────────────────────┘        │
+│                                                                            │
+│  ┌───────────────────────────────────────────────────────────────┐        │
+│  │  Shared / Core（类型 · Zod Schema · 工具函数 · resolveDataRoot） │        │
+│  └───────────────────────────────────────────────────────────────┘        │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 1.2 进程模型
@@ -68,22 +73,23 @@
 模式 1: CLI 模式（单进程）
 ┌─────────────────────────────────────────┐
 │              Bun 进程                    │
-│  ┌───────┐  ┌───────┐  ┌─────────────┐ │
-│  │ Ink   │─►│ Agent │─►│ LLM/Tools   │ │
-│  │ TUI   │  │ Loop  │  │ (直接调用)   │ │
-│  └───────┘  └───────┘  └─────────────┘ │
+│  ┌───────┐  ┌────────────────────────┐ │
+│  │ Ink   │─►│ createRuntimeAgent()   │ │
+│  │ TUI   │  │  = Cordis 运行时装配     │ │
+│  └───────┘  │  (model/tools/loop/… ) │ │
+│             └────────────────────────┘ │
 └─────────────────────────────────────────┘
 
-模式 2: WebUI 模式（双进程 dev / 单进程 prod）
+模式 2: WebUI 模式（server 进程，每会话一个 RuntimeAgent）
 ┌─────────────────────────────────────────┐
 │           Bun 服务进程                   │
-│  ┌──────────┐  ┌───────┐  ┌─────────┐  │
-│  │ Hono     │─►│ Agent │─►│LLM/Tools│  │
-│  │ Server   │  │ Loop  │  │         │  │
-│  │ + SSE    │  │       │  │         │  │
-│  │ + Static │  │       │  │         │  │
-│  └────┬─────┘  └───────┘  └─────────┘  │
-│       │ HTTP + SSE                       │
+│  ┌──────────┐  ┌────────────────────┐  │
+│  │ Hono     │─►│ RuntimeAgent(s)    │  │
+│  │ Server   │  │ (共享 Cordis 运行时) │  │
+│  │ + SSE    │  └────────────────────┘  │
+│  │ + Static │                          │
+│  └────┬─────┘                          │
+│       │ HTTP + SSE                     │
 └───────┼─────────────────────────────────┘
         │
    ┌────▼─────┐
@@ -91,12 +97,7 @@
    │ (React)  │
    └──────────┘
 
-模式 3: 编译二进制模式（单进程）
-┌─────────────────────────────────────────┐
-│         fengagent (.cli 二进制)          │
-│  Bun runtime + 所有代码（编译打包）       │
-│  支持: CLI 模式 / serve 模式             │
-└─────────────────────────────────────────┘
+模式 3: 编译二进制模式（单进程，同模式 1/2 的能力）
 ```
 
 ### 1.3 Monorepo 包结构
@@ -104,22 +105,29 @@
 ```
 FengAgentCli/
 ├── packages/
-│   ├── shared/          # 共享：类型、工具函数、常量
-│   ├── core/            # 核心：接口定义、Zod Schema
-│   ├── llm/             # LLM：Provider 抽象、流式调用
-│   ├── tools/           # 工具：注册、执行、权限、内置工具
+│   ├── shared/          # 共享：类型、工具函数、常量、resolveDataRoot（数据根）
+│   ├── core/            # 核心：接口定义、Zod Schema（零运行时依赖）
+│   ├── llm/             # LLM：Provider 抽象、流式调用、ReloadableLLMClient
+│   ├── tools/           # 工具：注册、执行、权限、内置工具、MCP、Hook
 │   ├── context/         # 上下文：压缩、记忆、系统上下文
-│   ├── agent/           # Agent：Loop、会话、状态管理
-│   ├── server/          # 服务：Hono HTTP API + SSE
-│   ├── cli/             # CLI：Ink TUI、命令行
-│   └── web-ui/          # WebUI：React + Vite 前端
-├── docs/                # 文档（PRD、架构、开发指南）
-├── scripts/             # 构建、开发脚本
-├── .fengagent/          # 项目级配置（可选）
+│   ├── agent/           # Agent：Loop、SessionStore、状态管理
+│   ├── cordis/          # ★ Cordis 集成层：插件域类型 + 服务 + 适配器 + createRuntime
+│   ├── graph/           # ★ Graph Engineering：对话即节点 / 溯源 / 回退（零运行时依赖）
+│   ├── events/          # ★ 事件溯源：EventStore / 投影 / 双写 / 导出导入 / 重建 / 迁移
+│   ├── cli/             # CLI：Ink TUI、命令、createRuntimeAgent 装配入口
+│   ├── server/          # 服务：Hono HTTP API + SSE + /graph /rollback 端点
+│   ├── eval/            # Agent 测评模块（LLM Trace 分析）
+│   └── web-ui/          # WebUI：React + Vite 前端（含对话图面板）
+├── docs/                # 文档（PRD、架构、操作手册、在线文档站）
+├── scripts/             # 构建、开发、事件迁移（events-migrate.ts）脚本
+├── .fengagent-cordis/   # 分支级数据根（运行时生成，已 gitignore）
 ├── package.json         # Workspace 根配置
-├── tsconfig.json        # TS 配置（路径映射）
+├── tsconfig.json        # TS 配置（路径映射，含 cordis vendor paths）
 └── README.md
 ```
+
+> `packages/cordis/vendor/` 内置（vendored）`@deepseek-ai/cordis` + `@deepseek-ai/cosmokit` +
+> `@standard-schema/spec`，离线可用（tsconfig `paths` 指向 vendor）。
 
 ---
 
@@ -128,1298 +136,476 @@ FengAgentCli/
 ### 2.1 包依赖图
 
 ```
-                    ┌──────────┐
-                    │  shared  │  ← 零依赖（类型、工具函数）
-                    └────┬─────┘
-                         │
-                    ┌────┴─────┐
-                    │   core   │  ← 仅依赖 shared（接口定义、Zod Schema）
-                    └────┬─────┘
-                         │
-          ┌──────────────┼──────────────┐
-          │              │              │
-     ┌────┴────┐   ┌────┴────┐   ┌────┴────┐
-     │   llm   │   │  tools  │   │ context │  ← 各依赖 core
-     └────┬────┘   └────┬────┘   └────┬────┘
-          │              │              │
-          └──────────────┼──────────────┘
-                         │
-                    ┌────┴────┐
-                    │  agent  │  ← 依赖 llm + tools + context + core
-                    └────┬────┘
-                         │
-              ┌──────────┴──────────┐
-              │                     │
-         ┌────┴────┐          ┌────┴────┐
-         │ server  │          │   cli   │  ← 各依赖 agent
-         └─────────┘          └─────────┘
-              │
-         ┌────┴────┐
-         │ web-ui  │  ← 独立前端，不依赖后端包（通过 HTTP 通信）
-         └─────────┘
+                ┌──────────┐
+                │  shared  │  ← 零依赖（工具函数、常量、数据根）
+                └────┬─────┘
+                     │
+                ┌────┴─────┐
+                │   core   │  ← 仅依赖 shared（接口定义、Zod Schema）
+                └────┬─────┘
+                     │
+      ┌──────────────┼──────────────┐
+      │              │              │
+ ┌────┴────┐   ┌────┴────┐   ┌────┴────┐
+ │   llm   │   │  tools  │   │ context │  ← 各依赖 core
+ └────┬────┘   └────┬────┘   └────┬────┘
+      │              │              │
+      └──────────────┼──────────────┘
+                     │
+                ┌────┴────┐
+                │  agent  │  ← 依赖 llm + tools + context + core
+                └────┬────┘
+                     │
+      ┌──────────────┼──────────────┐
+      │              │              │
+ ┌────┴────┐   ┌────┴────┐   ┌────┴────┐
+ │ cordis  │   │  graph  │   │ events  │  ← 薄适配既有实现；graph/events 零/低依赖
+ └────┬────┘   └────┬────┘   └────┬────┘
+      └──────────────┼──────────────┘
+                     │
+              ┌──────┴──────┐
+              │ cli / server│  ← 经 createRuntimeAgent 装配 Cordis 运行时
+              └─────────────┘
+              web-ui ← 独立（HTTP 通信）
 ```
 
 ### 2.2 依赖规则
 
-| 包 | 可依赖 | 禁止依赖 |
-|---|--------|---------|
-| `shared` | 无 | 所有其他包 |
-| `core` | `shared` | `llm`、`tools`、`context`、`agent`、`server`、`cli`、`web-ui` |
-| `llm` | `core`、`shared` | `tools`、`context`、`agent`、`server`、`cli`、`web-ui` |
-| `tools` | `core`、`shared` | `llm`、`context`、`agent`、`server`、`cli`、`web-ui` |
-| `context` | `core`、`shared` | `llm`、`tools`、`agent`、`server`、`cli`、`web-ui` |
-| `agent` | `core`、`shared`、`llm`、`tools`、`context` | `server`、`cli`、`web-ui` |
-| `server` | `agent`、`core`、`shared` | `cli`、`web-ui` |
-| `cli` | `agent`、`core`、`shared` | `server`、`web-ui` |
-| `web-ui` | 无（独立前端） | 所有后端包 |
-
-### 2.3 模块内部依赖
-
-#### Agent 模块内部
-
-```
-agent/
-├── loop.ts ◄──── 核心循环
-│   ├── 调用 ──► llm/client.ts (stream)
-│   ├── 调用 ──► tools/executor.ts (execute)
-│   ├── 调用 ──► context/manager.ts (assemble, compact)
-│   └── 管理 ──► session.ts (持久化)
-│
-├── agent.ts ◄──── Agent 类（状态 + 事件）
-│   ├── 持有 ──► loop.ts
-│   ├── 持有 ──► steering.ts (消息队列)
-│   └── 发射 ──► AgentEvent 事件流
-│
-├── session.ts ◄──── 会话管理
-│   ├── 持久化 ──► SQLite (bun:sqlite)
-│   └── 恢复 ──► 从 DB 加载历史消息
-│
-└── streaming.ts ◄──── 流式处理
-    └── 转换 ──► LLMEvent → AgentEvent
-```
-
-#### Tools 模块内部
-
-```
-tools/
-├── registry.ts ◄──── 注册中心
-│   ├── register(tool) ──► 存入 Map
-│   ├── get(name) ──► 查询
-│   └── materialize(perms) ──► 过滤 + 返回定义列表
-│
-├── executor.ts ◄──── 执行器
-│   ├── 分组 ──► 并行安全 vs 串行
-│   ├── 权限 ──► permission.ts 检查
-│   ├── 执行 ──► tool.execute(input, ctx)
-│   └── 截断 ──► truncate.ts 限制输出
-│
-├── permission.ts ◄──── 权限系统
-│   ├── 自动批准检查
-│   ├── 询问用户（通过回调）
-│   └── 缓存决策
-│
-└── builtin/ ◄──── 内置工具
-    ├── file-read.ts
-    ├── file-write.ts
-    ├── file-edit.ts
-    ├── bash.ts
-    ├── glob.ts
-    ├── grep.ts
-    ├── web-fetch.ts
-    ├── web-search.ts
-    └── task.ts (多 Agent)
-```
-
-#### LLM 模块内部
-
-```
-llm/
-├── client.ts ◄──── LLMClient 接口
-│   ├── stream(request) ──► AsyncGenerator<LLMEvent>
-│   └── generate(request) ──► Promise<LLMResponse>
-│
-├── route.ts ◄──── 路由抽象
-│   ├── Protocol: anthropic-messages | openai-chat | openai-compatible
-│   ├── Endpoint: baseURL + path
-│   └── Auth: API Key / OAuth / Bearer
-│
-├── providers/ ◄──── Provider 实现
-│   ├── anthropic.ts  ──► Anthropic Messages API
-│   ├── openai.ts     ──► OpenAI Chat Completions API
-│   ├── openai-compatible.ts ──► 通用 OpenAI 兼容 API
-│   ├── google.ts     ──► Google Gemini API
-│   ├── bedrock.ts    ──► AWS Bedrock API
-│   └── index.ts      ──► Provider 注册表
-│
-└── stream.ts ◄──── 流式解析
-    ├── SSE 帧解析
-    ├── 事件解码 (provider-specific → LLMEvent)
-    └── 错误处理 + 重试
-```
+- `shared` / `core` — 零外部包依赖；
+- `llm` / `tools` / `context` — 仅依赖 `core` / `shared`；
+- `agent` — 依赖 `core` / `shared` / `llm` / `tools` / `context`；
+- `graph` — 零运行时依赖（纯图机制）；
+- `events` — 依赖 `shared`（数据根）+ `agent`（读模型接口）；
+- `cordis` — vendored cordis + 依赖各既有实现包；
+- `server` — 依赖 `agent` / `core` / `shared` / `cordis`；
+- `cli` — 依赖 `agent` / `core` / `shared` / `cordis` / `graph` / `events`；
+- `web-ui` — 独立前端，通过 HTTP API 通信；
+- **禁止循环依赖**。
 
 ---
 
-## 3. 数据流设计
-
-### 3.1 核心数据流：用户输入 → 响应输出
-
-```
-用户输入 "帮我读取 package.json"
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 1. 输入处理                                                  │
-│    ├── CLI: Ink TextInput → onSubmit(text)                  │
-│    └── WebUI: React Input → POST /api/sessions/:id/messages │
-│    结果: { role: "user", content: [{ type: "text", text }] }│
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 2. Agent Loop 入口                                          │
-│    agent.prompt(text)                                       │
-│    ├── 创建 user Message                                    │
-│    ├── 持久化到 Session                                      │
-│    └── 进入 loop()                                           │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 3. 上下文组装                                                │
-│    contextManager.assemble(session)                         │
-│    ├── 加载系统提示 (AGENTS.md, 日期, 技能)                  │
-│    ├── 加载对话历史 (从 SQLite)                              │
-│    ├── 检查 Token 数量                                       │
-│    └── 如果超阈值 → compact() 压缩                           │
-│    结果: { system, messages, tokenCount }                   │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 4. 工具准备                                                  │
-│    toolRegistry.materialize(permissions)                    │
-│    ├── 收集所有已注册工具                                    │
-│    ├── 过滤被禁用的工具                                      │
-│    └── 转换为 LLM 可理解的 ToolDefinition[]                  │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 5. LLM 调用（流式）                                          │
-│    llmClient.stream({                                       │
-│      model, system, messages, tools, maxTokens, ...         │
-│    })                                                       │
-│    │                                                        │
-│    ├── 事件: text-delta  ──► 实时输出到 TUI/WebUI           │
-│    ├── 事件: thinking-delta ──► 思考过程（可选展示）         │
-│    ├── 事件: tool-call   ──► 解析工具调用                    │
-│    ├── 事件: usage       ──► 记录 Token 消耗                │
-│    └── 事件: finish      ──► 本轮结束                        │
-│    │                                                        │
-│    ▼ (如果有 tool-call 事件)                                 │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 6. 工具执行                                                  │
-│    toolExecutor.execute(toolCalls)                          │
-│    ├── 分组: 并行安全工具 vs 串行工具                        │
-│    ├── 权限检查: 自动批准 / 询问用户                         │
-│    ├── 执行: tool.execute(input, context)                   │
-│    ├── 截断: 超长结果溢出到文件                              │
-│    └── 返回: ToolResult[]                                   │
-│    │                                                        │
-│    ├── 工具: file-read("package.json")                      │
-│    │   └── 读取文件内容 → ToolResult { content: "..." }     │
-│    │                                                        │
-│    └── 结果注入到消息历史                                    │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 7. 循环判断                                                  │
-│    if (有工具调用 && 未达最大轮次)                           │
-│      → needsContinuation = true → 回到步骤 3                 │
-│    else                                                     │
-│      → needsContinuation = false → 退出循环                 │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 8. 输出交付                                                  │
-│    CLI:  Ink 渲染 Markdown + 代码高亮                       │
-│    WebUI: SSE 推送 → React 渲染                             │
-│    └── 持久化完整响应到 Session                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 3.2 流式事件序列
-
-```
-时间轴 ──────────────────────────────────────────────────────►
-
-用户发送消息
-    │
-    ▼
-[session-start] ──► [message-start (user)]
-    │
-    ▼
-[message-start (assistant)]
-    │
-    ├─► [text-delta "我"] ─► [text-delta "来"] ─► [text-delta "读取"]
-    │        │                  │                   │
-    │        ▼                  ▼                   ▼
-    │     TUI/WebUI 实时渲染流式文本
-    │
-    ├─► [tool-call-start (file-read, {path:"package.json"})]
-    │        │
-    │        ▼
-    │     权限检查 ──► [permission-request]
-    │        │
-    │        ▼ (用户批准)
-    │     [tool-call-result (content: "{...}")]
-    │        │
-    │        ▼
-    │     TUI/WebUI 渲染工具调用卡片
-    │
-    ├─► [text-delta "这是 package.json 的内容..."]
-    │
-    ├─► [usage (input: 1200, output: 350)]
-    │
-    ▼
-[message-end (assistant)]
-    │
-    ▼
-[turn-end (reason: "end_turn")]
-    │
-    ▼
-[session-end] (如果会话结束)
-```
-
-### 3.3 上下文压缩数据流
-
-```
-对话历史: [msg1, msg2, msg3, ..., msg50, msg51, msg52]
-                                                        │
-                                                        ▼
-                                              Token 估算
-                                                        │
-                                         ┌──────────────┴──────────────┐
-                                         │                             │
-                                    超阈值?                         未超阈值
-                                         │                             │
-                                         ▼                             │
-                                   选择分割点                          │
-                                   keepTokens = 8000                   │
-                                         │                             │
-                              ┌──────────┴──────────┐                  │
-                              │                     │                  │
-                           head 段               recent 段             │
-                        [msg1..msg44]        [msg45..msg52]            │
-                              │                     │                  │
-                              ▼                     │                  │
-                        摘要生成                     │                  │
-                        (LLM 调用)                  │                  │
-                              │                     │                  │
-                              ▼                     │                  │
-                        结构化摘要                  │                  │
-                        {                          │                  │
-                          目标,                     │                  │
-                          完成的工作,                │                  │
-                          当前状态,                  │                  │
-                          下一步,                    │                  │
-                          相关文件                   │                  │
-                        }                          │                  │
-                              │                     │                  │
-                              └────────┬────────────┘                  │
-                                       │                               │
-                                       ▼                               │
-                              压缩后历史                               │
-                              [summary_msg, msg45..msg52]              │
-                                       │                               │
-                                       └───────────────────────────────┘
-                                       │
-                                       ▼
-                              传递给 LLM 调用
-```
-
-### 3.4 多 Agent 数据流
-
-```
-用户: "帮我重构 auth 模块并添加测试"
-    │
-    ▼
-Agent (主)
-    │
-    ├── 分析任务，决定派遣子 Agent
-    │
-    ├── Tool Call: task({
-    │     description: "重构 auth 模块",
-    │     prompt: "将 auth 模块重构为...",
-    │     subagent_type: "coder"
-    │   })
-    │
-    │   ┌─────────────────────────────────────────┐
-    │   │  子 Agent (coder)                        │
-    │   │  ├── 独立 Session（继承工具/权限）        │
-    │   │  ├── 独立上下文（不共享主 Agent 历史）    │
-    │   │  ├── 执行: 读取文件 → 编辑 → 验证        │
-    │   │  └── 返回: <task_result>...</task_result>│
-    │   └─────────────────────────────────────────┘
-    │
-    ├── 接收子 Agent 结果
-    │
-    ├── Tool Call: task({
-    │     description: "添加 auth 测试",
-    │     prompt: "为重构后的 auth 模块添加测试...",
-    │     subagent_type: "coder"
-    │   })
-    │
-    │   ┌─────────────────────────────────────────┐
-    │   │  子 Agent (coder)                        │
-    │   │  └── 返回: <task_result>测试已添加</...> │
-    │   └─────────────────────────────────────────┘
-    │
-    ├── 汇总两个子 Agent 的结果
-    │
-    ▼
-输出: "已完成重构和测试，变更如下..."
-```
-
----
-
-## 4. 扩展点设计
-
-### 4.1 扩展点总览
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  扩展点架构                           │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│  1. 模型扩展 (LLM Provider)                          │
-│     └── 实现 LLMClient 接口 + 注册到 ProviderRegistry│
-│                                                     │
-│  2. 工具扩展 (Tool)                                  │
-│     └── 实现 ToolDefinition 接口 + 注册到 ToolRegistry│
-│                                                     │
-│  3. Agent 扩展 (Agent Definition)                    │
-│     └── Markdown + frontmatter 定义 Agent 角色       │
-│                                                     │
-│  4. 插件扩展 (Plugin)                                │
-│     └── 导出 Plugin 接口，注册多个扩展点              │
-│                                                     │
-│  5. Hook 扩展 (生命周期钩子)                          │
-│     └── 注册 PreToolUse / PostToolUse / PreCompact  │
-│                                                     │
-│  6. MCP 扩展 (外部工具服务器)                         │
-│     └── 配置 MCP Server，自动发现工具                 │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```
-
-### 4.2 添加新模型 Provider
-
-```typescript
-// 1. 实现 LLMClient 接口
-// packages/llm/providers/my-provider.ts
-
-import { LLMClient, LLMRequest, LLMEvent } from "@fengagent/core";
-
-export class MyProviderClient implements LLMClient {
-  constructor(private apiKey: string, private baseUrl: string) {}
-
-  async *stream(request: LLMRequest): AsyncGenerator<LLMEvent> {
-    // 1. 将 LLMRequest 转换为 Provider 特有的请求格式
-    const providerRequest = this.convertRequest(request);
-
-    // 2. 发起 HTTP 请求（SSE 流）
-    const response = await fetch(`${this.baseUrl}/chat`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(providerRequest),
-    });
-
-    // 3. 解析 SSE 流，转换为统一的 LLMEvent
-    for await (const chunk of this.parseSSEStream(response.body!)) {
-      yield this.convertEvent(chunk);
-    }
-  }
-
-  private convertRequest(req: LLMRequest): unknown { /* ... */ }
-  private convertEvent(chunk: unknown): LLMEvent { /* ... */ }
-  private async *parseSSEStream(body: ReadableStream) { /* ... */ }
-}
-
-// 2. 注册 Provider
-// packages/llm/providers/index.ts
-
-import { MyProviderClient } from "./my-provider";
-
-export const providerRegistry = {
-  anthropic: (config) => new AnthropicClient(config),
-  openai: (config) => new OpenAIClient(config),
-  "my-provider": (config) => new MyProviderClient(config.apiKey, config.baseUrl),
-};
-
-// 3. 通过环境变量使用
-// FENG_PROVIDER=my-provider
-// MY_PROVIDER_API_KEY=xxx
-// MY_PROVIDER_BASE_URL=https://api.example.com
-```
-
-### 4.3 添加新工具
-
-```typescript
-// 1. 实现 ToolDefinition 接口
-// packages/tools/builtin/my-tool.ts
-
-import { ToolDefinition } from "@fengagent/core";
-import { z } from "zod";
-
-export const myTool: ToolDefinition<{ query: string }, { result: string }> = {
-  name: "search-docs",
-  description: "搜索项目文档中的内容",
-  inputSchema: z.object({
-    query: z.string().describe("搜索关键词"),
-  }),
-
-  isReadOnly: () => true,
-  isConcurrencySafe: () => true,
-
-  async execute(input, context) {
-    const results = await searchInDocs(input.query, context.workdir);
-    return {
-      content: results.map(r => r.text).join("\n"),
-      metadata: { count: results.length },
-    };
-  },
-
-  renderUse: (input) => `搜索文档: "${input.query}"`,
-};
-
-// 2. 注册到工具注册表
-// packages/tools/builtin/index.ts
-
-import { myTool } from "./my-tool";
-import { registry } from "../registry";
-
-registry.register(myTool);
-
-// 3. 工具自动出现在 LLM 的可用工具列表中
-```
-
-### 4.4 添加新 Agent
-
-```markdown
-<!-- .fengagent/agents/code-reviewer.md -->
----
-name: code-reviewer
-description: 代码审查专家，擅长发现 bug 和改进建议
-model: claude-sonnet-4-20250514
-tools:
-  - file-read
-  - grep
-  - glob
-max_turns: 20
----
-
-你是一个代码审查专家。你的职责：
-
-1. 阅读代码并识别潜在 bug
-2. 检查代码风格和最佳实践
-3. 提出改进建议
-4. 验证逻辑正确性
-
-审查时请关注：
-- 边界条件处理
-- 错误处理完整性
-- 类型安全
-- 性能问题
-```
-
-```typescript
-// Agent 定义在启动时自动加载 .fengagent/agents/*.md
-// 使用 frontmatter 解析配置，body 作为系统提示
-
-// 通过 task 工具派遣
-// task({ description: "审查 auth 模块", prompt: "...", subagent_type: "code-reviewer" })
-```
-
-### 4.5 插件系统（Stage 4）
-
-```typescript
-// 插件接口设计（参考 opencode plugin + pi extension）
-
-interface FengPlugin {
-  name: string;
-  version: string;
-
-  // 初始化
-  init?(context: PluginContext): Promise<void>;
-
-  // 注册扩展点
-  registerTools?(registry: ToolRegistry): void;
-  registerProviders?(registry: ProviderRegistry): void;
-  registerHooks?(registry: HookRegistry): void;
-  registerCommands?(registry: CommandRegistry): void;
-}
-
-interface PluginContext {
-  config: Config;
-  workdir: string;
-  logger: Logger;
-}
-
-// 插件加载
-// .fengagent/plugins/my-plugin/index.ts
-
-import { FengPlugin } from "@fengagent/core";
-
-export default class MyPlugin implements FengPlugin {
-  name = "my-plugin";
-  version = "1.0.0";
-
-  async init(ctx: PluginContext) {
-    // 初始化逻辑
-  }
-
-  registerTools(registry: ToolRegistry) {
-    registry.register(myCustomTool);
-  }
-
-  registerHooks(registry: HookRegistry) {
-    registry.register("pre-tool-use", (toolName, input) => {
-      console.log(`工具 ${toolName} 即将执行`);
-      return { allowed: true };
-    });
-  }
-}
-```
-
-### 4.6 Hook 系统（Stage 4）
-
-```typescript
-// 生命周期 Hook 注册
-
-interface HookRegistry {
-  // 工具执行前（可阻止）
-  register(event: "pre-tool-use", handler: PreToolUseHook): void;
-
-  // 工具执行后（可修改结果）
-  register(event: "post-tool-use", handler: PostToolUseHook): void;
-
-  // 压缩前（可修改压缩策略）
-  register(event: "pre-compact", handler: PreCompactHook): void;
-
-  // 压缩后（可修改摘要）
-  register(event: "post-compact", handler: PostCompactHook): void;
-
-  // 会话开始
-  register(event: "session-start", handler: SessionStartHook): void;
-
-  // 轮次结束
-  register(event: "turn-end", handler: TurnEndHook): void;
-}
-
-type PreToolUseHook = (
-  toolName: string,
-  input: unknown,
-  context: HookContext
-) => Promise<{ allowed: boolean; reason?: string }>;
-
-type PostToolUseHook = (
-  toolName: string,
-  input: unknown,
-  result: ToolResult,
-  context: HookContext
-) => Promise<ToolResult>; // 可修改结果
-```
-
----
-
-## 5. 配置系统设计
-
-### 5.1 配置分层架构
-
-```
-配置优先级（从低到高）:
-
-┌────────────────────────────────────────────┐
-│ 1. 内置默认值 (DEFAULT_CONFIG)              │  ← 代码中定义
-│    model: "claude-sonnet-4-20250514"       │
-│    maxTokens: 8192                          │
-│    contextWindow: 200000                    │
-│    ...                                      │
-└────────────────────┬───────────────────────┘
-                     │ 覆盖
-┌────────────────────┴───────────────────────┐
-│ 2. 全局配置 (~/.fengagent/config.json)      │  ← 用户级
-│    { "model": "gpt-4o", "maxTokens": 4096 }│
-└────────────────────┬───────────────────────┘
-                     │ 覆盖
-┌────────────────────┴───────────────────────┐
-│ 3. 项目配置 (./.fengagent/config.json)      │  ← 项目级
-│    { "model": "claude-opus-4" }            │
-└────────────────────┬───────────────────────┘
-                     │ 覆盖
-┌────────────────────┴───────────────────────┐
-│ 4. 环境变量 (FENG_*)                        │  ← 运行时
-│    FENG_MODEL=claude-3-haiku               │
-│    FENG_SERVER_PORT=8080                    │
-└────────────────────┬───────────────────────┘
-                     │ 覆盖
-┌────────────────────┴───────────────────────┐
-│ 5. 命令行参数 (--model, --port)             │  ← 最高优先级
-│    fengagent --model gpt-4o --port 3000    │
-└────────────────────────────────────────────┘
-```
-
-### 5.2 配置 Schema
-
-```typescript
-// packages/core/src/config.ts
-
-import { z } from "zod";
-
-export const ConfigSchema = z.object({
-  // 模型配置
-  model: z.string().default("claude-sonnet-4-20250514"),
-  smallModel: z.string().default("claude-haiku-3"),
-  provider: z.string().default("anthropic"),
-  fallbackModel: z.string().optional(),
-  maxTokens: z.number().default(8192),
-  temperature: z.number().default(1.0),
-
-  // 上下文配置
-  contextWindow: z.number().default(200000),
-  compactThreshold: z.number().default(0.85),
-  compactKeepTokens: z.number().default(8000),
-  compactBuffer: z.number().default(20000),
-  disableCompact: z.boolean().default(false),
-  toolOutputMaxChars: z.number().default(2000),
-
-  // 服务配置
-  serverPort: z.number().default(3000),
-  serverHost: z.string().default("127.0.0.1"),
-  corsOrigin: z.string().default("*"),
-
-  // 工具配置
-  autoApproveTools: z.boolean().default(false),
-  allowedTools: z.string().default("*"),
-  deniedTools: z.string().optional(),
-  bashTimeout: z.number().default(120000),
-  maxToolConcurrency: z.number().default(10),
-
-  // 运行配置
-  maxTurns: z.number().default(50),
-  logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  dataDir: z.string().default("~/.fengagent"),
+## 3. Cordis 插件化运行时
+
+Cordis 是元框架（Meta-Framework）：只负责「插件生命周期 + 依赖注入 + 事件总线 + 服务注册」，
+业务全部由插件表达。本分支把 Cordis 作为**一等公民**，Agent 的模型、工具、策略、存储、
+上下文、Loop、图、事件全部挂在 `ctx.*` 上，可插拔、可替换。
+
+### 3.1 核心概念
+
+| 概念 | 说明 |
+|------|------|
+| `Context` | 可继承/隔离/拦截的作用域容器 |
+| `Service` | 挂在 ctx 上的具名服务（`ctx.model`、`ctx.tools`…），可被其他插件注入/替换 |
+| `Plugin` | 函数/类/对象三种形态，通过 `ctx.plugin(plugin, config)` 装载 |
+| `inject` | 插件声明依赖的服务，依赖就绪后才启动（声明式装配，顺序无关） |
+| 生命周期 | load → start（依赖满足后）→ effect / dispose（逆序卸载） |
+
+### 3.2 插件域（挂到 ctx 上的服务）
+
+| 域 | 服务名 | 职责 | 适配的既有实现 |
+|---|---|---|---|
+| 模型 | `ctx.model` | LLM 调用、provider/model 热切换 | `@fengagent/llm`（LLMClient / ReloadableLLMClient） |
+| 工具 | `ctx.tools` | 工具注册 / 查询 / 物化 / 执行 | `@fengagent/tools`（ToolRegistry） |
+| 策略 | `ctx.strategy` | 压缩策略 / 工具选择策略 / 回退策略 | 既有压缩阈值逻辑 + `DefaultRollbackStrategy` |
+| 存储 | `ctx.storage` | 会话持久化 + 图存储（双写） | `@fengagent/agent`（SessionStore）+ `DualWriteSessionStore` |
+| 上下文 | `ctx.context` | 组装 / 压缩 / 记忆 / 系统上下文 | `@fengagent/context`（ContextManager） |
+| Agent Loop | `ctx.loop` | agent loop 本身作为插件，注入上述服务驱动循环 | `@fengagent/agent`（AgentLoop） |
+| 图 | `ctx.graph` | 对话可溯源 / 对话即节点 / 可回退 | `@fengagent/graph`（GraphStore）+ `EventGraphStore` |
+| 事件 | `ctx.eventLog` | 事件溯源服务（事件总线由 cordis 占用 `ctx.events`） | `@fengagent/events`（EventStore） |
+| 重建 | `ctx.rebuild` | 以事件为准重建读模型 | `@fengagent/events`（rebuild.ts） |
+
+内置插件 id：`feng.model` / `feng.tools` / `feng.strategy` / `feng.storage` / `feng.context` /
+`feng.loop` / `feng.graph` / `feng.events` / `feng.rebuild`。
+
+### 3.3 配置驱动的运行时引导
+
+```ts
+// packages/cordis/src/runtime.ts — createRuntime
+const runtime = createRuntime({
+  workdir: ".",
+  plugins: [
+    { id: "feng.model",    config: { provider, model, createClient } },
+    { id: "feng.tools",    config: { tools: [/* 内置工具 */] } },
+    { id: "feng.strategy", config: { contextWindow, compactThreshold } },
+    { id: "feng.context",  config: { manager } },
+    { id: "feng.storage",  config: { dbPath, graphPath } },
+    { id: "feng.graph" },
+    { id: "feng.loop",     config: { config: { maxTurns, maxTokens, temperature }, workdir } },
+    // 用户插件：id 为模块路径，动态 import
+    // { id: "./.fengagent/plugins/my-plugin.ts" },
+  ],
 });
-
-export type Config = z.infer<typeof ConfigSchema>;
+await runtime.start();   // 按依赖注入顺序装载全部插件
+await runtime.stop();    // 逆序卸载
 ```
 
-### 5.3 配置加载流程
+- 插件顺序无关：`feng.loop` 声明 `inject: ["model","tools","context","strategy","graph"]`，
+  依赖服务就绪后才启动（Cordis 声明式装配）；
+- 换插件即换能力：把 `feng.loop` 换成 Graph 编排器、把 `feng.strategy` 换成 LLM-as-judge
+  回退策略，其余插件不受影响。
 
-```typescript
-// packages/agent/src/config-loader.ts
+### 3.4 CLI/Server 装配（createRuntimeAgent）
 
-export async function loadConfig(
-  cliArgs: Partial<Config>
-): Promise<Config> {
-  // 1. 内置默认值
-  let config = ConfigSchema.parse({});
+- `packages/cli/src/create-runtime-agent.ts`：`createRuntimeAgent()` 把模型/工具/策略/存储/
+  上下文/图/loop/事件全部经 Cordis 插件装配；`RuntimeAgent` 继承既有 `Agent` 接口
+  （prompt / resume / compactSession / loadSession / listSessions / getToolNames …），
+  `prompt` 经 `ctx.loop` 驱动（对话即节点、可溯源），持久化经 `ctx.storage`（双写）。
+- `packages/cli/src/create-agent.ts` 保留旧接口（`createAgent` / `reloadProvider` /
+  `buildEnvForLLM`），实现委托给 `createRuntimeAgent`；`/model`、`/provider` 经
+  `ctx.model.switchProvider` 切换（onSwitch 同步重建 client，热加载立即生效）。
+- `packages/cli/src/entry.ts`：`serve` 子命令共享 runtime + 每会话 RuntimeAgent；
+  `print` 模式走同一条链路。
+- `packages/server/src/create-runtime-agent.ts`：Server 侧同样以 Cordis 运行时装配
+  `RuntimeAgent`，`SessionManager` 经 `GraphAgentLike` 扩展面读取图能力。
 
-  // 2. 全局配置
-  const globalConfig = await readJsonFile("~/.fengagent/config.json");
-  config = { ...config, ...globalConfig };
+---
 
-  // 3. 项目配置（向上查找）
-  const projectConfig = await findAndReadConfig(".fengagent/config.json");
-  config = { ...config, ...projectConfig };
+## 4. 对话图（Graph Engineering）
 
-  // 4. 环境变量
-  config = applyEnvVars(config, process.env);
+### 4.1 数据模型
 
-  // 5. 命令行参数
-  config = { ...config, ...cliArgs };
-
-  // 最终校验
-  return ConfigSchema.parse(config);
-}
-
-function applyEnvVars(config: Config, env: Record<string, string>): Config {
-  return {
-    ...config,
-    model: env.FENG_MODEL ?? config.model,
-    provider: env.FENG_PROVIDER ?? config.provider,
-    maxTokens: env.FENG_MAX_TOKENS ? parseInt(env.FENG_MAX_TOKENS) : config.maxTokens,
-    contextWindow: env.FENG_CONTEXT_WINDOW
-      ? parseInt(env.FENG_CONTEXT_WINDOW) : config.contextWindow,
-    serverPort: env.FENG_SERVER_PORT
-      ? parseInt(env.FENG_SERVER_PORT) : config.serverPort,
-    // ... 其他环境变量映射
+```ts
+interface ConversationNode {
+  id: string;              // 节点 id（gnode-*）
+  conversationId: string;  // 所属会话
+  type: "user" | "assistant" | "tool" | "branch-point";
+  messageId: string;       // 关联会话历史 Message.id
+  parentId: string | null; // 溯源：父节点
+  childrenIds: string[];   // 子节点（按创建顺序）
+  createdAt: number;
+  meta: {
+    model?: string;        // 用哪个模型回答的
+    toolCalls?: { id: string; name: string }[];
+    tokenCount?: number;
+    llmTraceId?: string;   // 关联 LLM trace 日志
+    quality?: "good" | "poor" | "unrated";
+    qualityNote?: string;  // 质量/回退原因
+    branch?: string;       // 分支标签
+    active?: boolean;      // 是否在活跃路径上
+    rolledBack?: boolean;  // 是否因回退作废（保留但不可变）
   };
 }
 ```
 
-### 5.4 配置文件示例
+### 4.2 操作
 
-```jsonc
-// ~/.fengagent/config.json
-{
-  // 默认模型
-  "model": "claude-sonnet-4-20250514",
+- `appendNode`：追加节点，自动维护 parent/children 链接；
+- `getChain(nodeId)`：从根到任意节点的完整溯源链；
+- `getActivePath(conversationId)`：当前活跃分支；
+- `markQuality(nodeId, quality, note?)`：记录节点质量；
+- `rollbackTo(nodeId, reason?)`：活跃路径回退到目标节点 → 目标下长出 `branch-point` →
+  旧分支作废但保留；
+- `RuntimeAgent.rollbackAndRetry(nodeId, reason)`：CLI `/rollback`、WebUI 回退按钮的底座。
 
-  // 小模型（压缩/摘要用）
-  "smallModel": "claude-haiku-3",
+### 4.3 回退策略（可插拔）
 
-  // 上下文窗口
-  "contextWindow": 200000,
-  "compactThreshold": 0.85,
-  "compactKeepTokens": 8000,
+`RollbackStrategy` 接口：`shouldRollback(signal)` / `chooseTarget(node)`。
+默认策略：用户显式负反馈、节点内工具错误 ≥ 阈值、或质量分过低 → 回退到父节点（用户提问处）重答。
+未来可替换为 LLM-as-judge 自动评估（`qualityToSignal` 已提供归一化信号）。
 
-  // 工具权限
-  "autoApproveTools": false,
-  "allowedTools": "*",
-  "bashTimeout": 120000,
+### 4.4 持久化
 
-  // 日志
-  "logLevel": "info"
-}
+- `MemoryGraphStore`（`packages/graph/src/store.ts`）支持 JSONL 落盘；
+- 事件溯源分支下，`EventGraphStore`（`packages/events/src/event-graph-store.ts`）以事件日志为
+  事实源，读路径每次重放投影，`flush` 把「派生视图 + 无事件会话的遗留节点」整写到
+  `<数据根>/graph.jsonl`；无事件会话读 legacy 节点兼容。
+
+### 4.5 界面
+
+- **CLI**：`/graph`（同步展示节点/活跃路径/溯源链）、`/rollback [节点id]`（回退到父节点并
+  自动重答）；`/` 联想补全列表自动包含新命令；
+- **WebUI**：`components/graph-panel.tsx` 分支可视化（节点树 + 活跃高亮 + 回退按钮 +
+  作废分支灰显保留），一键回退后自动刷新会话与图；
+- **Server**：`GET /api/sessions/:id/graph`、`POST /api/sessions/:id/rollback`。
+
+---
+
+## 5. 事件溯源（Event Sourcing）
+
+会话事实的唯一来源是事件日志：`<数据根>/events/{sessionId}.jsonl`，append-only，一行一条事件
+（带 seq + hash 链）。SQLite `sessions.db` 降级为读模型，可由事件日志全量重建。
+
+### 5.1 词汇表
+
+| 词 | 含义 |
+|---|---|
+| 事件日志（event log） | 会话事实的唯一来源，`events/{sessionId}.jsonl`，append-only，每行一条事件 |
+| 投影（projection） | 从事件日志派生的读模型：会话消息、graph 节点、head、token 统计等 |
+| 重放（replay） | 按 seq 顺序重放事件重建投影（崩溃后自愈 = 容忍尾部半行并跳过） |
+| head | 会话当前分支的链尾，由事件推导，不设可变「当前分支」指针 |
+| 信封（envelope） | 每条事件的公共外壳：version/sessionId/seq/type/timestamp/hash/prevHash |
+
+### 5.2 核心模块（packages/events）
+
+| 文件 | 职责 |
+|------|------|
+| `event-store.ts` | EventStore：每会话单文件 append-only，注册表校验，seq + #5 hash 链，重放，尾部半行崩溃自愈；`importEvents` 幂等去重 |
+| `types.ts` | 事件类型 + `SessionEventBase` 信封（hash/prevHash） |
+| `registry.ts` | 运行时校验注册表：`registerEventType(type, validator)` + 核心事件名常量 |
+| `projection.ts` | 投影：`projectSession`（#2 逻辑复现 + #3 生命周期元数据）、head 推导（#4） |
+| `graph-projection.ts` | graph 投影：user/message→用户节点、step/start→助手节点、rollback/fork→分支点、node/quality→质量事实；active/rolledBack 由 head 链推导 |
+| `dual-write.ts` | DualWriteSessionStore：旧存储 + 事件日志并行写，messageId 幂等，rollback/fork 截断同步 |
+| `reconcile.ts` | 双写对账：事件投影 === 旧 SQLite 逐条等价（含 rollback/fork 截断会话） |
+| `event-graph-store.ts` | EventGraphStore：事件日志为事实源，读路径重放投影，flush 派生视图到 graph.jsonl |
+| `migration.ts` | 事件导出/导入：可移植文件（header + 逐字事件行）+ 校验链 + 幂等去重；`exportStoreEvents` / `importStoreEvents` 整库迁移 |
+| `rebuild.ts` | 以事件为准重建：`rebuildSession` / `rebuildAll`（全量投影重写读模型，脱双写依赖） |
+| `node-ids.ts` | 节点 id 确定性方案（`<sessionId>::<kind>::<ref>`） |
+| `hash.ts` | sha-256 事件链哈希 |
+
+### 5.3 核心决策（#1–#6）
+
+- **#1 运行时校验注册表**：`isSessionEvent` / append 校验走运行时注册表；`declare module` 仅管编译期类型；
+- **#2 复现语义**：默认逻辑复现 — `step/start` 只存请求参数 + 派生锚点，messages 由事件重放推导；
+  `FENG_EVENT_FULL_REQUEST=1` 开启字节级；
+- **#3 会话生命周期入词汇**：`session/created`、`session/title`、`session/status` 事件；
+  事件日志 = 唯一事实源（含元数据），重建不丢标题/状态；
+- **#4 head 确定式推导**：head = 该会话最大 seq 事件所属分支的链尾；回退/分叉后 = 最新
+  `rollback`/`fork` 事件声明 branch 的链尾；
+- **#5 信封补哈希**：`hash`/`prevHash`（sha-256(prevHash+seq+type+payload)），导出/导入直接校验；
+- **#6 图导入区分事实/派生态**：`markQuality` → 事实；`active`/`rolledBack`/branch 为派生态，
+  导入后由投影重算。
+
+### 5.4 写路径 / 重建 / 迁移
+
+- **写路径**：追加事件 → 校验（注册表）→ 计算 hash 链 → append；`turn/end` 后触发投影刷新；
+  Phase 2 起生产双写（STORAGE 插件包 `DualWriteSessionStore`，loop 回合收尾整批落事件）；
+- **重建**：`rebuildSession` 只读事件日志 + 写读模型，绝不追加事件；`rebuildAll --prune`
+  删除事件日志中不存在的孤儿会话；重建后 `reconcileSession` 必须绿；
+- **迁移**：`exportStoreEvents` → 可移植文件（机器无关：ISO-8601 时间戳、UUID sessionId、
+  内容推导 hash）→ 新数据根 `importStoreEvents`（幂等去重）→ `rebuild` → 对账一致；
+  CLI 入口：`bun run scripts/events-migrate.ts export|import|rebuild|verify|list`。
+
+---
+
+## 6. 数据流设计
+
+### 6.1 核心数据流：用户输入 → 响应输出
+
+```
+用户输入
+  │
+  ▼
+CLI TUI / WebUI / ACP
+  │  prompt(text)
+  ▼
+RuntimeAgent.prompt()
+  │  经 ctx.loop 驱动
+  ▼
+AgentLoop（ctx.loop 插件）
+  │  1. ctx.context 组装上下文（系统提示 + 历史 + 记忆）
+  │  2. ctx.strategy 检查压缩阈值 → 需要则压缩
+  │  3. ctx.tools 准备工具列表
+  │  4. ctx.model 调用 LLM（stream）
+  │  5. 解析工具调用 → ctx.tools 执行（权限检查 → 执行 → 截断）
+  │  6. 每回合收尾：ctx.storage（双写）落事件 + 会话
+  │  7. ctx.graph 沉淀对话节点（user/assistant/tool）
+  ▼
+事件日志 events/{sessionId}.jsonl（事实源）
+  ▼
+投影 → sessions.db（读模型）· graph.jsonl（派生视图）
+  ▼
+响应事件流（text-delta / tool-call-* / turn-end / graph-node …）
+  ▼
+CLI TUI 渲染 / WebUI SSE / ACP 流式返回
 ```
 
-```jsonc
-// ./.fengagent/config.json (项目级)
-{
-  // 项目使用更大的上下文
-  "contextWindow": 200000,
+### 6.2 流式事件序列
 
-  // 项目允许的工具
-  "allowedTools": "file-read,file-write,file-edit,bash,glob,grep",
+```
+session-start → message-start → text-delta* → tool-call-* → tool-result*
+→ message-end → graph-node（节点沉淀）→ usage（KV Cache 统计）→ turn-end → session-end
+```
 
-  // 项目自定义 Agent
-  // .fengagent/agents/ 下的 .md 文件自动加载
-}
+### 6.3 回退（Rollback）数据流
+
+```
+用户输入 /rollback [节点id]
+  ▼
+RuntimeAgent.rollbackAndRetry(nodeId, reason)
+  ▼
+ctx.graph.rollbackTo(nodeId)  →  目标下长出 branch-point，旧分支作废（rolledBack 保留）
+  ▼
+ctx.storage 截断会话消息到回退点（DualWrite 同步写 rollback 事件 + deleteMessages）
+  ▼
+以最后一条 rollback 事件时间戳对齐会话 updatedAt（保证对账逐条等价）
+  ▼
+从回退点重新驱动 ctx.loop 重答 → 新分支从 branch-point 长出（← head）
+```
+
+### 6.4 上下文压缩数据流
+
+当对话历史 Token 数超过 `contextWindow * compactThreshold` 时触发：
+
+```
+1. 选择分割点（head 段 + recent 段）
+2. 用 smallModel 摘要 head 段
+3. 替换为摘要消息 + recent 段
+4. 压缩事件（compaction-*）进入事件日志（可溯源）
 ```
 
 ---
 
-## 6. 关键技术方案
+## 7. 配置系统设计
 
-### 6.1 Agent Loop 实现
-
-```typescript
-// packages/agent/src/loop.ts
-
-export class AgentLoop {
-  constructor(
-    private llmClient: LLMClient,
-    private toolRegistry: ToolRegistry,
-    private toolExecutor: ToolExecutor,
-    private contextManager: ContextManager,
-    private config: Config,
-  ) {}
-
-  async *run(session: Session): AsyncGenerator<AgentEvent> {
-    let needsContinuation = true;
-    let step = 0;
-
-    while (needsContinuation && step < this.config.maxTurns) {
-      step++;
-
-      // 1. 组装上下文
-      const context = await this.contextManager.assemble(session);
-
-      // 2. 检查并执行压缩
-      if (this.contextManager.shouldCompact(context)) {
-        yield { type: "compaction-start" };
-        const compacted = await this.contextManager.compact(
-          session.messages,
-          { keepTokens: this.config.compactKeepTokens }
-        );
-        session.messages = [
-          { role: "system", content: [{ type: "text", text: compacted.summary }] },
-          ...compacted.recent,
-        ];
-        yield { type: "compaction-end", summary: compacted.summary };
-      }
-
-      // 3. 准备工具
-      const tools = this.toolRegistry.materialize();
-      // 最后一轮禁用工具
-      const toolChoice = step >= this.config.maxTurns ? "none" : undefined;
-
-      // 4. 调用 LLM
-      const assistantMessage: ContentBlock[] = [];
-      const toolCalls: ToolCall[] = [];
-
-      yield { type: "message-start", messageId: generateId(), role: "assistant" };
-
-      for await (const event of this.llmClient.stream({
-        model: session.model,
-        system: context.system,
-        messages: context.messages,
-        tools: toolChoice === "none" ? undefined : tools,
-        maxTokens: this.config.maxTokens,
-        temperature: this.config.temperature,
-      })) {
-        switch (event.type) {
-          case "text-delta":
-            assistantMessage.push({ type: "text", text: event.text });
-            yield { type: "text-delta", messageId: "", text: event.text };
-            break;
-
-          case "tool-call":
-            toolCalls.push({
-              id: event.id,
-              name: event.name,
-              input: event.input,
-            });
-            yield {
-              type: "tool-call-start",
-              toolUseId: event.id,
-              name: event.name,
-              input: event.input,
-            };
-            break;
-
-          case "usage":
-            yield { type: "usage", ...event };
-            break;
-
-          case "finish":
-            break;
-
-          case "error":
-            yield { type: "error", error: event.error };
-            return;
-        }
-      }
-
-      yield { type: "message-end", messageId: "" };
-
-      // 5. 执行工具
-      if (toolCalls.length > 0) {
-        const results = await this.toolExecutor.executeBatch(toolCalls, session);
-        for (const result of results) {
-          yield {
-            type: "tool-call-result",
-            toolUseId: result.toolUseId,
-            result,
-          };
-        }
-
-        // 将工具结果加入历史
-        session.messages.push(
-          { role: "assistant", content: assistantMessage },
-          ...results.map(r => ({
-            role: "user" as const,
-            content: [{
-              type: "tool-result" as const,
-              toolUseId: r.toolUseId,
-              content: r.content,
-              isError: r.isError,
-            }],
-          }))
-        );
-
-        needsContinuation = true;
-      } else {
-        // 无工具调用，结束循环
-        session.messages.push({
-          role: "assistant",
-          content: assistantMessage,
-        });
-        needsContinuation = false;
-      }
-
-      yield {
-        type: "turn-end",
-        reason: needsContinuation ? "tool_use" : "end_turn",
-      };
-    }
-  }
-}
-```
-
-### 6.2 流式输出方案
-
-#### CLI 模式（进程内）
+### 7.1 配置分层
 
 ```
-Agent Loop ──► AsyncGenerator<AgentEvent>
-                    │
-                    ▼
-              Ink TUI Component
-              ├── useAgentEvent() Hook
-              ├── 实时更新消息列表
-              └── 渲染工具调用卡片
+CLI 参数 > 环境变量（FENG_*）> 全局 ~/.fengagent/config.json
+        > 项目 .fengagent/config.json（main 遗留，只读回退）
+        > 分支级 .fengagent-cordis/config.json（/model /provider 只写这里）
 ```
 
-#### WebUI 模式（HTTP + SSE）
+### 7.2 数据根（resolveDataRoot）
 
 ```
-Browser (React)
-    │
-    ├── POST /api/sessions/:id/messages { content }
-    │        │
-    │        ▼
-    │    Server (Hono)
-    │    ├── agent.prompt(content)
-    │    └── 设置 SSE 响应头
-    │
-    ├── GET /api/sessions/:id/events (SSE 连接)
-    │        │
-    │        ▼
-    │    Server 推送 AgentEvent
-    │    ├── event: text-delta
-    │    │   data: {"text":"..."}
-    │    ├── event: tool-call-start
-    │    │   data: {"name":"...","input":{...}}
-    │    └── event: turn-end
-    │        data: {"reason":"end_turn"}
-    │
-    ▼
-React useSSE() Hook
-    ├── 解析 SSE 事件
-    ├── 更新消息状态
-    └── 渲染 UI
+resolveDataRoot(workdir) =
+  FENG_DATA_DIR（若设置）            # 显式覆盖，优先级最高
+  else 配置文件 dataDir（若自定义）    # .fengagent-cordis/config.json 中的 dataDir
+  else <workdir>/.fengagent-cordis/  # 新分支默认（.gitignore 已加入）
+
+.fengagent-cordis/
+├── sessions.db            # SQLite，表结构不变（schema 层面不破坏 main）
+├── graph.jsonl            # graph 投影快照（Phase 2 起为派生视图）
+├── events/{sessionId}.jsonl   # 事件日志（每会话单文件，append-only）
+├── logs/                  # fengagent-{date}.log / sessions-{date}.jsonl / llm-trace-{date}.jsonl
+├── memory/                # 记忆写入（新分支只写这里）
+└── config.json            # 分支级配置覆盖（/model /provider 只落这里）
 ```
 
-```typescript
-// packages/server/src/routes/stream.ts
+### 7.3 环境变量
 
-import { Hono } from "hono";
-import { streamSSE } from "hono/streaming";
-
-app.post("/api/sessions/:id/messages", async (c) => {
-  const sessionId = c.req.param("id");
-  const { content } = await c.req.json();
-
-  const session = sessionManager.get(sessionId);
-  const agent = agentManager.get(sessionId);
-
-  return streamSSE(c, async (stream) => {
-    const eventStream = agent.prompt(content);
-
-    for await (const event of eventStream) {
-      await stream.writeSSE({
-        event: event.type,
-        data: JSON.stringify(event),
-      });
-    }
-  });
-});
-```
-
-### 6.3 会话持久化方案
-
-```typescript
-// packages/agent/src/session.ts
-
-import { Database } from "bun:sqlite";
-
-export class SessionStore {
-  private db: Database;
-
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        model TEXT,
-        status TEXT,
-        token_count INTEGER,
-        created_at INTEGER,
-        updated_at INTEGER
-      );
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT,
-        role TEXT,
-        content TEXT,  -- JSON serialized ContentBlock[]
-        created_at INTEGER,
-        FOREIGN KEY (session_id) REFERENCES sessions(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_messages_session
-        ON messages(session_id, created_at);
-    `);
-  }
-
-  saveSession(session: Session): void {
-    this.db.query(`
-      INSERT OR REPLACE INTO sessions
-      (id, title, model, status, token_count, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      session.id, session.title, session.model,
-      session.status, session.tokenCount,
-      session.createdAt, session.updatedAt
-    );
-  }
-
-  saveMessage(sessionId: string, message: Message): void {
-    this.db.query(`
-      INSERT INTO messages (id, session_id, role, content, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(
-      message.id, sessionId, message.role,
-      JSON.stringify(message.content),
-      message.createdAt
-    );
-  }
-
-  loadSession(sessionId: string): Session | null {
-    const row = this.db.query("SELECT * FROM sessions WHERE id = ?")
-      .get(sessionId);
-    if (!row) return null;
-
-    const messages = this.db.query(
-      "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at"
-    ).all(sessionId);
-
-    return {
-      ...row,
-      messages: messages.map(m => ({
-        ...m,
-        content: JSON.parse(m.content),
-      })),
-    };
-  }
-
-  listSessions(): SessionMeta[] {
-    return this.db.query(
-      "SELECT id, title, model, status, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
-    ).all();
-  }
-}
-```
-
-### 6.4 编译二进制方案
-
-```typescript
-// scripts/build.ts
-
-import { $ } from "bun";
-
-// 编译独立二进制
-await $`bun build ./packages/cli/src/entry.ts \
-  --compile \
-  --target=bun \
-  --outfile=./dist/fengagent \
-  --minify \
-  --define process.env.FENG_VERSION=${VERSION} \
-  --define process.env.FENG_BUILD_TIME=${Date.now()}`;
-
-// 跨平台编译
-const targets = [
-  { target: "bun-windows-x64", outfile: "dist/fengagent-win-x64.exe" },
-  { target: "bun-linux-x64", outfile: "dist/fengagent-linux-x64" },
-  { target: "bun-darwin-arm64", outfile: "dist/fengagent-darwin-arm64" },
-];
-
-for (const { target, outfile } of targets) {
-  await $`bun build ./packages/cli/src/entry.ts \
-    --compile \
-    --target=${target} \
-    --outfile=${outfile} \
-    --minify`;
-}
-```
-
-```typescript
-// packages/cli/src/entry.ts
-
-// 编译后的入口点
-// 支持: fengagent (CLI 模式) / fengagent serve (WebUI 模式)
-
-const args = process.argv.slice(2);
-const command = args[0];
-
-if (command === "serve" || command === "server") {
-  // 启动 WebUI 服务
-  const { startServer } = await import("@fengagent/server");
-  await startServer();
-} else {
-  // 默认 CLI 模式
-  const { startCLI } = await import("./tui/app");
-  await startCLI();
-}
-```
-
-### 6.5 权限审批方案
-
-```
-工具执行请求
-    │
-    ▼
-检查 autoApproveTools 配置
-    │
-    ├── true ──► 直接执行
-    │
-    ├── false
-    │   │
-    │   ▼
-    │   检查工具是否在 allowedTools 列表
-    │   │
-    │   ├── 在列表中 ──► 直接执行
-    │   │
-    │   ├── 不在列表中
-    │   │   │
-    │   │   ▼
-    │   │   询问用户
-    │   │   │
-    │   │   ├── CLI: Ink 渲染确认对话框
-    │   │   │       └── 用户按 y/n
-    │   │   │
-    │   │   ├── WebUI: 推送 permission-request SSE 事件
-    │   │   │       └── 用户点击 Allow/Deny
-    │   │   │       └── POST /api/sessions/:id/permissions/:reqId
-    │   │   │
-    │   │   ▼
-    │   │   用户决策
-    │   │   ├── allow ──► 执行工具
-    │   │   └── deny  ──► 返回 "权限被拒绝"
-    │   │
-    │   └── 在 deniedTools 列表中 ──► 直接拒绝
-    │
-    ▼
-执行工具或返回拒绝
-```
-
-### 6.6 上下文压缩实现
-
-```typescript
-// packages/context/src/compaction.ts
-
-const SUMMARY_TEMPLATE = `请总结以下对话历史，保留关键信息：
-
-## 目标
-{用户的主要目标和意图}
-
-## 已完成的工作
-{列出已完成的操作和结果}
-
-## 当前状态
-{当前进展和阻塞项}
-
-## 下一步
-{接下来需要做什么}
-
-## 相关文件
-{涉及的关键文件路径}
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `FENG_MODEL` | `claude-sonnet-4-20250514` | 主模型 ID |
+| `FENG_PROVIDER` | `anthropic` | LLM 提供商 |
+| `FENG_MAX_TOKENS` | `8192` | 单次生成最大 token 数 |
+| `FENG_TEMPERATURE` | `1.0` | 生成温度（0–2） |
+| `FENG_CONTEXT_WINDOW` | `200000` | 上下文窗口大小（token） |
+| `FENG_COMPACT_THRESHOLD` | `0.85` | 压缩触发阈值 |
+| `FENG_AUTO_APPROVE_TOOLS` | `false` | 自动批准工具调用 |
+| `FENG_SERVER_PORT` | `3000` | HTTP 服务端口 |
+| `FENG_SERVER_HOST` | `127.0.0.1` | 服务监听地址 |
+| `FENG_LOG_LEVEL` | `info` | 日志级别（debug/info/warn/error） |
+| `FENG_MAX_TURNS` | `50` | Agent 循环最大轮次 |
+| `FENG_DATA_DIR` | `.fengagent-cordis` | 数据根（分支级） |
+| `FENG_MAIN_DATA_DIR` | — | 显式指定 main 遗留数据根（导入源） |
+| `FENG_EVENT_FULL_REQUEST` | — | 事件溯源字节级复现开关 |
 
 ---
 
-以下是需要总结的对话历史：
-{conversation_history}
-`;
+## 8. 关键技术方案
 
-export async function compact(
-  messages: Message[],
-  options: CompactionOptions,
-  llmClient: LLMClient,
-): Promise<{ summary: string; recent: Message[] }> {
-  // 1. 估算总 Token
-  const totalTokens = estimateTokens(messages);
+### 8.1 Agent Loop 实现（ctx.loop 插件）
 
-  // 2. 选择分割点
-  const cutPoint = findCutPoint(messages, options.keepTokens);
-
-  // 3. 分割
-  const head = messages.slice(0, cutPoint);
-  const recent = messages.slice(cutPoint);
-
-  // 4. 生成摘要
-  const summaryPrompt = SUMMARY_TEMPLATE.replace(
-    "{conversation_history}",
-    head.map(m => `${m.role}: ${m.content.map(c => c.text ?? "").join("")}`).join("\n")
-  );
-
-  const response = await llmClient.generate({
-    model: options.smallModel,
-    system: "你是一个对话摘要助手。请简洁准确地总结对话历史。",
-    messages: [{ role: "user", content: [{ type: "text", text: summaryPrompt }] }],
-    maxTokens: 2000,
-  });
-
-  const summary = response.content
-    .filter(c => c.type === "text")
-    .map(c => c.text)
-    .join("");
-
-  // 5. 返回摘要 + 近期消息
-  return { summary, recent };
-}
-
-function findCutPoint(messages: Message[], keepTokens: number): number {
-  let tokens = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    tokens += estimateTokens(messages[i]);
-    if (tokens >= keepTokens) {
-      return i + 1;
-    }
-  }
-  return 0;
+```
+while (needsContinuation && step < maxTurns) {
+  1. 组装上下文（系统提示 + 历史 + 记忆）
+  2. 检查并执行压缩
+  3. 准备工具列表
+  4. 调用 LLM（stream）
+  5. 解析工具调用
+  6. 执行工具（权限检查 → 执行 → 截断）
+  7. 注入工具结果到历史
+  8. needsContinuation = 有工具调用 ? true : false
+  9. 回合收尾：双写事件日志 + 沉淀 graph 节点
 }
 ```
 
+### 8.2 流式输出方案
+
+- LLM Client 返回 `AsyncGenerator<LLMEvent>`，统一抽象 `stream()` / `generate()`；
+- CLI：Ink 组件逐帧渲染 text-delta；WebUI：Server-Sent Events（SSE）转发；
+- `usage` 事件携带 KV Cache 统计（`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`），
+  WebUI 统计栏实时累计。
+
+### 8.3 会话持久化方案
+
+- 事件日志为准（`events/{sessionId}.jsonl`）+ SQLite 读模型（`sessions.db`）+ 图派生视图
+  （`graph.jsonl`）；
+- 双写对账门槛：同一批运行中「事件投影产物」与「旧日志/SQLite」逐条等价；
+- 崩溃自愈：尾部半行 JSON 跳过 + 启动重放；
+- `/restore` 从存储恢复会话历史。
+
+### 8.4 权限审批方案
+
+- `PermissionChecker`：auto / allow / deny / ask；
+- CLI 弹框 / WebUI SSE 推送审批请求，用户响应回传。
+
+### 8.5 上下文压缩实现
+
+- `CompactionEngine`：摘要 head 段 + 保留 recent 段；`TokenCounter` 估算；
+- 记忆：MEMORY.md + 分类记忆 + TF-IDF 向量检索。
+
+### 8.6 编译二进制方案
+
+- `bun build --compile` 生成独立可执行文件（`dist/fengagent` / `fengagent.exe`）；
+- 支持 CLI 模式 / serve 模式。
+
 ---
 
-## 附录：设计决策记录
+## 9. 分支隔离（与 main）
 
-### ADR-001: 选择 AsyncGenerator 而非 EventEmitter
+- **改动只落在 `refactor/cordis-graph-architecture`**，禁止直接修改 `main`；
+- `main`（老分支）可随时独立 checkout、可编译、可运行、功能不回归：
+  - 新增文件（`packages/cordis`、`packages/graph`、`packages/events`、`create-runtime-agent.ts`、
+    graph-panel 等）与 `main` 零交集；
+  - 既有文件的改动均为「向后兼容的增量」（`create-agent.ts` 保留旧接口并委托、
+    `entry.ts` serve 分支替换为 runtime 装配、server 新增方法/路由、web-ui 新增面板）；
+- **数据根隔离**：本分支用 `.fengagent-cordis/`，main 的 `.fengagent/` / `~/.fengagent/`
+  一律只读（仅作导入源、配置分层回退、记忆只读回退）；
+- **单向幂等导入**：首次运行（事件日志空 + sessions.db 不存在）把 main 遗留数据
+  只读、一次性、幂等导入，写 `import.marker`；自环防护 + 绝不写回 main；
+- **文档隔离**：`docs/ARCHITECTURE-CORDIS.md` / `docs/GUIDE-CORDIS.md` 描述新分支；
+  在线文档站（`docs/index.html`）顶部注明当前展示分支。
 
-**决策**：Agent Loop 和 LLM 调用使用 `AsyncGenerator<AgentEvent>` 而非 EventEmitter。
+---
 
-**理由**：
-- 天然支持背压（消费者控制节奏）
-- 更好的类型安全（TypeScript 原生支持）
-- 更易组合（可以 `for await...of` 消费）
-- 参考 pi/openclaw 的 EventStream 设计
+## 10. 运行与验证
 
-**影响**：所有流式接口都基于 AsyncGenerator。
+```bash
+bun install                # 安装依赖
+bun run typecheck          # TypeScript 类型检查
+bun test                   # 全量测试（既有 600+ 全部通过）
 
-### ADR-002: 选择 SQLite 而非 JSON 文件做持久化
+bun test packages/graph    # 图机制测试（溯源/节点/回退/策略）
+bun test packages/events   # 事件溯源测试（EventStore/投影/双写对账/导出导入/重建/迁移 e2e）
+bun test packages/cordis   # Cordis 运行时集成测试（插件装载/loop/工具/回退/换插件换能力）
+bun test packages/cli      # CLI 测试（含 RuntimeAgent 回退/重答/热切换）
+bun test packages/server   # Server 测试（含图/回退端点）
 
-**决策**：会话持久化使用 SQLite（`bun:sqlite`）而非 JSON 文件。
+bun run packages/cli/src/entry.ts            # CLI 交互模式（Ink TUI）
+bun run serve                                # WebUI 模式（http://127.0.0.1:3000）
+bun run scripts/events-migrate.ts verify     # 事件链校验 + 双写对账
+```
 
-**理由**：
-- Bun 内置 SQLite 支持，零额外依赖
-- 支持索引查询，会话列表/搜索性能好
-- 并发安全（WAL 模式）
-- 参考 opencode 的 SQLite + Drizzle 方案
+完整小白操作步骤见 [GUIDE-CORDIS.md](./GUIDE-CORDIS.md)。
 
-**影响**：数据存储层抽象为 `SessionStore` 接口，未来可替换为其他后端。
+---
 
-### ADR-003: CLI 和 Server 共享 Agent 核心
+## 11. 设计决策记录（ADR）
 
-**决策**：CLI 和 HTTP Server 都直接引用 `@fengagent/agent`，而非 Server 包装 CLI。
+### ADR-001: 选择 Cordis 作为元框架（插件化一等公民）
 
-**理由**：
-- Agent 核心是纯逻辑，不绑定 IO 模式
-- CLI 进程内调用性能最优（无 HTTP 开销）
-- Server 为 WebUI 提供 HTTP 接口
-- 参考 Hummingbird 的 free-code（CLI 直引 Agent）模式
+- **背景**：参考 deepseek-harness 架构，模型/工具/策略/存储/上下文/Loop 应可插拔；
+- **决策**：引入 `@deepseek-ai/cordis`（vendored），业务全部以插件表达，挂到 `ctx.*` 服务；
+- **收益**：换插件即换能力；适配器薄包裹既有实现，行为不回退。
 
-**影响**：Agent 必须同时支持进程内调用和 HTTP 封装。
+### ADR-002: 从 Loop 到 Graph（对话即节点、可回退）
 
-### ADR-004: 不使用 Effect 框架
+- **背景**：单 Agent 反复执行是 Loop；多节点以有向图组织、可编排、可治理、可回退是下一层形态；
+- **决策**：新增 `packages/graph`，每轮「提问→回答」沉淀节点，`/rollback` 回退重答；
+- **收益**：对话可溯源、回答不佳可回退，旧分支保留可审计。
 
-**决策**：使用标准 async/await + Zod，不引入 Effect 框架。
+### ADR-003: 事件溯源（Event Sourcing）作为会话事实源
 
-**理由**：
-- 学习曲线低，团队上手快
-- MVP 阶段复杂度收益不对等
-- 标准 TS 生态更广，第三方集成更容易
-- 未来如需更复杂的服务组合可渐进引入
+- **背景**：长周期 Agent 任务需要可恢复、可迁移、可审计的会话状态；
+- **决策**：新增 `packages/events`，事件日志为准 + SQLite 读模型 + 双写对账；
+  导出/导入/重建/跨机迁移端到端；
+- **收益**：崩溃自愈、跨数据根/跨机迁移、以事件为准重建不丢元数据。
 
-**影响**：手动管理依赖注入和错误处理，代码量略多但更直观。
+### ADR-004: 分支数据隔离（.fengagent-cordis vs .fengagent）
+
+- **背景**：新老分支同机运行不能互相干扰；
+- **决策**：`resolveDataRoot` 全链路收口，新分支默认 `.fengagent-cordis/`，
+  main 数据只读导入、绝不写回；
+- **收益**：切回 main 删目录即还原，main 零改动。
