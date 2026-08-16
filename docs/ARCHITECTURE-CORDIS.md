@@ -285,8 +285,9 @@ resolveDataRoot(workdir) =
 
 ## 7. 事件溯源（Event Sourcing，Phase 0 定稿）
 
-> **Phase 0 状态**：`packages/events` 仅提供事件类型 + 事件名常量 + 运行时注册表接口，
-> **零运行时行为变化**；事件日志写入 / 投影 / 重放自 Phase 1 起实现。
+> **Phase 0 状态**：`packages/events` 提供事件类型 + 事件名常量 + 运行时注册表接口，零运行时行为变化。
+> **Phase 1 状态（已落地）**：EventStore（每会话单文件 append-only `events/{sessionId}.jsonl`，注册表校验，seq + #5 hash 链，重放，尾部半行崩溃自愈）+ 投影（#2 逻辑复现 / #3 生命周期）+ 双写映射（DualWriteSessionStore）+ 双写对账门槛（reconcile：投影 === 旧 SQLite 逐条等价，绿了才进 Phase 2）+ cordis `ctx.eventLog` 服务（`feng.events` 插件，server 已装配）。
+> **Phase 2 起**：运行时实际接入双写、graph 投影（#4/#6 派生态重算）、rollback/fork 分支感知消息投影。
 
 ### 7.1 词汇表
 
