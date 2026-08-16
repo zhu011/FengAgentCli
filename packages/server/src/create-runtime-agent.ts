@@ -322,6 +322,8 @@ export async function createRuntimeAgent(
         config: { sessionStore: storageBackend, graph: graphStore },
       },
       { id: BUILTIN_PLUGINS.GRAPH, config: { store: graphStore } },
+      // Phase 1：事件日志服务（写路径/重放/自愈，事件落 <dataDir>/events）
+      { id: BUILTIN_PLUGINS.EVENTS, config: { dir: join(dataDir, "events") } },
       {
         id: BUILTIN_PLUGINS.LOOP,
         config: {

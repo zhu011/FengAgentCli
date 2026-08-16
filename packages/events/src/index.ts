@@ -5,7 +5,7 @@
  * 1. 事件名常量数组（SESSION_EVENT_TYPES）— 核心事件集合
  * 2. 事件类型（SessionEvent 判别联合）— 含 #5 的 hash/prevHash 信封
  * 3. 运行时注册表（SessionEventRegistry + createEventRegistry）—
- *    #1 的「校验走运行时注册表」契约，cordis 复用 service 注入：ctx.events.register()
+ *    #1 的「校验走运行时注册表」契约，cordis 复用 service 注入：ctx.eventLog.register()
  * 4. 事件日志存储（EventStore）— 每会话单文件 append-only，重放 + 尾部半行自愈
  * 5. 哈希链工具（#5）— canonicalJson / sha256 / computeEventHash
  *

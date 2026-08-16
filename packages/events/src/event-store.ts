@@ -4,7 +4,7 @@
  * EventStore 是会话事件日志的唯一落盘实现：
  * - 每会话单文件 append-only：`<dir>/{sessionId}.jsonl`，一行一条事件；
  * - 追加校验走运行时注册表（#1）：append/isSessionEvent 经 registry.validate，
- *   `ctx.events.register(type, validator)` 注册的自定义类型同样生效；
+ *   `ctx.eventLog.register(type, validator)` 注册的自定义类型同样生效；
  * - seq 单调递增 + #5 hash/prevHash 链自动计算；
  * - 重放按 seq 返回；崩溃残留的尾部半行 JSON 在读取时自愈截断（self-heal），
  *   后续追加从正确 seq 继续，不丢已落盘事件。

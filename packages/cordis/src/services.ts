@@ -37,8 +37,17 @@ import type {
 import { DefaultRollbackStrategy, MemoryGraphStore } from "@fengagent/graph";
 import { generateId, resolveDataRoot } from "@fengagent/shared";
 import type {
+  AnySessionEvent,
+  AppendEventInput,
+  EventStore,
+  SessionEvent,
+  SessionEventRegistry,
+  SessionEventValidator,
+} from "@fengagent/events";
+import type {
   CompactionStrategy,
   ContextService,
+  EventService,
   GraphService,
   LoopEvent,
   LoopService,
@@ -50,6 +59,62 @@ import type {
   ToolService,
 } from "./types.ts";
 import { join } from "node:path";
+
+/* ------------------------------ 事件服务（Phase 1） ------------------------------ */
+
+/**
+ * 事件服务实现 — 包裹 EventStore，向 ctx 暴露注册表 + 写路径 + 重放 + 自愈。
+ * 校验（isSessionEvent / append）走 store 的运行时注册表（#1）。
+ * 命名：cordis 自带事件总线占用 `events`，故本服务注册为 `eventLog`（ctx.eventLog）。
+ */
+export class EventsServiceImpl extends Service implements EventService {
+  constructor(
+    ctx: Context,
+    private readonly eventStore: EventStore,
+  ) {
+    super(ctx, "eventLog");
+  }
+
+  get store(): EventStore {
+    return this.eventStore;
+  }
+
+  get registry(): SessionEventRegistry {
+    return this.eventStore.registry;
+  }
+
+  register(type: string, validator?: SessionEventValidator): void {
+    this.eventStore.registry.registerEventType(type, validator);
+  }
+
+  has(type: string): boolean {
+    return this.eventStore.registry.has(type);
+  }
+
+  validate(event: SessionEvent): boolean {
+    return this.eventStore.registry.validate(event);
+  }
+
+  isSessionEvent(value: unknown): value is SessionEvent {
+    return this.eventStore.isSessionEvent(value);
+  }
+
+  append(input: AppendEventInput): SessionEvent {
+    return this.eventStore.append(input);
+  }
+
+  replay(sessionId: string): AnySessionEvent[] {
+    return this.eventStore.replay(sessionId);
+  }
+
+  healTail(sessionId: string): number {
+    return this.eventStore.healTail(sessionId);
+  }
+
+  pathFor(sessionId: string): string {
+    return this.eventStore.pathFor(sessionId);
+  }
+}
 
 /* ------------------------------ 模型服务 ------------------------------ */
 

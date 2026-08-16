@@ -300,7 +300,7 @@ resolveDataRoot(workdir) =
 
 ### 7.2 核心决策（#1–#6 定稿）
 
-- **#1 运行时校验注册表**：`packages/events` 提供核心事件名常量数组 + `registerEventType(type, validator)` 契约；`isSessionEvent`/append 校验走运行时注册表；`declare module` 仅管编译期类型（两者解耦）。cordis 复用 service 注入：`ctx.events.register()`。
+- **#1 运行时校验注册表**：`packages/events` 提供核心事件名常量数组 + `registerEventType(type, validator)` 契约；`isSessionEvent`/append 校验走运行时注册表；`declare module` 仅管编译期类型（两者解耦）。cordis 复用 service 注入：`ctx.eventLog.register()`（cordis 框架自带事件总线占用 `ctx.events`，事件溯源服务以 `ctx.eventLog` 暴露，语义即原方案「ctx.events.register()」）。
 - **#2 复现语义**：默认 **(a) 逻辑复现** — `step/start` 只存请求参数（model/tools/maxTokens/temperature）+ 派生锚点，messages 由事件重放推导；`assistant/message` 不再单独落事实，由 `assistant/chunk` 投影组装；`FENG_EVENT_FULL_REQUEST=1` 开启字节级（`step/start` 附组装上下文、`turn/end` 落 assembled message）。
 - **#3 会话生命周期入词汇**：新增 `session/created`（含初始 title/status）、`session/title`、`session/status` 事件；事件日志 = 唯一事实源（含元数据），DB 降级为读模型，「以事件为准重建」不丢标题/状态。
 - **#4 head 确定式推导**：`head(session) = 该会话最大 seq 事件所属分支的链尾`；回退/分叉后 = 最新 `rollback`/`fork` 事件声明 branch 的链尾；不设可变「当前分支」指针，`conversationHeads` 可变态从投影中消失。

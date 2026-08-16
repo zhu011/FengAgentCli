@@ -13,6 +13,7 @@ import { storagePlugin } from "./adapters/storage.ts";
 import { strategyPlugin } from "./adapters/strategy.ts";
 import { loopPlugin } from "./adapters/loop.ts";
 import { graphPlugin } from "./adapters/graph.ts";
+import { eventsPlugin } from "./adapters/events.ts";
 import { BUILTIN_PLUGINS, type FengRuntime, type FengRuntimeConfig, type RuntimePluginEntry } from "./types.ts";
 
 /** 内置插件注册表 — 插件 id → 插件工厂（config 驱动） */
@@ -56,6 +57,11 @@ export const BUILTIN_PLUGIN_REGISTRY: Record<string, BuiltinPluginFactory> = {
     }),
   [BUILTIN_PLUGINS.GRAPH]: (config) =>
     graphPlugin({ store: config.store as never }),
+  [BUILTIN_PLUGINS.EVENTS]: (config) =>
+    eventsPlugin({
+      dir: config.dir as string | undefined,
+      store: config.store as never,
+    }),
 };
 
 /** 创建 Cordis 运行时 */

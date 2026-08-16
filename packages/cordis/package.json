@@ -12,7 +12,8 @@
     "./adapters/context": "./src/adapters/context.ts",
     "./adapters/storage": "./src/adapters/storage.ts",
     "./adapters/strategy": "./src/adapters/strategy.ts",
-    "./adapters/loop": "./src/adapters/loop.ts"
+    "./adapters/loop": "./src/adapters/loop.ts",
+    "./adapters/events": "./src/adapters/events.ts"
   },
   "files": [
     "src/**/*.ts",
@@ -27,6 +28,7 @@
   "dependencies": {
     "@fengagent/core": "workspace:*",
     "@fengagent/shared": "workspace:*",
+    "@fengagent/events": "workspace:*",
     "@fengagent/llm": "workspace:*",
     "@fengagent/tools": "workspace:*",
     "@fengagent/context": "workspace:*",

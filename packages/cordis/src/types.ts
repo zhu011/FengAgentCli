@@ -40,6 +40,14 @@ import type {
   GraphStore,
   RollbackStrategy,
 } from "@fengagent/graph";
+import type {
+  AnySessionEvent,
+  AppendEventInput,
+  EventStore,
+  SessionEvent,
+  SessionEventRegistry,
+  SessionEventValidator,
+} from "@fengagent/events";
 
 /* ------------------------------ 模型域 ------------------------------ */
 
@@ -229,6 +237,37 @@ export interface GraphService {
   getActiveHead(conversationId: string): ConversationNode | undefined;
 }
 
+/* ------------------------------ 事件域（Phase 1） ------------------------------ */
+
+/**
+ * 事件服务 — 事件日志写路径/重放/自愈 + 运行时注册表（#1）。
+ *
+ * 事件日志为会话事实的唯一来源（append-only `events/{sessionId}.jsonl`）；
+ * isSessionEvent / append 校验走运行时注册表（ctx.events.register() 注册扩展类型）。
+ */
+export interface EventService {
+  /** 事件日志存储（每会话单文件 append-only，重放，尾部半行自愈） */
+  readonly store: EventStore;
+  /** 运行时注册表（校验走这里） */
+  readonly registry: SessionEventRegistry;
+  /** 注册事件类型（cordis 复用点：ctx.events.register()） */
+  register(type: string, validator?: SessionEventValidator): void;
+  /** 是否已注册该类型 */
+  has(type: string): boolean;
+  /** 校验一条事件 */
+  validate(event: SessionEvent): boolean;
+  /** 校验未知值是否为注册表认可的会话事件（isSessionEvent） */
+  isSessionEvent(value: unknown): value is SessionEvent;
+  /** 追加事件（append-only 写路径，经注册表校验） */
+  append(input: AppendEventInput): SessionEvent;
+  /** 重放：按 seq 返回会话全部事件 */
+  replay(sessionId: string): AnySessionEvent[];
+  /** 崩溃自愈：截断尾部半行（返回被截断字节数） */
+  healTail(sessionId: string): number;
+  /** 会话事件日志文件路径 */
+  pathFor(sessionId: string): string;
+}
+
 /* ------------------------------ 运行时 ------------------------------ */
 
 /** 插件注册项 — config 驱动加载（可插拔积木） */
@@ -268,6 +307,7 @@ export const BUILTIN_PLUGINS = {
   CONTEXT: "feng.context",
   LOOP: "feng.loop",
   GRAPH: "feng.graph",
+  EVENTS: "feng.events",
 } as const;
 
 /* ------------------------------ Context 服务增强 ------------------------------ */
@@ -281,5 +321,13 @@ declare module "@deepseek-ai/cordis" {
     context: ContextService;
     loop: LoopService;
     graph: GraphService;
+    /**
+     * 事件溯源服务（事件日志写路径/重放/自愈 + 运行时注册表）。
+     *
+     * 命名说明：cordis 框架自带的事件总线占用 `ctx.events`（EventsService），
+     * 本服务（事件溯源日志）以 `ctx.eventLog` 暴露，避免同名冲突；
+     * 「ctx.events.register()」的语义由 `ctx.eventLog.register()` 承担。
+     */
+    eventLog: EventService;
   }
 }
