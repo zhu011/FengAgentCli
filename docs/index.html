@@ -433,6 +433,7 @@
   </div>
   <nav class="sidebar-nav" id="sidebarNav">
     <div class="nav-item active" data-target="home"><span class="nav-icon">🏠</span> 首页</div>
+    <div class="nav-item" data-target="guide"><span class="nav-icon">📖</span> 新手手册（main 分支）</div>
     <div class="nav-item" data-target="quickstart"><span class="nav-icon">🚀</span> 快速开始</div>
     <div class="nav-sub-item" data-target="quickstart">安装</div>
     <div class="nav-sub-item" data-target="qs-config">配置 API Key</div>
@@ -480,8 +481,13 @@
     <div class="hero-badge">v0.1.0 · MIT License</div>
     <h1 class="hero-title">FengAgentCli</h1>
     <p class="hero-desc">开源本地 AI Agent CLI 工具 — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩与权限审批。</p>
+    <div class="callout" style="margin: 18px 0 0;">
+      🧭 <strong>本站在线文档对应 <code>main</code> 分支（稳定版）</strong>，数据目录 <code>.fengagent/</code>。<br>
+      新分支 <code>refactor/cordis-graph-architecture</code>（数据目录 <code>.fengagent-cordis/</code>，含对话图 <code>/graph</code>、回退 <code>/rollback</code>、事件溯源）的文档在 <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/GUIDE-CORDIS.md" target="_blank">GUIDE-CORDIS.md</a>，两分支功能/命令/数据目录互不通用，请勿混用。
+    </div>
     <div class="hero-links">
       <a href="https://github.com/zhu011/FengAgentCli" target="_blank" class="btn btn-primary">📦 GitHub 仓库</a>
+      <a href="#guide" class="btn btn-secondary">📖 新手手册</a>
       <a href="#quickstart" class="btn btn-secondary">🚀 快速开始</a>
     </div>
   </div>
@@ -533,6 +539,65 @@
   <div class="callout">
     FengAgentCli 支持 Anthropic、OpenAI、OpenAI-Compatible（DeepSeek 等）、Google Gemini、AWS Bedrock 五种 LLM 提供商，通过 <code>FENG_PROVIDER</code> 环境变量切换。
   </div>
+</section>
+
+<!-- ==================== 新手手册（main 分支） ==================== -->
+<section class="section" id="guide">
+  <h2 class="section-title"><span class="sec-icon">📖</span>新手手册（main 分支保姆级）</h2>
+  <p class="section-desc">写给小白的「照着复制命令就能跑通」手册：从装 Bun → 配模型 → 启动对话 → 上下文/记忆/Skill → WebUI → 测评，全流程覆盖。数据目录 <code>.fengagent/</code>。</p>
+
+  <div class="callout">
+    📄 完整手册见 <a href="GUIDE.md" target="_blank">docs/GUIDE.md</a>（main 分支版）。
+    新分支 cordis（<code>.fengagent-cordis/</code>）的手册见 <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/GUIDE-CORDIS.md" target="_blank">GUIDE-CORDIS.md</a>，两分支功能互不通用。
+  </div>
+
+  <h3>三步跑通（main 分支）</h3>
+  <ol>
+    <li><strong>装 Bun 并安装依赖</strong>
+      <div class="code-label">bash — main 分支</div>
+      <pre><code>powershell -c "irm bun.sh/install.ps1 | iex"   # Windows；macOS/Linux: curl -fsSL https://bun.sh/install | bash
+git clone https://github.com/zhu011/FengAgentCli.git
+cd FengAgentCli
+bun install</code></pre>
+    </li>
+    <li><strong>配模型（二选一）</strong>
+      <div class="code-label">bash — 环境变量（main 分支）</div>
+      <pre><code>export FENG_PROVIDER=openai-compatible
+export OPENAI_COMPATIBLE_API_KEY=sk-你的key
+export OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+export OPENAI_COMPATIBLE_MODEL=deepseek-chat</code></pre>
+      <p>或在 CLI 里 <code>/provider set openai-compatible --api-key sk-你的key --base-url https://api.deepseek.com --model deepseek-chat</code>（写入 <code>.fengagent/config.json</code>，免改环境变量）。</p>
+    </li>
+    <li><strong>启动对话</strong>
+      <div class="code-label">bash — main 分支</div>
+      <pre><code>bun run packages/cli/src/entry.ts   # CLI（TUI）
+# 或网页：bun run serve 后浏览器打开 http://127.0.0.1:3000</code></pre>
+    </li>
+  </ol>
+
+  <h3>常用斜杠命令（main 分支）</h3>
+  <table>
+    <tr><th>命令</th><th>作用</th></tr>
+    <tr><td><code>/model list</code> · <code>/model &lt;id&gt;</code></td><td>查看/切换模型（写入 <code>.fengagent/config.json</code>）</td></tr>
+    <tr><td><code>/provider show</code> · <code>/provider set &lt;type&gt; [--api-key X] [--base-url Y] [--model Z]</code></td><td>查看/配置 Provider（apiKey 自动打码，热加载免重启）</td></tr>
+    <tr><td><code>/compact</code></td><td>手动压缩上下文</td></tr>
+    <tr><td><code>/clear context</code> · <code>/clear</code></td><td>清空上下文 / 仅清屏</td></tr>
+    <tr><td><code>/restore</code></td><td>从 <code>.fengagent/sessions.db</code> 恢复会话历史</td></tr>
+    <tr><td><code>/session new|list|switch</code></td><td>会话管理</td></tr>
+    <tr><td><code>/export 文件名.md</code></td><td>导出会话为 Markdown</td></tr>
+    <tr><td><code>/tool list</code></td><td>查看已注册工具</td></tr>
+  </table>
+  <p>输入 <code>/help</code> 随时查看全部命令；输入 <code>/</code> 弹出命令联想补全。</p>
+
+  <h3>记忆 / Skill / 测评（main 分支）</h3>
+  <ul>
+    <li><strong>记忆</strong>：AI 自动用 <code>memory-save / memory-search / memory-list</code>，数据在 <code>.fengagent/memory/</code>；</li>
+    <li><strong>Skill</strong>：提示词模板放 <code>.fengagent/skills/*.md</code>（frontmatter 含 name/description/trigger），关键词自动触发；</li>
+    <li><strong>测评</strong>：<code>bun run eval</code>（支持 <code>--date=</code> / <code>--all</code> / <code>--file=</code>），分析 <code>.fengagent/logs/llm-trace-*.jsonl</code> 输出模型准确率报告；</li>
+    <li><strong>KV Cache 统计</strong>：WebUI 消息区下方实时显示 📥输入 / 📤输出 / ⚡缓存命中 / 🎯命中率 / 合计 tokens。</li>
+  </ul>
+
+  <p class="section-desc" style="margin-top:12px">👉 详细步骤、预期输出、FAQ 见 <a href="GUIDE.md" target="_blank">docs/GUIDE.md</a>。</p>
 </section>
 
 <!-- ==================== 快速开始 ==================== -->

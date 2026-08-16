@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-6366f1)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-a855f7)
 
-📖 **[在线文档](https://zhu011.github.io/FengAgentCli/)** · 📦 **[Releases](https://github.com/zhu011/FengAgentCli/releases)** · 🐛 **[Issues](https://github.com/zhu011/FengAgentCli/issues)**
+📖 **[在线文档](https://zhu011.github.io/FengAgentCli/)** · 👶 **[新手手册（main 分支保姆级）](docs/GUIDE.md)** · 📦 **[Releases](https://github.com/zhu011/FengAgentCli/releases)** · 🐛 **[Issues](https://github.com/zhu011/FengAgentCli/issues)**
 
 ---
 
