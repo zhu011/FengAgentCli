@@ -7,6 +7,8 @@
  */
 
 import { z } from "zod";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   deepMerge,
   expandTilde,
@@ -204,6 +206,78 @@ async function readConfigFile(filePath: string): Promise<PartialConfig> {
   } catch {
     return {};
   }
+}
+
+/** 同步版 readConfigFile（用于 /provider 命令的同步写入合并） */
+export function readConfigFileSync(filePath: string): PartialConfig {
+  try {
+    const expanded = expandTilde(filePath);
+    const text = readFileSync(expanded, "utf-8");
+    const parsed = JSON.parse(text) as PartialConfig;
+    return parsed ?? {};
+  } catch {
+    return {};
+  }
+}
+
+// ──────────────────────────────────────────────
+// API Key 打码
+// ──────────────────────────────────────────────
+
+/**
+ * 将 API Key 打码显示：只保留前 4 位 + "****"。
+ *
+ * 安全约定：任何 UI / 日志输出中展示 API Key 时都必须经过本函数，
+ * 禁止输出明文 Key。
+ *
+ * @param key - API Key（未配置时为 undefined / 空串）
+ * @returns 打码后的展示文本；未配置时返回 "未配置"
+ */
+export function maskApiKey(key: string | undefined | null): string {
+  if (!key || key.length === 0) {
+    return "未配置";
+  }
+  if (key.length <= 4) {
+    return "****";
+  }
+  return `${key.slice(0, 4)}****`;
+}
+
+// ──────────────────────────────────────────────
+// 配置持久化（/provider 命令用）
+// ──────────────────────────────────────────────
+
+/**
+ * 将配置补丁合并写入配置文件（默认项目级 `./.fengagent/config.json`）。
+ *
+ * 写入策略：
+ * 1. 读取现有文件内容（不存在视为空对象）
+ * 2. deepMerge 合并补丁（保留其他未改动的键，如 contextWindow、logLevel 等）
+ * 3. 原子写回（JSON 美化 + 末尾换行）
+ *
+ * 注意：配置文件是 apiKey 的唯一持久化位置，与 .env 同级属于用户私有文件；
+ * 本函数不会把任何值输出到日志。
+ *
+ * @param patch - 要写入的配置补丁
+ * @param options - 可选：自定义路径（`global: true` 写入全局配置 `~/.fengagent/config.json`）
+ * @returns 实际写入的文件路径
+ */
+export function writeConfigFile(
+  patch: PartialConfig,
+  options?: { path?: string; global?: boolean },
+): string {
+  const filePath =
+    options?.path ?? (options?.global ? GLOBAL_CONFIG_PATH : PROJECT_CONFIG_PATH);
+  const expanded = expandTilde(filePath);
+  const existing = readConfigFileSync(expanded);
+  const merged = deepMerge(existing, patch as Record<string, unknown>);
+  try {
+    mkdirSync(dirname(expanded), { recursive: true });
+  } catch {
+    // 目录可能已存在或无法创建 — 由 writeFileSync 抛出真实错误
+  }
+  writeFileSync(expanded, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+  return filePath;
 }
 
 // ──────────────────────────────────────────────

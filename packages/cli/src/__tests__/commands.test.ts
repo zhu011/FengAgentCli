@@ -3,6 +3,9 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handleCommand, type CommandContext } from "../commands.ts";
 import type { Agent } from "@fengagent/agent";
 import type { Config } from "@fengagent/core";
@@ -67,7 +70,11 @@ function createTestConfig(): Config {
 }
 
 function createTestAgent(): Agent {
-  const config = createTestConfig();
+  return createAgentWithConfig(createTestConfig());
+}
+
+/** 用指定配置创建测试 Agent */
+function createAgentWithConfig(config: Config): Agent {
   const mockLLM = new MockLLMClient();
   const toolRegistry = createToolRegistry();
   toolRegistry.register({
@@ -333,6 +340,125 @@ describe("handleCommand — /model", () => {
     expect(result.newModel).toBe("new-model-id");
     expect(result.message).toContain("old-model");
     expect(result.message).toContain("new-model-id");
+  });
+});
+
+describe("handleCommand — /provider", () => {
+  test("/provider 无子命令显示用法", () => {
+    const agent = createTestAgent();
+    const ctx: CommandContext = { agent, currentModel: "test-model" };
+    const result = handleCommand("/provider", ctx);
+    expect(result.handled).toBe(true);
+    expect(result.message).toContain("/provider show");
+    expect(result.message).toContain("/provider set");
+  });
+
+  test("/provider 未知子命令提示", () => {
+    const agent = createTestAgent();
+    const ctx: CommandContext = { agent, currentModel: "test-model" };
+    const result = handleCommand("/provider foo", ctx);
+    expect(result.handled).toBe(true);
+    expect(result.message).toContain("未知的 provider 子命令");
+  });
+
+  test("/provider show 显示当前 provider（apiKey 未配置）", () => {
+    const agent = createTestAgent();
+    const ctx: CommandContext = { agent, currentModel: "test-model" };
+    const result = handleCommand("/provider show", ctx);
+    expect(result.handled).toBe(true);
+    expect(result.message).toContain("provider: anthropic");
+    expect(result.message).toContain("apiKey:");
+    expect(result.message).toContain("未配置");
+  });
+
+  test("/provider show 对 apiKey 打码显示且不泄露明文", () => {
+    const config = { ...createTestConfig(), anthropicApiKey: "sk-ant-super-secret-1234567890" };
+    const agent = createAgentWithConfig(config);
+    const ctx: CommandContext = { agent, currentModel: "test-model" };
+    const result = handleCommand("/provider show", ctx);
+    expect(result.handled).toBe(true);
+    expect(result.message).toContain("sk-a****");
+    expect(result.message).not.toContain("super-secret-1234567890");
+    expect(result.message).not.toContain("sk-ant-super-secret-1234567890");
+  });
+
+  test("/provider set 无效类型报错", () => {
+    const agent = createTestAgent();
+    const ctx: CommandContext = { agent, currentModel: "test-model" };
+    const result = handleCommand("/provider set unknown-type", ctx);
+    expect(result.handled).toBe(true);
+    expect(result.message).toContain("无效的 Provider 类型");
+    expect(result.message).toContain("openai-compatible");
+  });
+
+  test("/provider set openai-compatible 持久化配置并打码", () => {
+    // 用临时目录作为 CWD，避免污染项目真实 .fengagent/config.json
+    const cwd = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), "feng-provider-cmd-"));
+    try {
+      process.chdir(tmp);
+      const agent = createTestAgent();
+      const ctx: CommandContext = { agent, currentModel: "test-model" };
+      const result = handleCommand(
+        "/provider set openai-compatible --api-key sk-1349d75cc2a14d53af7880718d694200 --base-url https://api.deepseek.com --model deepseek-v4-pro",
+        ctx,
+      );
+      expect(result.handled).toBe(true);
+      // 消息不含明文 apiKey
+      expect(result.message).not.toContain("sk-1349d75cc2a14d53af7880718d694200");
+      expect(result.message).toContain("sk-1****");
+      expect(result.message).toContain("https://api.deepseek.com");
+      expect(result.message).toContain("deepseek-v4-pro");
+      expect(result.message).toContain("config.json");
+      // newModel 返回新模型（供 App 更新会话模型）
+      expect(result.newModel).toBe("deepseek-v4-pro");
+
+      // 文件已持久化且包含正确字段
+      const raw = JSON.parse(
+        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      expect(raw["provider"]).toBe("openai-compatible");
+      expect(raw["openaiCompatibleApiKey"]).toBe("sk-1349d75cc2a14d53af7880718d694200");
+      expect(raw["openaiCompatibleBaseUrl"]).toBe("https://api.deepseek.com");
+      expect(raw["openaiCompatibleModel"]).toBe("deepseek-v4-pro");
+      expect(raw["model"]).toBe("deepseek-v4-pro");
+    } finally {
+      process.chdir(cwd);
+      try {
+        rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("/provider set anthropic 使用 --api-key 参数", () => {
+    const cwd = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), "feng-provider-cmd-"));
+    try {
+      process.chdir(tmp);
+      const agent = createTestAgent();
+      const ctx: CommandContext = { agent, currentModel: "test-model" };
+      const result = handleCommand(
+        "/provider set anthropic --api-key sk-ant-abcdef123456 --base-url https://api.anthropic.com --model claude-sonnet-4-20250514",
+        ctx,
+      );
+      expect(result.handled).toBe(true);
+      expect(result.message).toContain("anthropic");
+      expect(result.message).toContain("sk-a****");
+      expect(result.message).not.toContain("abcdef123456");
+      const raw = JSON.parse(
+        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      expect(raw["anthropicApiKey"]).toBe("sk-ant-abcdef123456");
+    } finally {
+      process.chdir(cwd);
+      try {
+        rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
   });
 });
 

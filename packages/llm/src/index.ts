@@ -42,6 +42,9 @@ export type {
   ClientFromEnvResult,
 } from "./env.ts";
 
+// 可热替换的 LLM Client（/provider 运行时切换用）
+export { ReloadableLLMClient } from "./reloadable.ts";
+
 // LLM 追踪日志
 export { createLlmTracer } from "./trace.ts";
 export type { LlmTraceRecord, LlmTracer } from "./trace.ts";

@@ -56,6 +56,9 @@ export {
   ConfigLayerPriority,
   loadConfig,
   loadConfigFromEnv,
+  maskApiKey,
+  readConfigFileSync,
+  writeConfigFile,
 } from "./config.ts";
 export type { Config, PartialConfig, ConfigLayer } from "./config.ts";
 

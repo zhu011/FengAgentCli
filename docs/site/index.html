@@ -849,6 +849,8 @@ feng serve --port 8080</code></pre>
       <tr><td><code>/session switch &lt;id&gt;</code></td><td>切换到指定会话</td></tr>
       <tr><td><code>/model &lt;id&gt;</code></td><td>切换模型</td></tr>
       <tr><td><code>/model list</code></td><td>列出常见模型</td></tr>
+      <tr><td><code>/provider show</code></td><td>查看当前 Provider（apiKey 自动打码）</td></tr>
+      <tr><td><code>/provider set &lt;type&gt; [--api-key X] [--base-url Y] [--model Z]</code></td><td>配置 Provider（anthropic / openai / openai-compatible / google），持久化到 <code>.fengagent/config.json</code> 并热加载生效；缺省项逐项提示输入</td></tr>
       <tr><td><code>/export [file]</code></td><td>导出当前会话为 Markdown</td></tr>
     </tbody>
   </table>

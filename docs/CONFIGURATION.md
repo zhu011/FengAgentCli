@@ -224,3 +224,34 @@ trigger: review|审查|code review
 | `--version` | 显示版本信息 |
 | `serve` | WebUI 服务模式 |
 | `--print "问题"` | 非交互模式（stdin → stdout） |
+
+## TUI 命令：`/provider`（配置 Provider）
+
+在 CLI 交互模式（`bun run packages/cli/src/entry.ts`）中，用 `/provider` 查看或切换 LLM Provider，
+无需修改环境变量、无需重启：
+
+| 命令 | 说明 |
+|------|------|
+| `/provider show` | 显示当前 provider / baseUrl / model；apiKey 只显示前 4 位 + `****` |
+| `/provider set <type>` | 配置 Provider。type ∈ `anthropic` / `openai` / `openai-compatible` / `google` |
+| `/provider set <type> --api-key X --base-url Y --model Z` | 参数直接传值；缺省项会逐项提示输入 |
+
+### 行为说明
+
+- **持久化路径**：写入项目级 `./.fengagent/config.json`（与现有配置 deepMerge 合并，保留其他键）；
+  下次启动 `loadConfig` 自动读取。
+- **立即生效**：配置后自动调用 `createClientFromEnv` 重建 LLM Client，并通过
+  `ReloadableLLMClient.setClient` 热替换到当前 Agent（`packages/llm/src/reloadable.ts`），
+  无需重建 Agent；下一条消息即走新 Provider。
+- **示例（DeepSeek）**：
+  ```bash
+  /provider set openai-compatible \
+    --api-key sk-xxx \
+    --base-url https://api.deepseek.com \
+    --model deepseek-v4-pro
+  ```
+- **安全约定**：apiKey 全程不回显明文（输入时回显 `*`，展示时 `前4位****`），
+  不写入运行日志 / llm-trace。
+
+对应配置键：`provider`、`anthropicApiKey/BaseUrl`、`openaiApiKey/BaseUrl`、
+`openaiCompatibleApiKey/BaseUrl/Model`、`googleApiKey/BaseUrl`、`model`。

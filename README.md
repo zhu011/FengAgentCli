@@ -89,6 +89,27 @@ bash scripts/demo.sh             # Linux/macOS
 powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 ```
 
+### 配置 Provider（`/provider` 命令）
+
+在 CLI 交互模式中可用 `/provider` 命令查看或切换 LLM Provider（Anthropic / OpenAI / OpenAI-Compatible / Google），配置写入项目级 `.fengagent/config.json`，**无需改环境变量、无需重启**即可生效：
+
+```bash
+# 查看当前 Provider（apiKey 自动打码，只显示前 4 位）
+/provider show
+
+# 用参数直接配置（openai-compatible 适合 DeepSeek 等兼容端点）
+/provider set openai-compatible --api-key sk-xxx --base-url https://api.deepseek.com --model deepseek-v4-pro
+
+# 不带参数时逐项提示输入（apiKey 输入不回显）
+/provider set openai-compatible
+```
+
+- **持久化**：写入 `./.fengagent/config.json`（项目级，与现有配置 deepMerge 合并），下次启动自动加载；
+- **立即生效**：配置后自动重建 LLM Client 并热替换到当前 Agent，下一条消息即走新 Provider；
+- **安全**：apiKey 只显示前 4 位 + `****`，输入时不回显，不写入运行日志 / llm-trace。
+
+支持的 type：`anthropic` / `openai` / `openai-compatible` / `google`。
+
 ## 项目结构
 
 ```

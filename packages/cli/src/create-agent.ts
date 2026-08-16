@@ -8,9 +8,11 @@
 
 import type { Agent } from "@fengagent/agent";
 import type { Config, PartialConfig } from "@fengagent/core";
-import { loadConfig } from "@fengagent/core";
-import { createClientFromEnv } from "@fengagent/llm";
-import type { LLMClient } from "@fengagent/llm";
+import { loadConfig, ConfigSchema } from "@fengagent/core";
+import {
+  createClientFromEnv,
+  ReloadableLLMClient,
+} from "@fengagent/llm";
 import {
   createToolRegistry,
   registerBuiltinTools,
@@ -21,7 +23,7 @@ import {
 } from "@fengagent/tools";
 import type { HookRegistry, McpRegistrationResult } from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
-import { expandTilde } from "@fengagent/shared";
+import { deepMerge, expandTilde } from "@fengagent/shared";
 import {
   Agent as AgentClass,
   SessionStore,
@@ -50,7 +52,8 @@ export interface CreateAgentOptions {
 export interface CreateAgentResult {
   agent: Agent;
   config: Config;
-  llmClient: LLMClient;
+  /** 可热替换的 LLM Client（/provider set 时通过 setClient 切换底层客户端） */
+  llmClient: ReloadableLLMClient;
   sessionStore: SessionStore | null;
   agentDefinitionLoader: AgentDefinitionLoader;
   subagentRunner: SubagentRunner;
@@ -58,6 +61,82 @@ export interface CreateAgentResult {
   hookRegistry: HookRegistry;
   /** MCP 注册结果（null = 未连接任何 MCP Server） */
   mcpResult: McpRegistrationResult | null;
+}
+
+/**
+ * 将 Config 中的 Provider / API Key / BaseURL / Model 注入为 LLM 环境变量，
+ * 供 createClientFromEnv 使用（环境变量优先，config 值仅作兜底）。
+ */
+export function buildEnvForLLM(
+  config: Config,
+  env?: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const envForLLM: Record<string, string | undefined> = {
+    ...env,
+    ...process.env,
+  };
+
+  function injectConfigEnv(key: string, configVal: string | undefined) {
+    if (configVal !== undefined && configVal !== "" && !envForLLM[key]) {
+      envForLLM[key] = configVal;
+    }
+  }
+
+  injectConfigEnv("FENG_PROVIDER", config.provider);
+  injectConfigEnv("FENG_MODEL", config.model);
+  injectConfigEnv("ANTHROPIC_API_KEY", config.anthropicApiKey);
+  injectConfigEnv("ANTHROPIC_BASE_URL", config.anthropicBaseUrl);
+  injectConfigEnv("OPENAI_API_KEY", config.openaiApiKey);
+  injectConfigEnv("OPENAI_BASE_URL", config.openaiBaseUrl);
+  injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
+  injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
+  injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
+  injectConfigEnv("GOOGLE_API_KEY", config.googleApiKey);
+  injectConfigEnv("GOOGLE_BASE_URL", config.googleBaseUrl);
+
+  return envForLLM;
+}
+
+// ──────────────────────────────────────────────
+// 运行时 Provider 热替换（/provider 命令）
+// ──────────────────────────────────────────────
+
+/** 当前生效的可热替换 LLM Client（由 createAgent 建立，供 reloadProvider 使用） */
+interface ReloadState {
+  client: ReloadableLLMClient;
+  config: Config;
+  env?: Record<string, string | undefined>;
+}
+
+let reloadState: ReloadState | null = null;
+
+/**
+ * 运行时替换 Provider（/provider set 调用）。
+ *
+ * 机制：
+ * 1. 将配置补丁合并进当前生效 Config（保留未改动键）并经 ConfigSchema 重新校验
+ * 2. 用新配置重建 LLM Client（createClientFromEnv）
+ * 3. 通过 ReloadableLLMClient.setClient 原子替换 — Agent 持有的 client 引用不变，
+ *    后续请求自动走新 Provider / Key / BaseURL / Model，无需重建 Agent
+ * 4. 原地更新 Config 对象（Agent 持有同一引用，getConfig()/createSession 立即反映新值）
+ *
+ * @param patch - Provider 配置补丁（provider / *ApiKey / *BaseUrl / model 等）
+ * @returns 更新后的 Config；若 createAgent 尚未建立 reload 状态（如单元测试直接构造 Agent）则返回 null
+ */
+export function reloadProvider(patch: PartialConfig): Config | null {
+  if (!reloadState) {
+    return null;
+  }
+  const merged = deepMerge(
+    { ...reloadState.config },
+    patch as Record<string, unknown>,
+  );
+  const newConfig = ConfigSchema.parse(merged);
+  const envForLLM = buildEnvForLLM(newConfig, reloadState.env);
+  const { client } = createClientFromEnv(envForLLM);
+  reloadState.client.setClient(client);
+  Object.assign(reloadState.config, newConfig);
+  return reloadState.config;
 }
 
 /**
@@ -83,30 +162,15 @@ export async function createAgent(
   });
 
   // 2. 创建 LLM Client（将 config 中的 provider/model/API key 注入到 env）
-  const envForLLM: Record<string, string | undefined> = {
-    ...options.env,
-    ...process.env,
-  };
+  const envForLLM = buildEnvForLLM(config, options.env);
 
-  function injectConfigEnv(key: string, configVal: string | undefined) {
-    if (configVal !== undefined && configVal !== "" && !envForLLM[key]) {
-      envForLLM[key] = configVal;
-    }
-  }
+  const { client: baseClient } = createClientFromEnv(envForLLM);
 
-  injectConfigEnv("FENG_PROVIDER", config.provider);
-  injectConfigEnv("FENG_MODEL", config.model);
-  injectConfigEnv("ANTHROPIC_API_KEY", config.anthropicApiKey);
-  injectConfigEnv("ANTHROPIC_BASE_URL", config.anthropicBaseUrl);
-  injectConfigEnv("OPENAI_API_KEY", config.openaiApiKey);
-  injectConfigEnv("OPENAI_BASE_URL", config.openaiBaseUrl);
-  injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
-  injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
-  injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
-  injectConfigEnv("GOOGLE_API_KEY", config.googleApiKey);
-  injectConfigEnv("GOOGLE_BASE_URL", config.googleBaseUrl);
+  // 用可热替换包装器持有客户端 — /provider set 时无需重建 Agent 即可切换 Provider
+  const llmClient = new ReloadableLLMClient(baseClient);
 
-  const { client: llmClient } = createClientFromEnv(envForLLM);
+  // 记录 reload 状态（供 reloadProvider 在运行时替换 client / 更新 config）
+  reloadState = { client: llmClient, config, env: options.env };
 
   // 3. 工具注册表 + 内置工具
   const toolRegistry = createToolRegistry();

@@ -1,13 +1,15 @@
 /**
  * @fengagent/cli — Slash 命令处理
  *
- * 解析和处理 /session、/model、/export、/compact、/clear、/restore、/tool 等命令。
+ * 解析和处理 /session、/model、/provider、/export、/compact、/clear、/restore、/tool 等命令。
  * 命令元数据集中在 COMMANDS 表中，供 handleCommand、getHelpMessage、自动补全共用。
  */
 
 import type { Agent } from "@fengagent/agent";
-import type { Session } from "@fengagent/core";
-import { writeFileSync } from "node:fs";
+import type { Config, Session } from "@fengagent/core";
+import { maskApiKey, writeConfigFile } from "@fengagent/core";
+import { readSync, writeFileSync, writeSync } from "node:fs";
+import { reloadProvider } from "./create-agent.ts";
 
 /** 命令元数据 */
 export interface CommandMeta {
@@ -31,6 +33,7 @@ export const COMMANDS: CommandMeta[] = [
   { name: "restore", description: "从存储恢复会话历史", usage: "/restore", category: "上下文" },
   { name: "session", description: "会话管理", usage: "/session new|list|switch", category: "会话" },
   { name: "model", description: "模型切换", usage: "/model <id>|list", category: "模型" },
+  { name: "provider", description: "查看/配置 Provider（apiKey 自动打码）", usage: "/provider show|set <type> [--api-key ..] [--base-url ..] [--model ..]", category: "模型" },
   { name: "export", description: "导出会话为 Markdown", usage: "/export [file]", category: "导出" },
   { name: "tool", description: "工具列表", usage: "/tool list", category: "工具" },
 ];
@@ -103,6 +106,9 @@ export function handleCommand(
 
     case "model":
       return handleModelCommand(args, ctx);
+
+    case "provider":
+      return handleProviderCommand(args, ctx);
 
     case "export":
       return handleExportCommand(args, ctx);
@@ -252,6 +258,426 @@ function handleModelCommand(
 
   const modelId = args.join(" ");
   return { handled: true, message: `已切换模型: ${ctx.currentModel} → ${modelId}`, newModel: modelId };
+}
+
+// ──────────────────────────────────────────────
+// /provider 命令
+// ──────────────────────────────────────────────
+
+/** 支持的 Provider 类型 */
+const PROVIDER_TYPES = ["anthropic", "openai", "openai-compatible", "google"] as const;
+type ProviderType = (typeof PROVIDER_TYPES)[number];
+
+/** Provider 与 Config 字段 / 环境变量的映射 */
+interface ProviderFieldMap {
+  label: string;
+  /** Config 中存放 apiKey 的键（如 openaiCompatibleApiKey） */
+  apiKeyKey: keyof Config;
+  /** Config 中存放 baseUrl 的键 */
+  baseUrlKey: keyof Config;
+  /** Config 中存放 model 的键（仅 openai-compatible 有独立字段） */
+  modelKey?: keyof Config;
+  /** 对应的环境变量名（用于读取/回显当前值） */
+  envApiKey: string;
+  envBaseUrl: string;
+  envModel?: string;
+  /** 未配置 baseUrl 时的官方默认地址（openai-compatible 无默认，必须用户提供） */
+  defaultBaseUrl: string;
+  requireBaseUrl: boolean;
+  requireModel: boolean;
+}
+
+const PROVIDER_FIELD_MAP: Record<ProviderType, ProviderFieldMap> = {
+  anthropic: {
+    label: "Anthropic",
+    apiKeyKey: "anthropicApiKey",
+    baseUrlKey: "anthropicBaseUrl",
+    envApiKey: "ANTHROPIC_API_KEY",
+    envBaseUrl: "ANTHROPIC_BASE_URL",
+    defaultBaseUrl: "https://api.anthropic.com",
+    requireBaseUrl: false,
+    requireModel: false,
+  },
+  openai: {
+    label: "OpenAI",
+    apiKeyKey: "openaiApiKey",
+    baseUrlKey: "openaiBaseUrl",
+    envApiKey: "OPENAI_API_KEY",
+    envBaseUrl: "OPENAI_BASE_URL",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    requireBaseUrl: false,
+    requireModel: false,
+  },
+  "openai-compatible": {
+    label: "OpenAI-Compatible",
+    apiKeyKey: "openaiCompatibleApiKey",
+    baseUrlKey: "openaiCompatibleBaseUrl",
+    modelKey: "openaiCompatibleModel",
+    envApiKey: "OPENAI_COMPATIBLE_API_KEY",
+    envBaseUrl: "OPENAI_COMPATIBLE_BASE_URL",
+    envModel: "OPENAI_COMPATIBLE_MODEL",
+    defaultBaseUrl: "",
+    requireBaseUrl: true,
+    requireModel: true,
+  },
+  google: {
+    label: "Google Gemini",
+    apiKeyKey: "googleApiKey",
+    baseUrlKey: "googleBaseUrl",
+    envApiKey: "GOOGLE_API_KEY",
+    envBaseUrl: "GOOGLE_BASE_URL",
+    defaultBaseUrl: "https://generativelanguage.googleapis.com",
+    requireBaseUrl: false,
+    requireModel: false,
+  },
+};
+
+const PROVIDER_HELP =
+  "用法:\n" +
+  "  /provider show                                   — 查看当前 Provider 配置（apiKey 打码）\n" +
+  "  /provider set <type> [--api-key X] [--base-url Y] [--model Z]\n" +
+  "      type: anthropic | openai | openai-compatible | google\n" +
+  "      未通过参数提供的项会逐项提示输入（apiKey 输入时不回显）。";
+
+/** 处理 /provider 命令 */
+function handleProviderCommand(
+  args: string[],
+  ctx: CommandContext,
+): CommandResult {
+  const subCmd = args[0]?.toLowerCase();
+
+  if (!subCmd || subCmd === "help") {
+    return { handled: true, message: PROVIDER_HELP };
+  }
+
+  if (subCmd === "show") {
+    return handleProviderShow(ctx);
+  }
+
+  if (subCmd === "set") {
+    return handleProviderSet(args.slice(1), ctx);
+  }
+
+  return {
+    handled: true,
+    message: `未知的 provider 子命令: ${subCmd}\n${PROVIDER_HELP}`,
+  };
+}
+
+/** 处理 /provider show — 显示当前 provider / baseUrl / model / 打码 apiKey */
+function handleProviderShow(ctx: CommandContext): CommandResult {
+  const config = ctx.agent.getConfig();
+  const type = (PROVIDER_TYPES as readonly string[]).includes(config.provider)
+    ? (config.provider as ProviderType)
+    : "anthropic";
+  const map = PROVIDER_FIELD_MAP[type];
+
+  const apiKey =
+    (config[map.apiKeyKey] as string | undefined) ??
+    process.env[map.envApiKey];
+  const baseUrl =
+    (config[map.baseUrlKey] as string | undefined) ??
+    process.env[map.envBaseUrl] ??
+    (map.defaultBaseUrl || "未配置");
+  const model =
+    (map.modelKey ? (config[map.modelKey] as string | undefined) : undefined) ??
+    config.model ??
+    "未配置";
+  const apiKeyFrom = config[map.apiKeyKey]
+    ? "config 文件"
+    : process.env[map.envApiKey]
+      ? "环境变量"
+      : "未配置";
+
+  return {
+    handled: true,
+    message:
+      `当前 Provider 配置:\n` +
+      `  provider: ${type} (${map.label})\n` +
+      `  baseUrl:  ${baseUrl}\n` +
+      `  model:    ${model}\n` +
+      `  apiKey:   ${maskApiKey(apiKey)}  (来源: ${apiKeyFrom})\n` +
+      `\n提示: /provider set <type> 可修改配置；apiKey 不回显明文。`,
+  };
+}
+
+/** 处理 /provider set <type> [--api-key] [--base-url] [--model] */
+function handleProviderSet(
+  args: string[],
+  ctx: CommandContext,
+): CommandResult {
+  const typeArg = (PROVIDER_TYPES as readonly string[]).includes(
+    args[0]?.toLowerCase() ?? "",
+  )
+    ? args[0]
+    : args.find((a) =>
+        (PROVIDER_TYPES as readonly string[]).includes(a.toLowerCase()),
+      );
+  const type = (typeArg?.toLowerCase() ?? "") as ProviderType;
+  if (!(PROVIDER_TYPES as readonly string[]).includes(type)) {
+    return {
+      handled: true,
+      message: `无效的 Provider 类型: "${typeArg ?? ""}"\n可用类型: ${PROVIDER_TYPES.join(" / ")}\n\n${PROVIDER_HELP}`,
+    };
+  }
+
+  const flags = parseProviderFlags(args);
+  const map = PROVIDER_FIELD_MAP[type];
+  const config = ctx.agent.getConfig();
+
+  // 当前值（配置文件 > 环境变量 > 官方默认）
+  const currentBaseUrl =
+    (config[map.baseUrlKey] as string | undefined) ??
+    process.env[map.envBaseUrl] ??
+    map.defaultBaseUrl;
+  const currentModel =
+    (map.modelKey ? (config[map.modelKey] as string | undefined) : undefined) ??
+    config.model ??
+    "";
+
+  // 1) apiKey（必填）— 优先 --api-key，否则逐项提示输入（不回显明文）
+  let apiKey = flags.apiKey ?? "";
+  if (!apiKey) {
+    apiKey = promptProviderField(`请输入 ${map.label} API Key`, {
+      secret: true,
+      defaultValue: "",
+    });
+    if (!apiKey) {
+      return { handled: true, message: "已取消：API Key 不能为空。" };
+    }
+  }
+
+  // 2) baseUrl — 优先 --base-url，否则提示输入（留空使用当前值/官方默认）
+  let baseUrl = flags.baseUrl ?? "";
+  if (!baseUrl) {
+    baseUrl = promptProviderField(`请输入 ${map.label} Base URL`, {
+      secret: false,
+      defaultValue: currentBaseUrl,
+    });
+  }
+  if (!baseUrl && map.requireBaseUrl) {
+    return {
+      handled: true,
+      message: "已取消：openai-compatible 必须提供 Base URL。",
+    };
+  }
+
+  // 3) model — 优先 --model，否则提示输入
+  let model = flags.model ?? "";
+  if (!model) {
+    model = promptProviderField("请输入模型 ID", {
+      secret: false,
+      defaultValue: currentModel,
+    });
+  }
+  if (!model && map.requireModel) {
+    return {
+      handled: true,
+      message: "已取消：openai-compatible 必须提供模型 ID。",
+    };
+  }
+
+  const effectiveModel = model || currentModel || config.model;
+
+  // 构建配置补丁（provider + apiKey/baseUrl + model）
+  const patch: Record<string, unknown> = {
+    provider: type,
+    model: effectiveModel,
+    [map.apiKeyKey]: apiKey,
+  };
+  if (baseUrl) {
+    patch[map.baseUrlKey] = baseUrl;
+  }
+  if (map.modelKey && model) {
+    patch[map.modelKey] = model;
+  }
+
+  // 持久化到 ./.fengagent/config.json（项目级，deepMerge 保留其他配置键）
+  const filePath = writeConfigFile(patch);
+
+  // 立即生效：重建 LLM Client 并热替换（Agent 无需重建）
+  let hotReloaded = false;
+  try {
+    hotReloaded = reloadProvider(patch) !== null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      handled: true,
+      message:
+        `配置已写入 ${filePath}，但热加载失败: ${message}\n` +
+        `请重启后生效。`,
+    };
+  }
+
+  return {
+    handled: true,
+    message:
+      `✅ Provider 已配置: ${type} (${map.label})\n` +
+      `  apiKey:   ${maskApiKey(apiKey)}  (已保存，不回显明文)\n` +
+      `  baseUrl:  ${baseUrl || "(未设置)"}\n` +
+      `  model:    ${effectiveModel}\n` +
+      `  config:   ${filePath}  (已持久化，重启后自动加载)\n` +
+      (hotReloaded
+        ? `  ✓ 已热加载生效 — 直接发消息即可使用新 Provider`
+        : `  ⚠ 当前实例未接入热加载，请重启后生效`),
+    newModel: effectiveModel,
+  };
+}
+
+/** 解析 /provider set 的 --api-key / --base-url / --model 参数（支持 = 或空格两种形式） */
+function parseProviderFlags(args: string[]): {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+} {
+  const result: { apiKey?: string; baseUrl?: string; model?: string } = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    const m = arg.match(/^--(api-key|base-url|model)(?:=(.*))?$/);
+    if (!m) continue;
+    const field = m[1] as "api-key" | "base-url" | "model";
+    let value = m[2];
+    if (value === undefined) {
+      value = args[i + 1];
+      i++;
+    }
+    if (!value) continue;
+    if (field === "api-key") result.apiKey = value;
+    else if (field === "base-url") result.baseUrl = value;
+    else result.model = value;
+  }
+  return result;
+}
+
+// ──────────────────────────────────────────────
+// 交互式逐项输入（同步，供 TUI 内 /provider set 使用）
+// ──────────────────────────────────────────────
+
+/** 向 stderr 同步写提示（绕过 TUI 渲染层，不污染 stdout） */
+function writeStderr(text: string): void {
+  try {
+    writeSync(2, text);
+  } catch {
+    process.stderr.write(text);
+  }
+}
+
+/** 暂停/恢复 Ink 的 stdin 监听，避免输入串扰 */
+function pauseStdin(): void {
+  try {
+    (process.stdin as { pause?: () => void }).pause?.();
+  } catch {
+    // 忽略
+  }
+}
+
+function resumeStdin(): void {
+  try {
+    (process.stdin as { resume?: () => void }).resume?.();
+  } catch {
+    // 忽略
+  }
+}
+
+/** 切换 stdin 原始模式（Ink TUI 使用 raw mode，提示输入前需临时切换） */
+function setStdinRawMode(raw: boolean): void {
+  const stdin = process.stdin as { setRawMode?: (b: boolean) => unknown; isRaw?: boolean };
+  if (typeof stdin.setRawMode === "function") {
+    try {
+      stdin.setRawMode(raw);
+    } catch {
+      // 非 TTY 时忽略
+    }
+  }
+}
+
+/** 同步读取一行（cooked 模式，带行编辑；无输入返回空串） */
+function readLineSync(): string {
+  const chunks: string[] = [];
+  const buf = new Uint8Array(256);
+  for (;;) {
+    let n = 0;
+    try {
+      n = readSync(0, buf, 0, buf.length, null as unknown as number);
+    } catch {
+      break;
+    }
+    if (n <= 0) break;
+    const chunk = new TextDecoder().decode(buf.subarray(0, n));
+    chunks.push(chunk);
+    if ((chunks.join("")).includes("\n") || (chunks.join("")).includes("\r")) {
+      break;
+    }
+  }
+  return chunks.join("").replace(/[\r\n]+$/, "").trim();
+}
+
+/** 同步读取密文（raw mode 逐字符，回显 *，支持退格；Ctrl+C 取消返回空串） */
+function readSecretSync(): string {
+  let result = "";
+  const buf = new Uint8Array(16);
+  for (;;) {
+    let n = 0;
+    try {
+      n = readSync(0, buf, 0, buf.length, null as unknown as number);
+    } catch {
+      break;
+    }
+    if (n <= 0) continue;
+    const text = new TextDecoder().decode(buf.subarray(0, n));
+    for (const ch of text) {
+      if (ch === "\r" || ch === "\n") {
+        writeStderr("\n");
+        return result;
+      }
+      if (ch === "\u0003") {
+        writeStderr("\n(已取消)\n");
+        return "";
+      }
+      if (ch === "\b" || ch === "\u007f") {
+        if (result.length > 0) {
+          result = result.slice(0, -1);
+          writeStderr("\b \b");
+        }
+        continue;
+      }
+      result += ch;
+      writeStderr("*");
+    }
+  }
+  return result;
+}
+
+/**
+ * 交互式提示输入单个字段。
+ *
+ * @param prompt - 提示文本
+ * @param opts.secret - true 时输入不回显（apiKey）；false 为普通行输入
+ * @param opts.defaultValue - 留空回车时使用的默认值
+ */
+function promptProviderField(
+  prompt: string,
+  opts: { secret: boolean; defaultValue: string },
+): string {
+  const suffix = opts.defaultValue ? ` (留空使用: ${opts.defaultValue})` : "";
+  writeStderr(
+    `\n${prompt}${suffix}${opts.secret ? " [输入不回显]:" : ":"} `,
+  );
+
+  pauseStdin();
+  const stdin = process.stdin as { isRaw?: boolean };
+  const prevRaw = stdin.isRaw;
+  try {
+    if (opts.secret) {
+      setStdinRawMode(true);
+      return readSecretSync();
+    }
+    setStdinRawMode(false);
+    return readLineSync();
+  } finally {
+    setStdinRawMode(prevRaw ?? true);
+    resumeStdin();
+  }
 }
 
 /** 处理 /export 命令 */

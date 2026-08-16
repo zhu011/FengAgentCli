@@ -10,12 +10,13 @@ import { Input } from "../tui/input.tsx";
 import { filterCommands, COMMANDS, getHelpMessage, handleCommand } from "../commands.ts";
 
 // 纯函数测试 — filterCommands 逻辑
-test("filterCommands: 空前缀返回全部 10 个命令", () => {
+test("filterCommands: 空前缀返回全部 11 个命令", () => {
   const result = filterCommands("");
-  expect(result.length).toBe(10);
+  expect(result.length).toBe(11);
   expect(result.some((c) => c.name === "help")).toBe(true);
   expect(result.some((c) => c.name === "compact")).toBe(true);
   expect(result.some((c) => c.name === "tool")).toBe(true);
+  expect(result.some((c) => c.name === "provider")).toBe(true);
 });
 
 test("filterCommands: /com 过滤到 compact", () => {
@@ -57,6 +58,7 @@ test("COMMANDS: 包含所有新增命令", () => {
   expect(names).toContain("exit");
   expect(names).toContain("session");
   expect(names).toContain("model");
+  expect(names).toContain("provider");
   expect(names).toContain("export");
   expect(names).toContain("quit");
 });
@@ -108,15 +110,14 @@ test("Input 组件: disabled 状态显示 ThinkingPet", () => {
 // 组件初始渲染（无补全时）是正确的，然后通过纯函数测试覆盖补全逻辑。
 
 // 验证：MAX_VISIBLE=10 时全部命令可显示
-test("补全列表: 10 个命令全部在可视范围内", () => {
+test("补全列表: 全部命令在可视范围内", () => {
   const all = filterCommands("");
-  expect(all.length).toBe(10);
+  expect(all.length).toBe(11);
   // MAX_VISIBLE=10, scrollOffset=0 → visibleStart=0, visibleEnd=10
-  // 全部 10 个都在 visibleCommands 中
   const visible = all.slice(0, 10);
   expect(visible.length).toBe(10);
   expect(visible[0]!.name).toBe("help");
-  expect(visible[9]!.name).toBe("tool");
+  expect(visible[9]!.name).toBe("export");
 });
 
 test("补全列表: /com 过滤后只剩 1 条", () => {
