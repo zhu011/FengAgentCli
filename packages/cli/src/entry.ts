@@ -59,8 +59,7 @@ export async function main(argv: string[]): Promise<void> {
 
   // serve 子命令 — 启动 WebUI 服务（Phase 2/3：经 createRuntime 插件化装配）
   if (parsed.serve) {
-    const { startServer } = await import("@fengagent/server");
-    const { createRuntimeAgent } = await import("./create-runtime-agent.ts");
+    const { startServer, createRuntimeAgent } = await import("@fengagent/server");
     const { resolve } = await import("node:path");
 
     // 模型/工具/上下文/存储/图/loop 全部经 createRuntime 装配；

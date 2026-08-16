@@ -18,7 +18,7 @@ import { createPermissionChecker, createHookRegistry, createToolExecutor } from 
 import { createRuntime } from "../../../cordis/src/runtime.ts";
 import { BUILTIN_PLUGINS } from "../../../cordis/src/types.ts";
 import { MemoryGraphStore } from "../../../graph/src/index.ts";
-import { RuntimeAgent, reloadProvider, createRuntimeAgent } from "../create-runtime-agent.ts";
+import { RuntimeAgent, reloadProvider, createRuntimeAgent } from "@fengagent/server";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

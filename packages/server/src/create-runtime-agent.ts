@@ -1,8 +1,8 @@
 /**
- * @fengagent/cli — createRuntime 装配的 Agent 工厂（Phase 2）
+ * @fengagent/server — createRuntime 装配的 Agent 工厂（Phase 2）
  *
- * 与 create-agent.ts 的旧式直接组装不同，本文件把 CLI 的
- * 模型/工具/策略/存储/上下文/loop/图 全部经 createRuntime 插件化装配：
+ * 与 create-agent.ts 的旧式直接组装不同，本文件把 CLI `serve` 与 server 入口
+ * 共用的 模型/工具/策略/存储/上下文/loop/图 全部经 createRuntime 插件化装配：
  * - ctx.model    — 模型服务（/model、/provider 经 ctx.model.switchProvider 切换）
  * - ctx.tools    — 工具服务
  * - ctx.storage  — 会话存储（SessionStore + GraphStore）

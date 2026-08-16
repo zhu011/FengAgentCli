@@ -2,22 +2,22 @@
  * @fengagent/cli — Agent 实例工厂（Phase 2：经 createRuntime 插件化装配）
  *
  * 本文件保留旧接口（createAgent / reloadProvider / buildEnvForLLM），
- * 实现已迁移到 create-runtime-agent.ts：
+ * 实现已迁移到 @fengagent/server 的 create-runtime-agent.ts（CLI 与 server 共用同一装配）：
  * 模型/工具/策略/存储/上下文/loop/图 全部经 createRuntime 插件化装配，
  * 行为与旧链路一致（薄适配既有实现），/model、/provider 经 ctx.model.switchProvider 切换。
  */
 
 import type { Agent } from "@fengagent/agent";
 import type { Config, PartialConfig } from "@fengagent/core";
-import { createRuntimeAgent } from "./create-runtime-agent.ts";
-import type { CreateRuntimeAgentResult } from "./create-runtime-agent.ts";
+import { createRuntimeAgent } from "@fengagent/server";
+import type { CreateRuntimeAgentResult } from "@fengagent/server";
 
-export { reloadProvider, buildEnvForLLM } from "./create-runtime-agent.ts";
+export { reloadProvider, buildEnvForLLM } from "@fengagent/server";
 export type {
   CreateRuntimeAgentOptions,
   CreateRuntimeAgentResult,
-} from "./create-runtime-agent.ts";
-export { RuntimeAgent } from "./create-runtime-agent.ts";
+} from "@fengagent/server";
+export { RuntimeAgent } from "@fengagent/server";
 
 /** Agent 创建选项 */
 export interface CreateAgentOptions {
