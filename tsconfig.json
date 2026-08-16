@@ -39,7 +39,14 @@
       "@fengagent/server": ["./packages/server/src/index.ts"],
       "@fengagent/server/*": ["./packages/server/src/*"],
       "@fengagent/web-ui": ["./packages/web-ui/src/app.tsx"],
-      "@fengagent/web-ui/*": ["./packages/web-ui/src/*"]
+      "@fengagent/web-ui/*": ["./packages/web-ui/src/*"],
+      "@fengagent/cordis": ["./packages/cordis/src/index.ts"],
+      "@fengagent/cordis/*": ["./packages/cordis/src/*"],
+      "@fengagent/graph": ["./packages/graph/src/index.ts"],
+      "@fengagent/graph/*": ["./packages/graph/src/*"],
+      "@deepseek-ai/cordis": ["./packages/cordis/vendor/cordis"],
+      "@deepseek-ai/cosmokit": ["./packages/cordis/vendor/cosmokit"],
+      "@standard-schema/spec": ["./packages/cordis/vendor/standard-schema-spec"]
     }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx"],

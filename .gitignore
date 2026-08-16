@@ -30,5 +30,8 @@ test-*.cjs
 screenshot-*.png
 lan-*.png
 
+# 图/会话数据落盘（Cordis Graph 机制运行产物）
+data/
+
 # 文档站点 — 始终提交（不忽略）
 !docs/site/

@@ -1,0 +1,39 @@
+{
+  "name": "@fengagent/cordis",
+  "version": "0.1.0",
+  "description": "Cordis 集成层 — 以 Cordis 为一等公民的插件化运行时（模型/工具/策略/存储/上下文/agent loop 全部插件化）",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./runtime": "./src/runtime.ts",
+    "./types": "./src/types.ts",
+    "./adapters/model": "./src/adapters/model.ts",
+    "./adapters/tool": "./src/adapters/tool.ts",
+    "./adapters/context": "./src/adapters/context.ts",
+    "./adapters/storage": "./src/adapters/storage.ts",
+    "./adapters/strategy": "./src/adapters/strategy.ts",
+    "./adapters/loop": "./src/adapters/loop.ts"
+  },
+  "files": [
+    "src/**/*.ts",
+    "vendor/**/*"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhu011/FengAgentCli.git",
+    "directory": "packages/cordis"
+  },
+  "dependencies": {
+    "@fengagent/core": "workspace:*",
+    "@fengagent/shared": "workspace:*",
+    "@fengagent/llm": "workspace:*",
+    "@fengagent/tools": "workspace:*",
+    "@fengagent/context": "workspace:*",
+    "@fengagent/agent": "workspace:*",
+    "@fengagent/graph": "workspace:*",
+    "@deepseek-ai/cordis": "file:./vendor/cordis",
+    "@deepseek-ai/cosmokit": "file:./vendor/cosmokit",
+    "@standard-schema/spec": "file:./vendor/standard-schema-spec"
+  }
+}
