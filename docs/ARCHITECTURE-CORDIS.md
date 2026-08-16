@@ -288,6 +288,7 @@ resolveDataRoot(workdir) =
 > **Phase 0 状态**：`packages/events` 提供事件类型 + 事件名常量 + 运行时注册表接口，零运行时行为变化。
 > **Phase 1 状态（已落地）**：EventStore（每会话单文件 append-only `events/{sessionId}.jsonl`，注册表校验，seq + #5 hash 链，重放，尾部半行崩溃自愈）+ 投影（#2 逻辑复现 / #3 生命周期）+ 双写映射（DualWriteSessionStore）+ 双写对账门槛（reconcile：投影 === 旧 SQLite 逐条等价，绿了才进 Phase 2）+ cordis `ctx.eventLog` 服务（`feng.events` 插件，server 已装配）。
 > **Phase 2 状态（已落地）**：生产双写（`create-runtime-agent.ts` 把 `DualWriteSessionStore` 挂进 `ctx.storage`，STORAGE 插件装配）；分支感知消息投影（rollback/fork 截断语义）；graph 投影（#4 head 确定式推导、#6 active/rolledBack 派生态重算，`graph.jsonl` 转为派生视图不再整写内存态）；对账门槛扩到含分支/回退会话。
+> **Phase 3 状态（已落地）**：事件导出/导入（可移植文件 + `verifyEventChain` #5 hash/prevHash 链校验 + 注册表校验 #1 + 幂等去重）；「以事件为准重建」（`rebuild.ts` + cordis `ctx.rebuild` 服务，SQLite 完全降级为读模型，重建走全量投影重写含 title/status/meta #3，脱双写依赖）；跨数据根/跨机迁移端到端（导出 → 新根导入 → 重建 → 投影与对账一致，见 §7.4）。
 
 ### 7.1 词汇表
 
@@ -315,3 +316,34 @@ resolveDataRoot(workdir) =
 - **graph.jsonl 派生视图（Phase 2）**：`EventGraphStore`（`packages/events/src/event-graph-store.ts`）以事件日志为事实源，读路径每次重放投影；`flush` 把「派生视图 + 无事件会话的遗留节点」整写到 graph.jsonl（不再整写内存可变态）。无事件会话（导入的 main 遗留数据）读 legacy 节点兼容；一旦产生事件即切换为派生视图。
 - **重放**：启动时按 seq 重放；崩溃残留的尾部半行 JSON 跳过 + 启动自愈；双写对账门槛（Phase 1 末尾，**Phase 2 扩到分支/回退会话**）：同一批运行中「事件投影产物」与「旧日志/SQLite」逐条等价，绿了才进 Phase 2（含 rollback 截断、fork 分叉、回退后重答分支）。
 - **迁移**：main 的 `sessions.db` / `graph.jsonl` → 事件（单向、幂等、只读，见 §6.3）；sessions.db 表结构不变；graph 投影快照 `graph.jsonl` 保持旧读取方兼容（由投影再生成）。
+
+### 7.4 Phase 3：导出/导入 + 以事件为准重建 + 跨数据根迁移
+
+**事件导出/导入**（`packages/events/src/migration.ts`）——会话事件 ↔ 可移植文件：
+
+- **可移植文件格式**（JSONL）：首行 header（`type:"fengagent-export"` / `format:"fengagent-event-export"` / `version:1` / `sessionId` / `eventCount` / `lastSeq` / `lastHash`），其后逐条事件行与事件日志**逐字一致**（保留 seq/hash/timestamp 信封，不重算）。
+- **机器无关**：事件时间戳为 ISO-8601、sessionId 为 UUID、hash 链由内容推导（canonical JSON）——不含本机路径/进程态，同一文件可在另一数据根或另一台机器原样导入（测试含「导出文件不含本机路径」断言）。
+- **导入校验链**（`importSessionEvents`，任一步失败即拒绝且目标日志不动）：
+  1. header 形状/版本；
+  2. 事件行解析 + 与 header 的 sessionId / eventCount / lastHash 一致性；
+  3. `verifyEventChain`（#5：seq 连续 + hash/prevHash 链完整）——篡改 payload/seq/header 均红；
+  4. 运行时注册表校验（#1，`EventStore.importEvents` 逐条校验）——未注册类型拒绝；
+  5. 幂等去重（`EventStore.importEvents` 与目标日志逐条 hash 对齐）：完全相同/已包含 → `noop`；目标日志为前缀 → `appended` 增量续写；链分叉 → `ImportConflictError` 拒绝。
+- **整库导出/导入**：`exportStoreEvents(store, dir)`（每会话一个 `<sanitized>.fengevents.jsonl`）/ `importStoreEvents(store, dir)`（逐文件幂等，单文件失败不影响其余）。
+
+**「以事件为准重建」**（`packages/events/src/rebuild.ts` + cordis `ctx.rebuild` 服务，插件 `feng.rebuild`）：
+
+- `rebuildSession(events, legacy, sessionId)`：事件日志 → 全量投影（`projectSession`，含 title/status/model/tokenCount/createdAt/updatedAt + messages，#3 元数据不丢）→ 整写读模型（saveSession + saveMessages + deleteMessages 收敛截断）。
+- **脱双写依赖**：重建只读事件日志 + 写读模型，**绝不追加事件**（测试断言事件文件字节级不变）；`create-runtime-agent.ts` 的 REBUILD 插件传「裸读模型」（SessionStore），不传 DualWrite 包装。
+- `rebuildAll(events, legacy, { prune })`：重建全部有事件的会话；`prune=true` 时删除事件日志中不存在的遗留孤儿会话（读模型完全以事件为准）。
+- **重建即对账**：重建后 `reconcileSession` 必须绿（投影 === 读模型），含 rollback/fork 截断会话。
+
+**跨数据根 / 跨机迁移端到端**（`packages/events/src/__tests__/migration-e2e.test.ts`）：
+
+```
+源根 A（双写产生事件）→ exportSessionEvents / exportStoreEvents
+  → 可移植文件（机器无关）
+新根 B（事件日志 + SQLite 全新）→ importSessionEvents / importStoreEvents（幂等去重）
+  → rebuildSession / rebuildAll（以事件为准重建读模型）
+  → reconcile 绿 + 两根读模型/投影全等 + 迁移后新根可继续写（事件链 seq 无缝续接）
+```
