@@ -737,6 +737,20 @@ body {
   }
 }
 
+/* 对话图面板（Phase 4 分支可视化）— 固定在检查器左侧 */
+.chat-page__graph-panel {
+  position: fixed;
+  top: var(--header-height);
+  right: 340px;
+  bottom: 0;
+  width: 340px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  box-shadow: var(--shadow-lg);
+  z-index: 49;
+  animation: slideInRight 0.25s ease-out;
+}
+
 .chat-page__inspector-title {
   font-size: 13px;
   font-weight: 600;

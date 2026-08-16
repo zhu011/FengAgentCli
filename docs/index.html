@@ -476,6 +476,11 @@
 
 <!-- ==================== 首页 ==================== -->
 <section class="section" id="home">
+  <div style="background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.35); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; font-size: 13px; line-height: 1.6;">
+    <strong>📌 当前文档展示分支：<code>refactor/cordis-graph-architecture</code></strong>（Cordis 插件化 + 对话图/可回溯架构，Phase 1–4 已完成：CLI 经 createRuntime 装配、Server/WebUI 接 ctx.storage/ctx.graph、/rollback + /graph + 分支可视化）。
+    <br/><span style="opacity:.75">老分支 <code>main</code> 保持独立可 checkout / 编译 / 运行，功能不回归；差异与隔离方式见
+    <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/ARCHITECTURE-CORDIS.md" target="_blank" style="color:#a5b4fc">docs/ARCHITECTURE-CORDIS.md §6</a>。</span>
+  </div>
   <div class="hero">
     <div class="hero-badge">v0.1.0 · MIT License</div>
     <h1 class="hero-title">FengAgentCli</h1>
@@ -851,6 +856,8 @@ feng serve --port 8080</code></pre>
       <tr><td><code>/model list</code></td><td>列出当前 Provider 实际可用/已配置的模型（openai-compatible 拉取服务端真实目录）</td></tr>
       <tr><td><code>/provider show</code> · <code>/provider set &lt;type&gt;</code></td><td>查看/配置 Provider（apiKey 自动打码）</td></tr>
       <tr><td><code>/export [file]</code></td><td>导出当前会话为 Markdown</td></tr>
+      <tr><td><code>/graph</code></td><td>查看对话图：节点 / 分支 / 活跃路径 / 溯源链（refactor 分支特性）</td></tr>
+      <tr><td><code>/rollback [节点id]</code></td><td>回退到父节点并自动重答，旧分支作废但保留可溯源（refactor 分支特性）</td></tr>
     </tbody>
   </table>
   </div>

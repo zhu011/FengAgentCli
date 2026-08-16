@@ -149,6 +149,30 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     return c.json(pending);
   });
 
+  // GET /:id/graph — 对话图（节点/分支/溯源链，Phase 3/4 分支可视化）
+  app.get("/:id/graph", (c) => {
+    const id = c.req.param("id");
+    log.info("getGraph", `sessionId=${id}`);
+    const graph = sessionManager.getGraph(id);
+    if (!graph) {
+      return c.json({ error: `Graph not available for session "${id}"` }, 404);
+    }
+    return c.json(graph);
+  });
+
+  // POST /:id/rollback — 回退到目标节点（旧分支保留可溯源，Phase 4）
+  app.post("/:id/rollback", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const nodeId =
+      typeof body.nodeId === "string" && body.nodeId ? body.nodeId : undefined;
+    const reason =
+      typeof body.reason === "string" && body.reason ? body.reason : "用户回退";
+    log.info("rollback", `sessionId=${id}, nodeId=${nodeId ?? "(last assistant)"}, reason=${reason}`);
+    const result = sessionManager.rollbackSession(id, nodeId, reason);
+    return c.json(result, result.ok ? 200 : 400);
+  });
+
   // GET /:id/export — 导出会话
   app.get("/:id/export", (c) => {
     const id = c.req.param("id");

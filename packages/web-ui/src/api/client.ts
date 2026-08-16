@@ -9,8 +9,10 @@
 
 import type {
   AgentEvent,
+  GraphData,
   ModelsResponse,
   PermissionResult,
+  RollbackResponse,
   Session,
   SessionMeta,
 } from "./types.ts";
@@ -235,6 +237,42 @@ export class ApiClient {
       throw await this.toApiError(res, "Failed to export session");
     }
     return await res.text();
+  }
+
+  // ──────────────────────────────────────────────
+  // 对话图（Phase 3/4：分支可视化 + 回退）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/sessions/:id/graph — 获取会话对话图（节点/分支/溯源链） */
+  async getGraph(sessionId: string): Promise<GraphData> {
+    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/graph`);
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get graph");
+    }
+    return (await res.json()) as GraphData;
+  }
+
+  /** POST /api/sessions/:id/rollback — 回退到目标节点（旧分支保留可溯源） */
+  async rollbackSession(
+    sessionId: string,
+    nodeId?: string,
+    reason = "用户回退",
+  ): Promise<RollbackResponse> {
+    const res = await fetch(
+      `${this.baseUrl}/api/sessions/${sessionId}/rollback`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...(nodeId ? { nodeId } : {}),
+          ...(reason ? { reason } : {}),
+        }),
+      },
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to rollback session");
+    }
+    return (await res.json()) as RollbackResponse;
   }
 
   // ──────────────────────────────────────────────

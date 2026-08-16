@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { consumeSSEStream } from "./use-sse.ts";
 import type {
+  GraphData,
   PermissionRequest,
   Session,
   SessionMeta,
@@ -53,6 +54,9 @@ export interface UseSessionResult {
   creatingSession: boolean;
   /** 会话级 token 用量统计 */
   sessionTokenStats: TokenStats | null;
+  /** 对话图数据（Phase 3/4 分支可视化） */
+  graph: GraphData | null;
+  graphError: string | null;
   createSession: (title?: string) => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -62,6 +66,9 @@ export interface UseSessionResult {
     reqId: string,
     result: { decision: "allow" } | { decision: "deny"; reason?: string },
   ) => Promise<void>;
+  refreshSession: () => Promise<void>;
+  refreshGraph: () => Promise<void>;
+  rollback: (nodeId?: string, reason?: string) => Promise<void>;
 }
 
 export function useSession(client: ApiClient): UseSessionResult {
@@ -76,6 +83,8 @@ export function useSession(client: ApiClient): UseSessionResult {
   const [error, setError] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
   const [sessionTokenStats, setSessionTokenStats] = useState<TokenStats | null>(null);
+  const [graph, setGraph] = useState<GraphData | null>(null);
+  const [graphError, setGraphError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -109,6 +118,7 @@ export function useSession(client: ApiClient): UseSessionResult {
     if (!activeSessionId) {
       setActiveSession(null);
       setDisplayMessages([]);
+      setGraph(null);
       return;
     }
 
@@ -131,6 +141,62 @@ export function useSession(client: ApiClient): UseSessionResult {
       cancelled = true;
     };
   }, [client, activeSessionId]);
+
+  // 加载活跃会话的对话图（Phase 3/4 分支可视化）
+  const refreshGraph = useCallback(async () => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) {
+      setGraph(null);
+      return;
+    }
+    try {
+      const data = await client.getGraph(sessionId);
+      setGraph(data);
+      setGraphError(null);
+    } catch (err) {
+      setGraph(null);
+      setGraphError(
+        err instanceof Error ? err.message : "Failed to load graph",
+      );
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshGraph();
+  }, [refreshGraph, activeSessionId]);
+
+  // 重新拉取活跃会话详情（回退后刷新消息列表）
+  const refreshSession = useCallback(async () => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    try {
+      const session = await client.getSession(sessionId);
+      setActiveSession(session);
+      setDisplayMessages(sessionToDisplayMessages(session));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reload session");
+    }
+  }, [client]);
+
+  // 回退到目标节点（旧分支保留可溯源），随后刷新会话与图
+  const rollback = useCallback(
+    async (nodeId?: string, reason = "用户回退") => {
+      const sessionId = activeSessionIdRef.current;
+      if (!sessionId) return;
+      try {
+        const result = await client.rollbackSession(sessionId, nodeId, reason);
+        if (!result.ok) {
+          setError(result.message);
+          return;
+        }
+        await refreshSession();
+        await refreshGraph();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Rollback failed");
+      }
+    },
+    [client, refreshSession, refreshGraph],
+  );
 
   // ──────────────────────────────────────────────
   // 创建会话
@@ -490,12 +556,17 @@ export function useSession(client: ApiClient): UseSessionResult {
     error,
     creatingSession,
     sessionTokenStats,
+    graph,
+    graphError,
     createSession,
     selectSession,
     deleteSession,
     sendMessage,
     interrupt,
     respondPermission,
+    refreshSession,
+    refreshGraph,
+    rollback,
   };
 }
 

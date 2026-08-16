@@ -10,13 +10,16 @@ import { Input } from "../tui/input.tsx";
 import { filterCommands, COMMANDS, getHelpMessage, handleCommand } from "../commands.ts";
 
 // 纯函数测试 — filterCommands 逻辑
-test("filterCommands: 空前缀返回全部 11 个命令", () => {
+test("filterCommands: 空前缀返回全部命令", () => {
   const result = filterCommands("");
-  expect(result.length).toBe(11);
+  expect(result.length).toBe(COMMANDS.length);
   expect(result.some((c) => c.name === "help")).toBe(true);
   expect(result.some((c) => c.name === "compact")).toBe(true);
   expect(result.some((c) => c.name === "tool")).toBe(true);
   expect(result.some((c) => c.name === "provider")).toBe(true);
+  // Phase 4 新增图命令
+  expect(result.some((c) => c.name === "graph")).toBe(true);
+  expect(result.some((c) => c.name === "rollback")).toBe(true);
 });
 
 test("filterCommands: /com 过滤到 compact", () => {
@@ -112,7 +115,7 @@ test("Input 组件: disabled 状态显示 ThinkingPet", () => {
 // 验证：MAX_VISIBLE=10 时全部命令可显示
 test("补全列表: 全部命令在可视范围内", () => {
   const all = filterCommands("");
-  expect(all.length).toBe(11);
+  expect(all.length).toBe(COMMANDS.length);
   // MAX_VISIBLE=10, scrollOffset=0 → visibleStart=0, visibleEnd=10
   const visible = all.slice(0, 10);
   expect(visible.length).toBe(10);

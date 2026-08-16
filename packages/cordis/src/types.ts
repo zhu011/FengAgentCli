@@ -126,6 +126,10 @@ export interface SessionStoreLike {
   loadSession(id: string): Session | null | undefined;
   listSessions(): SessionMeta[];
   deleteSession(id: string): void;
+  /** 保存单条消息（可选：仅完整 SessionStore 提供） */
+  saveMessage?(sessionId: string, message: Message): void;
+  /** 保存多条消息（可选：仅完整 SessionStore 提供） */
+  saveMessages?(sessionId: string, messages: Message[]): void;
 }
 
 /** 存储服务 — 会话 + 图 的持久化 */
@@ -138,6 +142,10 @@ export interface StorageService {
   listSessions(): SessionMeta[];
   /** 删除会话 */
   deleteSession(id: string): void;
+  /** 保存单条消息（完整 SessionStore 提供；内存存储可忽略） */
+  saveMessage?(sessionId: string, message: Message): void;
+  /** 保存多条消息 */
+  saveMessages?(sessionId: string, messages: Message[]): void;
   /** 图存储（对话即节点） */
   graph: GraphStore;
   /** 刷新持久化 */
@@ -206,6 +214,19 @@ export interface GraphService {
   ): ConversationNode;
   /** 标记回答不佳并回退 */
   rollbackPoorAnswer(nodeId: string, reason?: string): boolean;
+
+  /* ---- 溯源 / 分支读取（CLI /rollback、/graph 与 WebUI 可视化共用） ---- */
+
+  /** 获取节点 */
+  getNode(nodeId: string): ConversationNode | undefined;
+  /** 列出会话全部节点 */
+  listNodes(conversationId: string): ConversationNode[];
+  /** 溯源链：从根到某节点 */
+  getChain(nodeId: string): ConversationNode[];
+  /** 当前活跃路径 */
+  getActivePath(conversationId: string): ConversationNode[];
+  /** 当前活跃 head */
+  getActiveHead(conversationId: string): ConversationNode | undefined;
 }
 
 /* ------------------------------ 运行时 ------------------------------ */

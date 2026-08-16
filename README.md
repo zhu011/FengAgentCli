@@ -190,8 +190,9 @@ bun run clean            # 清理构建产物
 
 | 文档 | 说明 |
 |------|------|
-| [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档（暗色主题） |
-| [架构设计](docs/ARCHITECTURE.md) | 系统架构与模块设计 |
+| [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档（暗色主题，当前展示 refactor/cordis-graph-architecture 分支状态） |
+| [架构设计](docs/ARCHITECTURE.md) | 系统架构与模块设计（main 老架构） |
+| [Cordis 架构（重构分支）](docs/ARCHITECTURE-CORDIS.md) | 插件化 + 对话图/可回溯架构（refactor/cordis-graph-architecture，Phase 1–4 完成；与 main 隔离说明见 §6） |
 | [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件、权限规则 |
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建流程 |
 | [模块接口](docs/MODULES.md) | 各包 API 接口说明 |

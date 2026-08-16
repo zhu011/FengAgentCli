@@ -11,13 +11,13 @@ import { SessionStore } from "@fengagent/agent/session";
 import type { GraphStore } from "@fengagent/graph";
 import { MemoryGraphStore } from "@fengagent/graph";
 import { StorageServiceImpl } from "../services.ts";
-import type { StorageService } from "../types.ts";
+import type { SessionStoreLike, StorageService } from "../types.ts";
 
 export interface StoragePluginOptions {
   /** SQLite 路径（默认 ./data/fengagent.db） */
   dbPath?: string;
-  /** 复用既有 SessionStore */
-  sessionStore?: SessionStore;
+  /** 复用既有 SessionStore（或内存会话存储） */
+  sessionStore?: SessionStoreLike;
   /** 图存储（默认 MemoryGraphStore + JSONL 落盘） */
   graph?: GraphStore;
   /** 图 JSONL 落盘路径 */

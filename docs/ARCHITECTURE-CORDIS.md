@@ -1,5 +1,9 @@
 # Cordis 一等公民架构重构设计（refactor/cordis-graph-architecture）
 
+> **状态**：本分支已完成 Phase 1–4（CLI 经 createRuntime 装配 → Server/WebUI 接
+> ctx.storage/ctx.graph → /rollback、/graph + 分支可视化）。Phase 5（用户插件 profile）规划中。
+> 与 `main` 分支的差异与隔离方式见 §6。
+
 > 本文档沉淀自两篇参考文章的架构要点提炼 + 本次重构的设计决策：
 > - [deepseek-harness 项目深度解读 - 知乎](https://zhuanlan.zhihu.com/p/2071362726442673749)
 > - [图解 Graph Engineering - 知乎](https://zhuanlan.zhihu.com/p/2065181073781298761)
@@ -152,13 +156,43 @@ interface ConversationNode {
 
 ## 4. 迁移路线图（分期，每期可合入、可回退）
 
-- **Phase 1（本次提交）**：vendor cordis + `@fengagent/cordis` 运行时 + `@fengagent/graph` 机制，
+> **当前分支状态**：本文档只描述 `refactor/cordis-graph-architecture` 分支（新架构）。
+> `main` 分支（老架构）保持独立、可随时 checkout / 编译 / 运行，功能不回归（见 §6 分支隔离）。
+
+- **Phase 1（已合入）**：vendor cordis + `@fengagent/cordis` 运行时 + `@fengagent/graph` 机制，
   全量测试/类型检查通过（现有功能零改动、零回退）。
-- **Phase 2**：把 CLI 入口改为经 `createRuntime` 装配（模型/工具/上下文/存储走插件），行为不变；
-  `/model`、`/provider` 接到 `ctx.model.switchProvider`。
-- **Phase 3**：WebUI/Server 的会话管理改经 `ctx.storage`；对话历史渲染接入 `ctx.graph`（展示节点/分支）。
-- **Phase 4**：`/rollback`、`/graph` 命令（CLI）与 WebUI 分支可视化；回退策略接入测评模块输出。
-- **Phase 5**：用户插件热装载（`cordis.yml` 风格 profile），发布 `docs/EXTENDING-CORDIS.md`。
+- **Phase 2（已合入）**：CLI 入口经 `createRuntime` 装配。
+  - `packages/cli/src/create-runtime-agent.ts`：`createRuntimeAgent()` 把模型/工具/策略/存储/
+    上下文/图/loop 全部经 Cordis 插件装配；`RuntimeAgent` 继承既有 `Agent` 接口（prompt /
+    resume / compactSession / loadSession / listSessions / getToolNames …），
+    `prompt` 经 `ctx.loop` 驱动（对话即节点、可溯源），持久化经 `ctx.storage`。
+  - `packages/cli/src/create-agent.ts` 保留旧接口（`createAgent` / `reloadProvider` /
+    `buildEnvForLLM`），实现委托给 `createRuntimeAgent`；`/model`、`/provider` 经
+    `ctx.model.switchProvider` 切换（onSwitch 同步重建 client，热加载立即生效）。
+  - `packages/cli/src/entry.ts`：`serve` 子命令改为共享 runtime + 每会话 RuntimeAgent；
+    静态资源/端口等行为不变。
+  - 回归：`bun run typecheck` + `bun test packages/cli packages/cordis` 全绿；
+    真实 CLI 对话（print 模式）经 deepseek 模型跑通，`sessions.db` + `graph.jsonl` 正常落盘。
+- **Phase 3（已合入）**：WebUI/Server 接 `ctx.storage` / `ctx.graph`。
+  - `packages/server`：`SessionManager` 新增 `getGraph` / `rollbackSession` /
+    `getAgent`（经 `GraphAgentLike` 扩展面读取 RuntimeAgent 的图能力）；
+    `routes/sessions.ts` 新增 `GET /:id/graph`、`POST /:id/rollback`。
+  - `packages/web-ui`：`api/client.ts` 新增 `getGraph` / `rollbackSession`；
+    `use-session.ts` 暴露 `graph` / `refreshGraph` / `rollback` / `refreshSession`；
+    会话历史渲染不变（服务端经 `ctx.storage` 持久化，跨重启可恢复）。
+  - 回归：服务器 e2e —— 创建会话 → SSE 流式对话（含 graph-node 事件）→
+    `GET /graph` 返回节点 → `POST /rollback` 回退（旧分支作废保留、会话截断）全部通过。
+- **Phase 4（已合入）**：`/rollback`、`/graph` 命令 + 分支可视化。
+  - CLI：`commands.ts` 新增 `/graph`（同步展示节点/活跃路径/溯源链）与 `/rollback
+    [节点id]`（回退到父节点并自动重答，经 `RuntimeAgent.rollbackAndRetry`）；
+    `/联想` 补全列表自动包含新命令。
+  - WebUI：`components/graph-panel.tsx` 分支可视化（节点树 + 活跃高亮 + 回退按钮 +
+    作废分支灰显保留），一键回退后自动刷新会话与图。
+  - 回归：`RuntimeAgent` 单测（回退截断/重答分支/幂等/热切换）+ 服务端图端点单测全绿。
+- **Phase 5（规划中）**：用户插件热装载（`cordis.yml` 风格 profile），发布
+  `docs/EXTENDING-CORDIS.md`。当前已支持在 `createRuntime` 配置中以「模块路径」加载用户插件
+  （`packages/cordis/src/runtime.ts` 的 `resolvePluginFactory`，测试见
+  `packages/cordis/src/__tests__/fixtures/hello-plugin.ts`）。
 
 ---
 
@@ -166,7 +200,26 @@ interface ConversationNode {
 
 ```bash
 bun test packages/graph     # Graph 机制测试（溯源/节点/回退/策略）
-bun test packages/cordis    # Cordis 运行时集成测试（插件装载/loop/工具/回退）
+bun test packages/cordis    # Cordis 运行时集成测试（插件装载/loop/工具/回退/换插件换能力）
+bun test packages/cli       # CLI 测试（含 RuntimeAgent 回退/重答/热切换）
+bun test packages/server    # Server 测试（含图/回退端点）
 bun run typecheck           # 全量类型检查
 bun test                    # 全量测试（既有 600+ 全部通过）
 ```
+
+---
+
+## 6. 分支隔离（refactor/cordis-graph-architecture ↔ main）
+
+- **改动只落在 `refactor/cordis-graph-architecture`**：禁止直接修改 `main`。
+- `main`（老分支）可随时独立 checkout、可编译、可运行、功能不回归：
+  - 新增文件（`packages/cordis`、`packages/graph`、`create-runtime-agent.ts`、
+    graph-panel 等）与 `main` 零交集；`main` 不引用它们。
+  - 既有文件的改动均为「向后兼容的增量」（`create-agent.ts` 保留旧接口并委托、
+    `entry.ts` serve 分支替换为 runtime 装配、server 新增方法/路由、web-ui 新增面板），
+    老分支上的旧实现不受影响。
+- 新老分支文档相互独立：`docs/ARCHITECTURE-CORDIS.md` 仅描述新分支；
+  `docs/ARCHITECTURE.md` 描述老架构；在线文档站（`docs/index.html`）顶部注明当前展示分支。
+- 验收基线：`main` 检出即用；`refactor/cordis-graph-architecture` 覆盖老分支全部功能
+  （CLI/WebUI 对话、记忆、上下文压缩、skill 对话、/联想、/model、/provider、测评、kvCache）
+  并新增插件化（换插件换能力）与可回溯（回退到父节点重答、链路溯源）。

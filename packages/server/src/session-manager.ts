@@ -13,6 +13,27 @@ import { createLogger } from "@fengagent/shared";
 
 const log = createLogger("session-manager");
 
+/** 运行时 Agent 的图/回退扩展面（RuntimeAgent 提供；普通 Agent 无此能力） */
+export interface GraphAgentLike {
+  getGraphData(sessionId: string): {
+    nodes: import("@fengagent/graph").ConversationNode[];
+    activePath: import("@fengagent/graph").ConversationNode[];
+    activeHead: import("@fengagent/graph").ConversationNode | undefined;
+    chain: import("@fengagent/graph").ConversationNode[];
+  };
+  rollback(
+    session: Session,
+    nodeId?: string,
+    reason?: string,
+  ): {
+    ok: boolean;
+    message: string;
+    target?: import("@fengagent/graph").ConversationNode;
+    rollbackToNode?: import("@fengagent/graph").ConversationNode;
+    truncatedToMessageId?: string;
+  };
+}
+
 /** 权限请求记录 */
 export interface PermissionRequest {
   /** 请求 ID（用于 HTTP 响应路由） */
@@ -420,6 +441,78 @@ export class SessionManager {
     if (idx !== -1) {
       pending.splice(idx, 1);
     }
+  }
+
+  /**
+   * 获取会话对应的 Agent 实例。
+   *
+   * @param sessionId - 会话 ID
+   * @returns Agent 实例，不存在则返回 null
+   */
+  getAgent(sessionId: string): Agent | null {
+    return this.agents.get(sessionId) ?? null;
+  }
+
+  /**
+   * 获取会话的对话图数据（Phase 3/4：WebUI 分支可视化）。
+   *
+   * @param sessionId - 会话 ID
+   * @returns 图数据；Agent 未接入 Graph 机制时返回 null
+   */
+  getGraph(sessionId: string): {
+    nodes: import("@fengagent/graph").ConversationNode[];
+    activePath: import("@fengagent/graph").ConversationNode[];
+    activeHead: import("@fengagent/graph").ConversationNode | undefined;
+    chain: import("@fengagent/graph").ConversationNode[];
+  } | null {
+    const agent = this.agents.get(sessionId);
+    const graphAgent = agent as unknown as GraphAgentLike | undefined;
+    if (!graphAgent?.getGraphData) return null;
+    try {
+      return graphAgent.getGraphData(sessionId);
+    } catch (err) {
+      log.error("getGraph", `sessionId=${sessionId}, error=${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /**
+   * 回退会话到目标节点（Phase 4：WebUI 回退按钮）。
+   *
+   * 回退后旧分支作废保留（可溯源），会话消息截断到回退点；
+   * WebUI 端重新渲染会话，用户可再次提问（或直接重发最后一条消息）。
+   *
+   * @param sessionId - 会话 ID
+   * @param nodeId - 目标节点 id（缺省取活跃路径最后一个 assistant 节点）
+   * @param reason - 回退原因
+   * @returns 回退结果 + 最新图数据
+   */
+  rollbackSession(
+    sessionId: string,
+    nodeId?: string,
+    reason = "用户回退",
+  ): {
+    ok: boolean;
+    message: string;
+    target?: import("@fengagent/graph").ConversationNode;
+    rollbackToNode?: import("@fengagent/graph").ConversationNode;
+    truncatedToMessageId?: string;
+    graph?: ReturnType<NonNullable<GraphAgentLike["getGraphData"]>>;
+  } {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return { ok: false, message: `Session "${sessionId}" not found` };
+    }
+    const agent = this.agents.get(sessionId);
+    const graphAgent = agent as unknown as GraphAgentLike | undefined;
+    if (!graphAgent?.rollback) {
+      return { ok: false, message: "当前 Agent 未接入 Graph 机制（非运行时装配）。" };
+    }
+    const result = graphAgent.rollback(session, nodeId, reason);
+    if (!result.ok) return result;
+    // 同步内存缓存中的会话状态
+    this.sessions.set(sessionId, session);
+    return { ...result, graph: graphAgent.getGraphData(sessionId) };
   }
 
   /**

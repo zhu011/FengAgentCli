@@ -8,7 +8,7 @@
 import React, { useState, useCallback, useRef } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { Agent } from "@fengagent/agent";
-import type { Session, Message, AgentEvent } from "@fengagent/core";
+import type { Session, Message, AgentEvent, ToolContext } from "@fengagent/core";
 import { ChatView } from "./chat-view.tsx";
 import { Input } from "./input.tsx";
 import { StatusBar } from "./status-bar.tsx";
@@ -33,6 +33,16 @@ export interface AppProps {
   /** 退出回调 */
   onExit: () => void;
 }
+
+/** 运行时 Agent 的图/回退扩展面（RuntimeAgent 提供，用于 /rollback） */
+type RuntimeAgentLike = {
+  rollbackAndRetry(
+    session: Session,
+    nodeId?: string,
+    reason?: string,
+    options?: { requestPermission?: ToolContext["requestPermission"] },
+  ): AsyncGenerator<AgentEvent>;
+};
 
 /** UI 状态 */
 interface UiState {
@@ -180,6 +190,49 @@ export function App({
               addSystemMessage(`压缩失败: ${message}`);
               setUi((prev) => ({ ...prev, status: "idle" }));
             }
+          }
+          return;
+        }
+
+        // /rollback — 回退到父节点并重答（Phase 4：经 agent.rollbackAndRetry）
+        if (result.message === "__ROLLBACK__") {
+          if (ui.status === "running") {
+            addSystemMessage("Agent 正在运行中，请等待完成后再操作。");
+            return;
+          }
+          setUi((prev) => ({
+            ...prev,
+            status: "running",
+            streamingText: "",
+            toolCalls: [],
+            systemMessages: [],
+          }));
+          abortRef.current = false;
+          try {
+            const gen = (agent as unknown as RuntimeAgentLike).rollbackAndRetry(
+              session,
+              result.rollbackNodeId,
+              "用户回退",
+              { requestPermission },
+            );
+            for await (const event of gen) {
+              if (abortRef.current) break;
+              handleAgentEvent(event, { setUi, setMessages, session });
+            }
+            setUi((prev) => ({
+              ...prev,
+              status: "idle",
+              streamingText: "",
+              toolCalls: [],
+              tokenCount: session.tokenCount,
+            }));
+            // 回退已截断会话并重新回答，同步最新消息列表
+            setMessages([...session.messages]);
+            setSession({ ...session });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            setUi((prev) => ({ ...prev, status: "error", streamingText: "" }));
+            addSystemMessage(`回退失败: ${message}`);
           }
           return;
         }

@@ -20,7 +20,7 @@ export interface CommandMeta {
   /** 用法示例 */
   usage: string;
   /** 分类 */
-  category: "基础" | "会话" | "模型" | "上下文" | "工具" | "导出";
+  category: "基础" | "会话" | "模型" | "上下文" | "工具" | "导出" | "图";
 }
 
 /** 所有命令的元数据表（集中维护，供 handleCommand / help / 补全共用） */
@@ -36,6 +36,8 @@ export const COMMANDS: CommandMeta[] = [
   { name: "provider", description: "查看/配置 Provider（apiKey 自动打码）", usage: "/provider show|set <type> [--api-key ..] [--base-url ..] [--model ..]", category: "模型" },
   { name: "export", description: "导出会话为 Markdown", usage: "/export [file]", category: "导出" },
   { name: "tool", description: "工具列表", usage: "/tool list", category: "工具" },
+  { name: "graph", description: "查看对话图（节点/分支/溯源链）", usage: "/graph", category: "图" },
+  { name: "rollback", description: "回退到父节点并重答（旧分支保留）", usage: "/rollback [节点id]", category: "图" },
 ];
 
 /** 命令处理结果 */
@@ -56,6 +58,8 @@ export interface CommandResult {
   newSession?: Session;
   /** 新模型（切换后） */
   newModel?: string;
+  /** /rollback 指定的节点 id（App 层异步执行回退+重答） */
+  rollbackNodeId?: string;
 }
 
 /** 命令处理上下文 */
@@ -115,6 +119,12 @@ export function handleCommand(
 
     case "tool":
       return handleToolCommand(args, ctx);
+
+    case "graph":
+      return handleGraphCommand(ctx);
+
+    case "rollback":
+      return handleRollbackCommand(args, ctx);
 
     default:
       return {
@@ -869,6 +879,36 @@ function promptProviderField(
     setStdinRawMode(prevRaw ?? true);
     resumeStdin();
   }
+}
+
+/** 处理 /graph 命令 — 展示对话图（节点/分支/溯源链，Phase 4） */
+function handleGraphCommand(ctx: CommandContext): CommandResult {
+  if (!ctx.currentSession) {
+    return { handled: true, message: "没有活动会话，无法展示对话图。" };
+  }
+  const graphAgent = ctx.agent as unknown as {
+    formatGraph?: (sessionId: string) => string;
+  };
+  if (!graphAgent.formatGraph) {
+    return { handled: true, message: "当前 Agent 未接入 Graph 机制（非运行时装配）。" };
+  }
+  return { handled: true, message: graphAgent.formatGraph(ctx.currentSession.id) };
+}
+
+/** 处理 /rollback 命令 — 回退到父节点并重答（Phase 4，异步由 App 层执行） */
+function handleRollbackCommand(
+  args: string[],
+  ctx: CommandContext,
+): CommandResult {
+  if (!ctx.currentSession) {
+    return { handled: true, message: "没有活动会话，无法回退。" };
+  }
+  if (ctx.currentSession.messages.length === 0) {
+    return { handled: true, message: "当前会话没有消息，无需回退。" };
+  }
+  const nodeId = args[0];
+  // 返回标记，由 App 层调用 agent.rollbackAndRetry 完成 回退+截断+重答
+  return { handled: true, message: "__ROLLBACK__", rollbackNodeId: nodeId };
 }
 
 /** 处理 /export 命令 */

@@ -128,3 +128,54 @@ export interface PermissionRequest {
 export type PermissionResult =
   | { decision: "allow" }
   | { decision: "deny"; reason?: string };
+
+// ──────────────────────────────────────────────
+// 对话图（镜像 @fengagent/graph，Phase 3/4 分支可视化）
+// ──────────────────────────────────────────────
+
+export type ConversationNodeType =
+  | "user"
+  | "assistant"
+  | "tool"
+  | "branch-point";
+
+export type NodeQuality = "good" | "poor" | "unrated";
+
+export interface ConversationNodeMeta {
+  model?: string;
+  toolCalls?: Array<{ id: string; name: string }>;
+  tokenCount?: number;
+  llmTraceId?: string;
+  quality?: NodeQuality;
+  qualityNote?: string;
+  branch?: string;
+  active?: boolean;
+  rolledBack?: boolean;
+}
+
+export interface ConversationNode {
+  id: string;
+  conversationId: string;
+  type: ConversationNodeType;
+  messageId: string;
+  parentId: string | null;
+  childrenIds: string[];
+  createdAt: number;
+  meta: ConversationNodeMeta;
+}
+
+export interface GraphData {
+  nodes: ConversationNode[];
+  activePath: ConversationNode[];
+  activeHead: ConversationNode | undefined;
+  chain: ConversationNode[];
+}
+
+export interface RollbackResponse {
+  ok: boolean;
+  message: string;
+  target?: ConversationNode;
+  rollbackToNode?: ConversationNode;
+  truncatedToMessageId?: string;
+  graph?: GraphData;
+}

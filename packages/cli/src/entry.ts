@@ -57,121 +57,18 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  // serve 子命令 — 启动 WebUI 服务
+  // serve 子命令 — 启动 WebUI 服务（Phase 2/3：经 createRuntime 插件化装配）
   if (parsed.serve) {
-    const { loadConfig } = await import("@fengagent/core");
-    const { Agent } = await import("@fengagent/agent");
-    const { createClientFromEnv } = await import("@fengagent/llm");
-    const {
-      createToolRegistry,
-      createToolExecutor,
-      registerBuiltinTools,
-      createPermissionChecker,
-      createHookRegistry,
-      McpClient,
-      loadMcpConfig,
-      adaptMcpTools,
-    } = await import("@fengagent/tools");
-    const { createContextManager } = await import("@fengagent/context");
     const { startServer } = await import("@fengagent/server");
+    const { createRuntimeAgent } = await import("./create-runtime-agent.ts");
     const { resolve } = await import("node:path");
 
-    const config = await loadConfig();
+    // 模型/工具/上下文/存储/图/loop 全部经 createRuntime 装配；
+    // 每个会话一个 RuntimeAgent 实例，共享同一 runtime（ctx.storage / ctx.graph）
+    const runtimeResult = await createRuntimeAgent();
+    const config = runtimeResult.config;
 
-    log.info("main", `config loaded provider=${config.provider}, model=${config.model}, autoApproveTools=${config.autoApproveTools}`);
-
-    // 将 config 中的 API 配置注入为等效环境变量（供 createClientFromEnv 使用）
-    const envForLLM: Record<string, string | undefined> = { ...process.env };
-    function injectConfigEnv(key: string, configVal: string | undefined) {
-      if (configVal !== undefined && configVal !== "" && !envForLLM[key]) {
-        envForLLM[key] = configVal;
-      }
-    }
-    injectConfigEnv("FENG_PROVIDER", config.provider);
-    injectConfigEnv("FENG_MODEL", config.model);
-    injectConfigEnv("ANTHROPIC_API_KEY", config.anthropicApiKey);
-    injectConfigEnv("OPENAI_API_KEY", config.openaiApiKey);
-    injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
-    injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
-    injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
-
-    // 权限配置注入：config.autoApproveTools → FENG_AUTO_APPROVE_TOOLS 环境变量
-    if (config.autoApproveTools && !process.env.FENG_AUTO_APPROVE_TOOLS) {
-      process.env.FENG_AUTO_APPROVE_TOOLS = "true";
-    }
-    if (config.allowedTools && !process.env.FENG_ALLOWED_TOOLS) {
-      process.env.FENG_ALLOWED_TOOLS = config.allowedTools;
-    }
-    if (config.deniedTools && !process.env.FENG_DENIED_TOOLS) {
-      process.env.FENG_DENIED_TOOLS = config.deniedTools;
-    }
-
-    const { client: llmClient } = createClientFromEnv(envForLLM);
-    const workdir = process.cwd();
-
-    // 共享 Hook 注册器和权限检查器
-    const hookRegistry = createHookRegistry();
-    const permissionChecker = createPermissionChecker(workdir);
-
-    // MCP 集成 — 连接一次，共享给所有 Agent 实例
-    const mcpClient = new McpClient();
-    const mcpConfigs = loadMcpConfig(workdir);
-    if (Object.keys(mcpConfigs).length > 0) {
-      try {
-        const connections = await mcpClient.connectAll(mcpConfigs);
-        const connected = connections.filter((c) => c.status === "connected");
-        const failed = connections.filter((c) => c.status === "error");
-        if (connected.length > 0) {
-          console.error(
-            `MCP: connected ${connected.length} server(s), ` +
-            `registered ${mcpClient.getTools() ? Object.keys(mcpClient.getTools()).length : 0} tool(s)`,
-          );
-        }
-        for (const f of failed) {
-          console.error(`MCP: failed to connect "${f.name}": ${f.error}`);
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`MCP: initialization error: ${message}`);
-      }
-    }
-
-    function createServerAgent(): InstanceType<typeof Agent> {
-      const toolRegistry = createToolRegistry();
-      registerBuiltinTools(toolRegistry);
-
-      // 注册 MCP 工具（复用已连接的 MCP 客户端）
-      const mcpToolsMap = mcpClient.getTools();
-      if (Object.keys(mcpToolsMap).length > 0) {
-        for (const tool of adaptMcpTools(mcpToolsMap)) {
-          if (toolRegistry.get(tool.name)) {
-            toolRegistry.unregister(tool.name);
-          }
-          toolRegistry.register(tool);
-        }
-      }
-
-      const toolExecutor = createToolExecutor(permissionChecker, hookRegistry);
-      const contextManager = createContextManager({
-        config: {
-          contextWindow: config.contextWindow,
-          compactThreshold: config.compactThreshold,
-          compactKeepTokens: config.compactKeepTokens,
-          disableCompact: config.disableCompact,
-          smallModel: config.smallModel,
-        },
-        summaryGenerator: llmClient,
-        systemContextOptions: { workdir },
-      });
-      return new Agent({
-        llmClient,
-        toolRegistry,
-        toolExecutor,
-        contextManager,
-        config,
-        workdir,
-      });
-    }
+    log.info("main", `serve mode (createRuntime) provider=${config.provider}, model=${config.model}, autoApproveTools=${config.autoApproveTools}`);
 
     // 静态文件目录（web-ui 构建产物）
     const staticDir = resolve(
@@ -180,7 +77,13 @@ export async function main(argv: string[]): Promise<void> {
     );
 
     log.info("main", `serve mode starting, staticDir=${staticDir}`);
-    startServer({ config, createAgent: createServerAgent, staticDir });
+    startServer({
+      config,
+      createAgent: () => runtimeResult.makeAgent(),
+      staticDir,
+      // Phase 3：跨重启恢复历史会话（与 ctx.storage 同一份 SessionStore）
+      sessionStore: runtimeResult.sessionStore ?? undefined,
+    });
     return;
   }
 

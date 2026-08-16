@@ -311,7 +311,11 @@ describe("上下文管理器", () => {
     manager.invalidateSystemPrompt();
     const ctx2 = await manager.assemble(session);
 
-    // 系统提示应相同（内容未变）
-    expect(ctx2.system).toBe(ctx1.system);
+    // 系统提示应相同（内容未变）— 忽略毫秒级时间戳行的差异（跨毫秒重载）
+    const stripTimestamp = (s: string) =>
+      s.replace(/Current date and time: .+/, "Current date and time: <ts>");
+    expect(stripTimestamp(ctx2.system)).toBe(stripTimestamp(ctx1.system));
+    // 内容主体完整保留
+    expect(ctx2.system).toContain("You are a helpful AI coding assistant.");
   });
 });

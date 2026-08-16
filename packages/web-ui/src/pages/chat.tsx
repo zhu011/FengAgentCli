@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Loader2, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { AlertCircle, GitBranch, Loader2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import type { ApiClient } from "../api/client.ts";
 import type { PermissionRequest } from "../api/types.ts";
 import { formatValue } from "../lib/format.ts";
@@ -15,6 +15,7 @@ import type { UseSessionResult, TokenStats } from "../hooks/use-session.ts";
 import { MessageInput } from "../components/message-input.tsx";
 import { MessageList } from "../components/message-list.tsx";
 import { ModelSelector } from "../components/model-selector.tsx";
+import { GraphPanel } from "../components/graph-panel.tsx";
 
 interface ChatPageProps {
   client: ApiClient;
@@ -25,6 +26,7 @@ export function ChatPage({ client, session }: ChatPageProps) {
   const models = useModels(client);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [showInspector, setShowInspector] = useState(false);
+  const [showGraph, setShowGraph] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // 自动选择默认模型
@@ -89,6 +91,20 @@ export function ChatPage({ client, session }: ChatPageProps) {
               <PanelRightOpen size={18} />
             )}
           </button>
+          {session.activeSession && (
+            <button
+              type="button"
+              className="chat-page__toggle-inspector"
+              onClick={() => {
+                setShowGraph((v) => !v);
+                if (!showGraph) void session.refreshGraph();
+              }}
+              aria-label={showGraph ? "Hide graph" : "Show graph"}
+              title="对话图（分支可视化 / 回退）"
+            >
+              <GitBranch size={18} color={showGraph ? "#38bdf8" : undefined} />
+            </button>
+          )}
         </div>
       </header>
 
@@ -157,6 +173,22 @@ export function ChatPage({ client, session }: ChatPageProps) {
           </div>
         )}
       </footer>
+
+      {/* 对话图面板（Phase 4：分支可视化 + 回退） */}
+      {showGraph && session.activeSession && session.graph && (
+        <GraphPanel
+          graph={session.graph}
+          busy={session.isStreaming}
+          onRollback={(nodeId) => void session.rollback(nodeId)}
+        />
+      )}
+      {showGraph && session.activeSession && !session.graph && (
+        <aside className="chat-page__graph-panel" style={{ padding: 16 }}>
+          <p className="chat-page__inspector-empty">
+            {session.graphError ?? "对话图加载中..."}
+          </p>
+        </aside>
+      )}
 
       {/* 检查器面板 */}
       {showInspector && (

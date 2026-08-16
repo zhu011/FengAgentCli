@@ -62,7 +62,7 @@ export class ModelServiceImpl extends Service implements ModelService {
       provider: string;
       model: string;
       client: LLMClient;
-      onSwitch?: (provider: string, model: string) => Promise<LLMClient>;
+      onSwitch?: (provider: string, model: string) => LLMClient | Promise<LLMClient>;
     },
   ) {
     super(ctx, "model");
@@ -82,20 +82,37 @@ export class ModelServiceImpl extends Service implements ModelService {
     return this.options.client.generate(request);
   }
 
-  async switchProvider(
+  /**
+   * 热切换 provider/model（/model、/provider 命令的插件化底座）。
+   *
+   * onSwitch 支持同步返回（createClientFromEnv 是同步的）：
+   * 同步完成时本方法体内的状态更新在返回前已落地，
+   * 调用方无需 await 也能立即生效（CLI /model、/provider 保持同步语义）。
+   */
+  switchProvider(
     provider: string,
     options?: { model?: string },
   ): Promise<void> {
     if (!this.options.onSwitch) {
-      throw new Error(
-        `Model plugin does not support provider switching (${provider})`,
+      return Promise.reject(
+        new Error(
+          `Model plugin does not support provider switching (${provider})`,
+        ),
       );
     }
     const next = options?.model ?? this.model;
-    const client = await this.options.onSwitch(provider, next);
-    this.options.client = client;
+    const maybe = this.options.onSwitch(provider, next);
+    if (maybe && typeof (maybe as Promise<LLMClient>).then === "function") {
+      return (maybe as Promise<LLMClient>).then((client) => {
+        this.options.client = client;
+        this.provider = provider;
+        this.model = next;
+      });
+    }
+    this.options.client = maybe as LLMClient;
     this.provider = provider;
     this.model = next;
+    return Promise.resolve();
   }
 }
 
@@ -215,6 +232,18 @@ export class StorageServiceImpl extends Service implements StorageService {
 
   deleteSession(id: string): void {
     this.sessionStore.deleteSession(id);
+  }
+
+  saveMessage(sessionId: string, message: Message): void {
+    this.sessionStore.saveMessage?.(sessionId, message);
+  }
+
+  saveMessages(sessionId: string, messages: Message[]): void {
+    if (this.sessionStore.saveMessages) {
+      this.sessionStore.saveMessages(sessionId, messages);
+    } else {
+      for (const m of messages) this.sessionStore.saveMessage?.(sessionId, m);
+    }
   }
 
   async flush(): Promise<void> {
@@ -442,5 +471,25 @@ export class GraphServiceImpl extends Service implements GraphService {
     this.store.markQuality(nodeId, "poor", reason);
     const result = this.store.rollbackTo(target.parentId, reason);
     return result !== undefined;
+  }
+
+  getNode(nodeId: string): ConversationNode | undefined {
+    return this.store.getNode(nodeId);
+  }
+
+  listNodes(conversationId: string): ConversationNode[] {
+    return this.store.listNodes(conversationId);
+  }
+
+  getChain(nodeId: string): ConversationNode[] {
+    return this.store.getChain(nodeId);
+  }
+
+  getActivePath(conversationId: string): ConversationNode[] {
+    return this.store.getActivePath(conversationId);
+  }
+
+  getActiveHead(conversationId: string): ConversationNode | undefined {
+    return this.store.getActiveHead(conversationId);
   }
 }
