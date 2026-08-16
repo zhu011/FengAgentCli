@@ -1,6 +1,6 @@
 # FengAgentCli 小白保姆级操作手册（refactor/cordis-graph-architecture）
 
-> **本手册适用于 `refactor/cordis-graph-architecture` 分支（HEAD `db01076`，Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。**
+> **本手册适用于 `refactor/cordis-graph-architecture` 分支（HEAD `db18dd8`，Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。**
 >
 > 老分支 `main` 的数据与配置文件与本分支**完全隔离**：main 用 `.fengagent/`，本分支用 `.fengagent-cordis/`，
 > 两分支同机运行互不干扰。隔离细节见 [ARCHITECTURE-CORDIS.md §6](./ARCHITECTURE-CORDIS.md)。
@@ -80,7 +80,7 @@ cd FengAgentCli
 git checkout refactor/cordis-graph-architecture
 git log --oneline -1
 # 预期输出（commit 会随开发更新，分支 HEAD 即最新）:
-# db01076 docs(cordis): §7 状态更新 — Phase 3 已落地(事件导出/导入 + 以事件为准重建 + 跨数据根/跨机迁移端到端)
+# db18dd8 docs(cordis): 小白保姆级操作手册(GUIDE-CORDIS) + 事件溯源迁移CLI + 在线文档站同步
 ```
 
 > 提示：不切分支直接用 `main` 也可以跑，但**本手册讲的新功能（对话图/回退/事件溯源）只在 cordis 分支有**。
