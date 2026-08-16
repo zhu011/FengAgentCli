@@ -19,6 +19,14 @@ import type {
 } from "@fengagent/core";
 import { createUserMessage } from "@fengagent/core";
 import type { ContextManager } from "@fengagent/context";
+import { SessionStore } from "@fengagent/agent/session";
+import {
+  DualWriteSessionStore,
+  EventGraphStore,
+  EventStore,
+  reconcileSession,
+  verifyEventChain,
+} from "@fengagent/events";
 import { createRuntime } from "../runtime.ts";
 import { BUILTIN_PLUGINS } from "../types.ts";
 
@@ -303,5 +311,98 @@ describe("createRuntime — Cordis 一等公民", () => {
     expect(assistantNodes[1].parentId).toBe(assistantNodes[0].id);
 
     await runtime.stop();
+  });
+
+  test("Phase 2 回合收尾：消息双写落事件 + 图节点由事件投影派生（EventGraphStore 生产装配）", async () => {
+    const { mkdtempSync, rmSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const dir = mkdtempSync(join(tmpdir(), "cordis-loop-events-"));
+    mkdirSync(join(dir, "events"), { recursive: true });
+    let legacy: SessionStore | null = null;
+    try {
+      const eventStore = new EventStore({ dir: join(dir, "events") });
+      legacy = new SessionStore(join(dir, "sessions.db"));
+      const dual = new DualWriteSessionStore({
+        legacy,
+        events: eventStore,
+        model: "mock-model",
+      });
+      const graph = new EventGraphStore({
+        events: eventStore,
+        persistPath: join(dir, "graph.jsonl"),
+      });
+
+      const mock = createMockClient();
+      const manager = createMockContextManager();
+      const runtime = createRuntime({
+        workdir: dir,
+        plugins: [
+          { id: BUILTIN_PLUGINS.MODEL, config: { provider: "mock", model: "mock-model", client: mock } },
+          { id: BUILTIN_PLUGINS.TOOLS, config: { tools: [] } },
+          { id: BUILTIN_PLUGINS.STRATEGY },
+          { id: BUILTIN_PLUGINS.CONTEXT, config: { manager } },
+          { id: BUILTIN_PLUGINS.EVENTS, config: { store: eventStore } },
+          { id: BUILTIN_PLUGINS.STORAGE, config: { sessionStore: dual, graph } },
+          { id: BUILTIN_PLUGINS.GRAPH, config: { store: graph } },
+          {
+            id: BUILTIN_PLUGINS.LOOP,
+            config: { config: { maxTurns: 4, maxTokens: 1024, temperature: 0.7 }, workdir: dir },
+          },
+        ],
+      });
+      await runtime.start();
+      try {
+        const ctx = runtime.ctx as any;
+        // 模拟 RuntimeAgent.prompt 的写路径（首写 + 用户消息）
+        const session = makeSession();
+        session.status = "running";
+        ctx.storage.saveSession(session);
+        const userMsg = createUserMessage("你好");
+        session.messages.push(userMsg);
+        ctx.storage.saveSession(session);
+        ctx.storage.saveMessage(session.id, userMsg);
+        session.status = "idle";
+
+        // 跑一轮 loop：回合收尾应把助手消息双写落事件
+        const graphNodes: string[] = [];
+        for await (const event of ctx.loop.run(session)) {
+          if (event.type === "graph-node") graphNodes.push(event.nodeId);
+        }
+        expect(graphNodes.length).toBe(1);
+
+        // 会话收尾（镜像 RuntimeAgent.prompt：置 idle + 最终持久化）
+        session.status = "idle";
+        session.updatedAt = Date.now();
+        ctx.storage.saveSession(session);
+
+        // 事件日志：user/message + step/start + chunk + step/end 齐备
+        const evs = eventStore.replay(session.id);
+        const types = evs.map((e) => e.type);
+        expect(types).toContain("user/message");
+        expect(types).toContain("step/start");
+        expect(types).toContain("assistant/chunk");
+        expect(types).toContain("step/end");
+        expect(verifyEventChain(evs)).toEqual([]);
+
+        // 图节点由事件投影派生（确定性 id），且与 graph-node 事件一致
+        const asstNode = graph.listNodes(session.id).find((n) => n.type === "assistant")!;
+        expect(asstNode).toBeDefined();
+        expect(graphNodes[0]).toBe(asstNode.id);
+        expect(graph.getNode(asstNode.id)).toBeDefined();
+
+        // 对账：投影 === 旧 SQLite（绿）
+        const r = reconcileSession(eventStore, legacy, session.id);
+        expect(r.diffs).toEqual([]);
+        expect(r.ok).toBe(true);
+        expect(r.projected!.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+      } finally {
+        await runtime.stop();
+      }
+    } finally {
+      legacy?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

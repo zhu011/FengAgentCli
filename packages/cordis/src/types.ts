@@ -222,6 +222,11 @@ export interface GraphService {
   ): ConversationNode;
   /** 标记回答不佳并回退 */
   rollbackPoorAnswer(nodeId: string, reason?: string): boolean;
+  /**
+   * 从某节点分叉出新分支（Phase 2：fork 事件落盘，旧分支作废保留）。
+   * @returns 分支点节点（新 head）；节点不存在/不在活跃路径时 undefined
+   */
+  forkBranch(parentNodeId: string, branch?: string): ConversationNode | undefined;
 
   /* ---- 溯源 / 分支读取（CLI /rollback、/graph 与 WebUI 可视化共用） ---- */
 

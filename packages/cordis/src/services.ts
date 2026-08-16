@@ -433,22 +433,16 @@ export class LoopServiceImpl extends Service implements LoopService {
         model: session.model,
       });
     }
+    // 记录本回合前已有的助手节点（回合末只对新增节点发 graph-node 事件）
+    const knownAssistantNodeIds = new Set(
+      graph
+        .listNodes(conversationId)
+        .filter((n) => n.type === "assistant")
+        .map((n) => n.id),
+    );
 
     for await (const event of loop.run(session, runOptions)) {
       switch (event.type) {
-        case "message-end": {
-          // 对话即节点：每轮助手回答沉淀为图节点（可溯源）
-          const node = graph.appendAssistantNode(conversationId, event.messageId, {
-            model: session.model,
-          });
-          yield {
-            type: "graph-node",
-            nodeId: node.id,
-            parentId: node.parentId,
-            kind: "assistant",
-          };
-          break;
-        }
         case "tool-call-result": {
           // 工具结果也沉淀为图上的事件（溯源工具链路）
           if (event.result.isError) {
@@ -478,6 +472,28 @@ export class LoopServiceImpl extends Service implements LoopService {
           break;
       }
       yield event as LoopEvent;
+    }
+
+    // Phase 2 回合收尾：先把本回合消息双写落事件（旧存储收敛到当前消息集合，
+    // rollback/fork 截断同步），再把助手回答沉淀为图节点（事件投影可还原）并发出
+    // graph-node 事件。graph-node 从「逐条 message-end」移到回合末：WebUI 经
+    // GET /graph 取数、不依赖该事件，时序变化无消费者影响。
+    this.ctx.storage.saveMessages?.(session.id, session.messages);
+    const newNodes: ConversationNode[] = [];
+    for (const m of session.messages) {
+      if (m.role !== "assistant") continue;
+      const node = graph.appendAssistantNode(conversationId, m.id, {
+        model: session.model,
+      });
+      if (node && !knownAssistantNodeIds.has(node.id)) newNodes.push(node);
+    }
+    for (const node of newNodes) {
+      yield {
+        type: "graph-node",
+        nodeId: node.id,
+        parentId: node.parentId,
+        kind: "assistant",
+      };
     }
 
     // 回答质量不佳 → 可回退（CLI/WebUI 侧通过 /rollback 调用 graph.rollbackPoorAnswer）
@@ -519,6 +535,11 @@ export class GraphServiceImpl extends Service implements GraphService {
     messageId: string,
     meta: Record<string, unknown> = {},
   ): ConversationNode {
+    // 幂等：同一会话同一 messageId 只追加一次（事件溯源实现由消息事件派生，天然幂等）
+    const existing = this.store
+      .listNodes(conversationId)
+      .find((n) => n.type === "assistant" && n.messageId === messageId);
+    if (existing) return existing;
     const head = this.store.getActiveHead(conversationId);
     return this.store.appendNode({
       id: `gnode-${generateId()}`,
@@ -537,6 +558,11 @@ export class GraphServiceImpl extends Service implements GraphService {
     this.store.markQuality(nodeId, "poor", reason);
     const result = this.store.rollbackTo(target.parentId, reason);
     return result !== undefined;
+  }
+
+  forkBranch(parentNodeId: string, branch?: string): ConversationNode | undefined {
+    const result = this.store.fork(parentNodeId, branch);
+    return result?.branchPoint;
   }
 
   getNode(nodeId: string): ConversationNode | undefined {

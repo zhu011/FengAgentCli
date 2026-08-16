@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "@fengagent/agent/session";
@@ -18,6 +18,8 @@ import { createSession, createUserMessage } from "@fengagent/core";
 import type { Message, Session } from "@fengagent/core";
 import {
   DualWriteSessionStore,
+  EventGraphStore,
+  EventStore,
   reconcileAll,
   reconcileSession,
   verifyEventChain,
@@ -166,6 +168,108 @@ describe("ctx.eventLog 服务（Phase 1 写路径/重放/自愈/注册表）", (
       const all = reconcileAll(runtime.ctx.eventLog.store, legacy);
       expect(all.ok).toBe(true);
       expect(all.total).toBe(1);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  test("Phase 2 生产装配：STORAGE 双写 + EventGraphStore 装配，rollback 后对账仍绿 + graph.jsonl 派生视图", async () => {
+    const dir = tmpDir("cordis-phase2-");
+    const dataDir = join(dir, "data");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(dataDir, { recursive: true });
+    const eventStore = new EventStore({ dir: join(dataDir, "events") });
+    const legacy = new SessionStore(join(dataDir, "sessions.db"));
+    cleanups.push(() => legacy.close());
+    const dual = new DualWriteSessionStore({
+      legacy,
+      events: eventStore,
+      model: "deepseek-chat",
+    });
+    const graph = new EventGraphStore({
+      events: eventStore,
+      persistPath: join(dataDir, "graph.jsonl"),
+    });
+
+    // 与 create-runtime-agent.ts 相同的插件装配（STORAGE 包一层 DualWrite + EventGraphStore）
+    const runtime = createRuntime({
+      workdir: dir,
+      plugins: [
+        { id: BUILTIN_PLUGINS.EVENTS, config: { store: eventStore } },
+        {
+          id: BUILTIN_PLUGINS.STORAGE,
+          config: { sessionStore: dual, graph },
+        },
+        { id: BUILTIN_PLUGINS.GRAPH, config: { store: graph } },
+      ],
+    });
+    await runtime.start();
+    try {
+      const ctx = runtime.ctx;
+      const session = createSession("deepseek-chat", "装配会话");
+
+      // 模拟 prompt 写路径：首写 → 用户消息 → 回合末整批消息
+      session.status = "running";
+      session.updatedAt = Date.now();
+      ctx.storage.saveSession(session);
+      const userMsg = createUserMessage("第一问");
+      session.messages.push(userMsg);
+      session.updatedAt = Date.now();
+      ctx.storage.saveSession(session);
+      ctx.storage.saveMessage?.(session.id, userMsg);
+      const asstMsg: Message = {
+        id: "asst-1",
+        role: "assistant",
+        content: [{ type: "text", text: "第一答" }],
+        createdAt: Date.now(),
+      };
+      session.messages.push(asstMsg);
+      session.tokenCount = 60;
+      session.updatedAt = Date.now();
+      session.status = "idle";
+      ctx.storage.saveSession(session);
+      ctx.storage.saveMessages?.(session.id, session.messages);
+
+      // 事件溯源图：节点由消息事件派生
+      const userNode = graph.listNodes(session.id).find((n) => n.type === "user");
+      const asstNode = graph.listNodes(session.id).find((n) => n.type === "assistant");
+      expect(userNode).toBeDefined();
+      expect(asstNode).toBeDefined();
+      expect(asstNode!.parentId).toBe(userNode!.id);
+
+      // rollback（经 ctx.graph.store，与 RuntimeAgent.rollback 同链路）
+      ctx.graph.store.markQuality(asstNode!.id, "poor", "回答不佳");
+      const rb = ctx.graph.store.rollbackTo(userNode!.id, "回答不佳");
+      expect(rb).toBeDefined();
+      expect(rb!.branchPoint.type).toBe("branch-point");
+      expect(rb!.superseded).toEqual([asstNode!.id]);
+
+      // 截断消息 + 事件日志为准对齐 updatedAt + 双写（镜像 RuntimeAgent.rollback）
+      session.messages = session.messages.slice(0, 1);
+      session.tokenCount = 10;
+      const evs = ctx.eventLog.replay(session.id);
+      session.updatedAt = Date.parse(evs[evs.length - 1]!.timestamp);
+      ctx.storage.saveSession(session);
+      ctx.storage.saveMessages?.(session.id, session.messages);
+
+      // 门槛：投影 === 旧 SQLite（绿），事件链完整
+      const r = reconcileSession(eventStore, legacy, session.id);
+      expect(r.diffs).toEqual([]);
+      expect(r.ok).toBe(true);
+      expect(r.projected!.messages.map((m) => m.role)).toEqual(["user"]);
+      expect(verifyEventChain(evs)).toEqual([]);
+
+      // 图派生态：旧回答作废、分支点为 head
+      expect(graph.getNode(asstNode!.id)!.meta.rolledBack).toBe(true);
+      expect(graph.getActiveHead(session.id)?.type).toBe("branch-point");
+
+      // flush → graph.jsonl 派生视图（确定性 id + rolledBack 标记）
+      await ctx.storage.flush();
+      expect(existsSync(join(dataDir, "graph.jsonl"))).toBe(true);
+      const content = readFileSync(join(dataDir, "graph.jsonl"), "utf8");
+      expect(content).toContain(userNode!.id);
+      expect(content).toContain(asstNode!.id);
+      expect(content).toContain('"rolledBack":true');
     } finally {
       await runtime.stop();
     }

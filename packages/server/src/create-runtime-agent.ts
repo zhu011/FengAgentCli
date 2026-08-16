@@ -48,13 +48,17 @@ import {
   resolveDataRoot,
   writeSessionLog,
 } from "@fengagent/shared";
-// 注意：cordis/graph 携带 file:./vendor 依赖，bun 从其他 workspace 包按包名解析会失败，
+// 注意：cordis/graph/events 携带 file:./vendor 依赖，bun 从其他 workspace 包按包名解析会失败，
 // 因此此处用相对路径直接引用（tsconfig paths 对 tsc 同样生效）。
 import { createRuntime } from "../../cordis/src/runtime.ts";
 import { BUILTIN_PLUGINS } from "../../cordis/src/types.ts";
 import type { FengRuntime, SessionStoreLike } from "../../cordis/src/types.ts";
-import { MemoryGraphStore } from "../../graph/src/index.ts";
 import type { ConversationNode } from "../../graph/src/types.ts";
+import {
+  DualWriteSessionStore,
+  EventGraphStore,
+  EventStore,
+} from "../../events/src/index.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -261,7 +265,19 @@ export async function createRuntimeAgent(
     sessionStore = new SessionStore(`${dataDir}/sessions.db`);
   }
   const storageBackend: SessionStoreLike = sessionStore ?? createMemorySessionStore();
-  const graphStore = new MemoryGraphStore({
+  // Phase 2 生产双写：事件日志为事实源，旧存储（SQLite/内存）降级为读模型 —
+  // 同一会话事实双写（saveSession/saveMessage/saveMessages 走 DualWriteSessionStore），
+  // 事件日志 append-only、hash 链校验，对账门槛（reconcile）随时可验。
+  const eventStore = new EventStore({ dir: join(dataDir, "events") });
+  const dualWrite = new DualWriteSessionStore({
+    legacy: storageBackend,
+    events: eventStore,
+    model: config.model,
+  });
+  // Phase 2 graph 事件溯源：图由事件投影派生（#4 head / #6 active·rolledBack 重算），
+  // graph.jsonl 为派生视图（flush 由投影整写），不再作为事实源被增量修改。
+  const graphStore = new EventGraphStore({
+    events: eventStore,
     persistPath: join(dataDir, "graph.jsonl"),
   });
 
@@ -319,11 +335,11 @@ export async function createRuntimeAgent(
       { id: BUILTIN_PLUGINS.CONTEXT, config: { manager: contextManager } },
       {
         id: BUILTIN_PLUGINS.STORAGE,
-        config: { sessionStore: storageBackend, graph: graphStore },
+        config: { sessionStore: dualWrite, graph: graphStore },
       },
       { id: BUILTIN_PLUGINS.GRAPH, config: { store: graphStore } },
-      // Phase 1：事件日志服务（写路径/重放/自愈，事件落 <dataDir>/events）
-      { id: BUILTIN_PLUGINS.EVENTS, config: { dir: join(dataDir, "events") } },
+      // Phase 2：事件服务（写路径/重放/自愈 + 运行时注册表），与双写/图共享同一 EventStore
+      { id: BUILTIN_PLUGINS.EVENTS, config: { store: eventStore } },
       {
         id: BUILTIN_PLUGINS.LOOP,
         config: {
@@ -614,7 +630,16 @@ export class RuntimeAgent extends AgentClass {
     if (idx !== -1) {
       session.messages = session.messages.slice(0, idx + 1);
       session.tokenCount = ctx.context.estimateTokens(session.messages);
-      session.updatedAt = Date.now();
+      // Phase 2：事件日志为准 — 以最后一条事件（rollback）时间戳对齐会话 updatedAt，
+      // 保证「事件投影 === 旧 SQLite」对账 updatedAt 逐条等价
+      const eventLog = this.runtime.ctx.eventLog;
+      if (eventLog) {
+        const evs = eventLog.replay(session.id);
+        const lastTs = evs.length > 0 ? Date.parse(evs[evs.length - 1]!.timestamp) : NaN;
+        session.updatedAt = Number.isNaN(lastTs) ? Date.now() : lastTs;
+      } else {
+        session.updatedAt = Date.now();
+      }
       truncatedToMessageId = keepUntil;
       ctx.storage.saveSession(session);
       ctx.storage.saveMessages?.(session.id, session.messages);
