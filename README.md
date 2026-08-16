@@ -110,6 +110,35 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 
 支持的 type：`anthropic` / `openai` / `openai-compatible` / `google`。
 
+### 切换模型（`/model` 命令）
+
+在 CLI 交互模式中用 `/model` 查看 / 切换当前 Provider 的模型，**持久化并立即生效**（走 `config.model` + `ReloadableLLMClient` 热替换链路，与 `/provider` 一致，Agent Loop 无需重启）：
+
+```bash
+# 列出当前 Provider 实际可用/已配置的模型
+# - openai-compatible：自动拉取 {baseUrl}/models 真实目录（如 DeepSeek）
+# - 其他 Provider：显示常用真实模型 ID，并标注当前模型
+/model list
+
+# 切换模型（持久化到 .fengagent/config.json，热加载生效，后续对话真实走新模型）
+/model deepseek-reasoner
+```
+
+- **真实生效**：切换后更新 `config.model`（openai-compatible 同时写 `openaiCompatibleModel`），重建并热替换 LLM Client，同时更新当前会话 `session.model`——Agent Loop 每次请求都以 `session.model` 作为请求模型；
+- **持久化**：写入 `./.fengagent/config.json`，重启后自动加载；
+- **离线兜底**：`/model list` 拉取失败或未配置 baseUrl 时，自动回退到常见模型目录并注明。
+
+### TUI 界面
+
+CLI 交互模式（Ink TUI）借鉴 dsh-TUI 的 Gentle Mist Blue 设计语言做了统一美化：
+
+- **标题卡片**：品牌雾蓝色调欢迎卡片 / 顶部标题条；
+- **消息列表**：用户 / 助手语义色标签、细点线分隔、品牌色代码块与行内代码；
+- **状态栏**：上下文占用进度条 + `model · tokens · session` 中点分隔信息 + 动态运行指示；
+- **动态图标**：AI「思考中 / 执行工具中」显示逐帧循环动画（星形/月亮/跑马灯帧序列，`SpinnerGlyph` + `useFrameTicker`），宠物 emoji 轮播；
+- **工具卡片**：语义状态图标（✓/✗/⏳）+ 状态色边框；
+- **权限对话框**：琥珀色警告框，`[y] 允许 [n] 拒绝 [Esc] 取消`。
+
 ## 项目结构
 
 ```

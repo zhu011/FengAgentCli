@@ -3,6 +3,9 @@
  *
  * 渲染消息列表：用户消息、助手消息（含 Markdown 渲染）、工具调用卡片。
  * 支持流式文本实时显示。
+ *
+ * 视觉语言借鉴 dsh-TUI：用户/助手标签用语义色，代码块品牌色边框，
+ * 消息分隔用细点线，整体低调统一。
  */
 
 import React from "react";
@@ -10,6 +13,7 @@ import { Box, Text } from "ink";
 import type { Message, ContentBlock } from "@fengagent/core";
 import { ToolView, type ToolCallInfo } from "./tool-view.tsx";
 import { ThinkingPet } from "./thinking-pet.tsx";
+import { theme } from "./theme.ts";
 
 export interface ChatViewProps {
   /** 已完成的消息列表 */
@@ -26,16 +30,17 @@ export interface ChatViewProps {
 function MessageItem({ message }: { message: Message }): React.ReactElement {
   const isUser = message.role === "user";
   const roleLabel = isUser ? "你" : "FengAgentCli";
-  const roleColor = isUser ? "cyan" : "green";
+  const roleColor = isUser ? theme.user : theme.assistant;
 
   return (
     <Box flexDirection="column" width="100%" marginY={0}>
-      {/* 用户消息右对齐，助手消息左对齐 — 均铺满宽度 */}
       <Box flexDirection="row" width="100%" justifyContent={isUser ? "flex-end" : "flex-start"}>
         <Box flexDirection="column" width="100%">
-          <Text color={roleColor} bold>
-            {roleLabel}:
-          </Text>
+          <Box flexDirection="row" justifyContent={isUser ? "flex-end" : "flex-start"}>
+            <Text color={roleColor} bold>
+              {isUser ? "▸ " : ""}{roleLabel}{isUser ? "" : ":"}
+            </Text>
+          </Box>
           <Box flexDirection="column" paddingLeft={isUser ? 8 : 0} width="100%">
             {message.content.map((block, i) => (
               <ContentBlockView key={i} block={block} />
@@ -43,8 +48,8 @@ function MessageItem({ message }: { message: Message }): React.ReactElement {
           </Box>
         </Box>
       </Box>
-      {/* 消息间分隔线 */}
-      <Text color="gray" dimColor>─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─</Text>
+      {/* 消息间细点线分隔 */}
+      <Text color={theme.subtle} dimColor>· · · · · · · · · · · · · · · · · · · · · · · · · · · ·</Text>
     </Box>
   );
 }
@@ -78,14 +83,14 @@ function ContentBlockView({
     case "thinking":
       return (
         <Box flexDirection="column">
-          <Text dimColor italic>
+          <Text color={theme.dim} italic>
             💭 {block.text}
           </Text>
         </Box>
       );
 
     case "image":
-      return <Text dimColor>[image]</Text>;
+      return <Text color={theme.dim}>[image]</Text>;
 
     default:
       return null;
@@ -199,19 +204,19 @@ function MarkdownBlock({ block }: { block: Mdblock }): React.ReactElement | null
   switch (block.type) {
     case "code":
       return (
-        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.brandDim} paddingX={1}>
           {block.lang && (
-            <Text dimColor italic>{block.lang}</Text>
+            <Text color={theme.dim} italic>{block.lang}</Text>
           )}
-          <Text color="cyan">{block.content}</Text>
+          <Text color={theme.brand}>{block.content}</Text>
         </Box>
       );
 
     case "heading": {
       const sizes = {
-        1: { bold: true, color: "white" as const },
-        2: { bold: true, color: "gray" as const },
-        3: { bold: false, color: "gray" as const },
+        1: { bold: true, color: theme.text },
+        2: { bold: true, color: theme.brandBright },
+        3: { bold: false, color: theme.dim },
       };
       const style = sizes[block.level as 1 | 2 | 3] ?? sizes[3]!;
       return (
@@ -226,7 +231,7 @@ function MarkdownBlock({ block }: { block: Mdblock }): React.ReactElement | null
         <Box flexDirection="column">
           {block.items.map((item, i) => (
             <Text key={i}>
-              <Text color="gray">  • </Text>
+              <Text color={theme.dim}>  • </Text>
               <InlineFormatted text={item} />
             </Text>
           ))}
@@ -253,7 +258,7 @@ function InlineFormatted({ text }: { text: string }): React.ReactElement {
       {parts.map((part, i) => {
         if (part.type === "code") {
           return (
-            <Text key={i} color="cyan" backgroundColor="gray">
+            <Text key={i} color={theme.brandBright} backgroundColor={theme.border}>
               {` ${part.content} `}
             </Text>
           );
@@ -336,7 +341,7 @@ export function ChatView({
       {/* 流式输出中的助手文本 */}
       {(streamingText || isRunning) && (
         <Box flexDirection="column">
-          <Text color="green" bold>FengAgentCli:</Text>
+          <Text color={theme.assistant} bold>FengAgentCli:</Text>
           {streamingText ? (
             <MarkdownText text={streamingText} />
           ) : (

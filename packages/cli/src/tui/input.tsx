@@ -15,6 +15,7 @@ import React, { useState, useRef, useMemo } from "react";
 import { Box, Text, useInput } from "ink";
 import { ThinkingPet } from "./thinking-pet.tsx";
 import { filterCommands, COMMANDS } from "../commands.ts";
+import { theme } from "./theme.ts";
 
 /** 可视行数 */
 const MAX_VISIBLE = 10;
@@ -193,7 +194,7 @@ export function Input({
   const promptText = disabled ? (
     <ThinkingPet />
   ) : (
-    <Text color="green" bold>{">"} </Text>
+    <Text color={theme.prompt} bold>{">"} </Text>
   );
 
   return (
@@ -210,10 +211,10 @@ export function Input({
             const isSelected = realIdx === selectedIdx;
             return (
               <Box key={cmd.name} flexDirection="row">
-                <Text color={isSelected ? "cyan" : "gray"}>
+                <Text color={isSelected ? theme.brand : theme.subtle}>
                   {isSelected ? "▶ " : "  "}
                 </Text>
-                <Text color={isSelected ? "cyan" : undefined} bold={isSelected}>
+                <Text color={isSelected ? theme.brand : undefined} bold={isSelected}>
                   /{cmd.name}
                 </Text>
                 <Text dimColor> — {cmd.description}</Text>
@@ -225,7 +226,7 @@ export function Input({
             <Text dimColor>  ↓ 还有 {matchedCommands.length - visibleEnd} 个命令</Text>
           )}
 
-          <Text dimColor italic>  ↑↓选择 · Tab补全 · Esc关闭 · Enter提交</Text>
+          <Text color={theme.dim} italic>  ↑↓选择 · Tab补全 · Esc关闭 · Enter提交</Text>
         </Box>
       )}
 
@@ -235,9 +236,9 @@ export function Input({
         {disabled ? (
           <Text dimColor italic> {placeholder}</Text>
         ) : value ? (
-          <Text>{value}<Text color="gray">█</Text></Text>
+          <Text>{value}<Text color={theme.brand}>█</Text></Text>
         ) : (
-          <Text><Text color="gray">█</Text><Text dimColor italic> {placeholder}</Text></Text>
+          <Text><Text color={theme.brand}>█</Text><Text dimColor italic> {placeholder}</Text></Text>
         )}
       </Box>
     </Box>

@@ -10,6 +10,7 @@
 import React, { useState, useCallback, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import type { PermissionResult } from "@fengagent/core";
+import { theme, statusIcons } from "./theme.ts";
 
 /** 权限请求信息 */
 export interface PermissionDialogRequest {
@@ -70,35 +71,34 @@ export function PermissionDialog({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="yellow"
+      borderColor={theme.warning}
       paddingX={1}
       paddingY={0}
       marginY={1}
     >
-      <Text color="yellow" bold>
-        ⚠ 权限请求
-      </Text>
-      <Box flexDirection="column" marginY={0}>
-        <Text>
-          <Text color="gray">工具: </Text>
-          <Text color="cyan" bold>{request.toolName}</Text>
+      <Box flexDirection="row">
+        <Text color={theme.warning} bold>
+          {statusIcons.warning} 权限请求
         </Text>
+        <Text dimColor>  — {request.toolName}</Text>
+      </Box>
+      <Box flexDirection="column" marginY={0}>
         {inputPreview && (
           <Text>
-            <Text color="gray">参数: </Text>
-            <Text>{inputPreview}</Text>
+            <Text color={theme.subtle}>参数: </Text>
+            <Text color={theme.text}>{inputPreview}</Text>
           </Text>
         )}
         {request.reason && (
           <Text>
-            <Text color="gray">原因: </Text>
-            <Text color="yellow">{request.reason}</Text>
+            <Text color={theme.subtle}>原因: </Text>
+            <Text color={theme.warning}>{request.reason}</Text>
           </Text>
         )}
       </Box>
       <Box marginTop={0}>
-        <Text color="gray">
-          {responded ? "已响应" : "[y] 允许  [n] 拒绝"}
+        <Text color={theme.dim}>
+          {responded ? "已响应" : "[y] 允许   [n] 拒绝   [Esc] 取消"}
         </Text>
       </Box>
     </Box>

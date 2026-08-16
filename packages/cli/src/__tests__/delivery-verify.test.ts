@@ -13,7 +13,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { parseArgs, getHelpText, VERSION } from "../args.ts";
-import { handleCommand, type CommandContext } from "../commands.ts";
+import { handleCommand, buildModelListMessage, type CommandContext } from "../commands.ts";
 import type { Agent } from "@fengagent/agent";
 import type {
   LLMClient,
@@ -392,20 +392,37 @@ describe("CLI 交付验证：Slash 命令全覆盖", () => {
     expect(result.message).toContain("test-model");
   });
 
-  test("/model list 列出常见模型", () => {
-    const result = handleCommand("/model list", ctx);
-    expect(result.handled).toBe(true);
-    expect(result.message).toContain("常见模型");
-    expect(result.message).toContain("claude");
-    expect(result.message).toContain("gpt");
+  test("/model list 列出当前 provider 真实模型", async () => {
+    const text = await buildModelListMessage(ctx);
+    expect(text).toContain("anthropic");
+    expect(text).toContain("claude");
+    expect(text).toContain("test-model");
   });
 
-  test("/model <id> 切换模型", () => {
-    const result = handleCommand("/model gpt-4o", ctx);
-    expect(result.handled).toBe(true);
-    expect(result.newModel).toBe("gpt-4o");
-    expect(result.message).toContain("已切换");
-    expect(result.message).toContain("gpt-4o");
+  test("/model <id> 切换模型并持久化", () => {
+    const cwd = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), `feng-model-${Date.now()}-`));
+    try {
+      process.chdir(tmp);
+      const result = handleCommand("/model gpt-4o", ctx);
+      expect(result.handled).toBe(true);
+      expect(result.newModel).toBe("gpt-4o");
+      expect(result.message).toContain("已切换");
+      expect(result.message).toContain("gpt-4o");
+      expect(result.message).toContain("config.json");
+
+      const raw = JSON.parse(
+        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      expect(raw["model"]).toBe("gpt-4o");
+    } finally {
+      process.chdir(cwd);
+      try {
+        rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
   });
 
   test("/export 无活动会话返回提示", () => {

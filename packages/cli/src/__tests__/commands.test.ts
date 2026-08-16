@@ -6,7 +6,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleCommand, type CommandContext } from "../commands.ts";
+import { handleCommand, buildModelListMessage, type CommandContext } from "../commands.ts";
 import type { Agent } from "@fengagent/agent";
 import type { Config } from "@fengagent/core";
 import { createSession } from "@fengagent/core";
@@ -323,23 +323,91 @@ describe("handleCommand — /model", () => {
     expect(result.message).toContain("test-model");
   });
 
-  test("/model list 列出常见模型", () => {
+  test("/model list 返回异步标记（由 App 层构建列表）", () => {
     const agent = createTestAgent();
     const ctx: CommandContext = { agent, currentModel: "test-model" };
     const result = handleCommand("/model list", ctx);
     expect(result.handled).toBe(true);
-    expect(result.message).toContain("claude");
-    expect(result.message).toContain("gpt");
+    expect(result.message).toBe("__MODEL_LIST__");
   });
 
-  test("/model <id> 切换模型", () => {
+  test("/model list 构建当前 provider 真实模型列表（anthropic）", async () => {
     const agent = createTestAgent();
-    const ctx: CommandContext = { agent, currentModel: "old-model" };
-    const result = handleCommand("/model new-model-id", ctx);
-    expect(result.handled).toBe(true);
-    expect(result.newModel).toBe("new-model-id");
-    expect(result.message).toContain("old-model");
-    expect(result.message).toContain("new-model-id");
+    const ctx: CommandContext = { agent, currentModel: "test-model" };
+    const text = await buildModelListMessage(ctx);
+    expect(text).toContain("anthropic");
+    expect(text).toContain("claude");
+    expect(text).toContain("test-model"); // 当前模型被标记
+    expect(text).toContain("/model <id>");
+  });
+
+  test("/model list 未配置 baseUrl 时 openai-compatible 回退到目录", async () => {
+    const config = { ...createTestConfig(), provider: "openai-compatible" };
+    const agent = createAgentWithConfig(config);
+    const ctx: CommandContext = { agent, currentModel: "test-model" };
+    const text = await buildModelListMessage(ctx);
+    expect(text).toContain("openai-compatible");
+    expect(text).toContain("deepseek-chat");
+  });
+
+  test("/model <id> 切换模型并持久化", () => {
+    const cwd = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), "feng-model-cmd-"));
+    try {
+      process.chdir(tmp);
+      const agent = createTestAgent();
+      const ctx: CommandContext = { agent, currentModel: "old-model" };
+      const result = handleCommand("/model new-model-id", ctx);
+      expect(result.handled).toBe(true);
+      expect(result.newModel).toBe("new-model-id");
+      expect(result.message).toContain("old-model");
+      expect(result.message).toContain("new-model-id");
+      expect(result.message).toContain("config.json");
+
+      // 已持久化到项目配置
+      const raw = JSON.parse(
+        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      expect(raw["model"]).toBe("new-model-id");
+    } finally {
+      process.chdir(cwd);
+      try {
+        rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("/model <id> openai-compatible 同时写入 openaiCompatibleModel", () => {
+    const cwd = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), "feng-model-cmd-"));
+    try {
+      process.chdir(tmp);
+      const config = {
+        ...createTestConfig(),
+        provider: "openai-compatible",
+        openaiCompatibleModel: "deepseek-chat",
+      };
+      const agent = createAgentWithConfig(config);
+      const ctx: CommandContext = { agent, currentModel: "deepseek-chat" };
+      const result = handleCommand("/model deepseek-reasoner", ctx);
+      expect(result.handled).toBe(true);
+      expect(result.newModel).toBe("deepseek-reasoner");
+
+      const raw = JSON.parse(
+        readFileSync(join(tmp, ".fengagent", "config.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      expect(raw["model"]).toBe("deepseek-reasoner");
+      expect(raw["openaiCompatibleModel"]).toBe("deepseek-reasoner");
+    } finally {
+      process.chdir(cwd);
+      try {
+        rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
   });
 });
 

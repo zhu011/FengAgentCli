@@ -255,3 +255,24 @@ trigger: review|审查|code review
 
 对应配置键：`provider`、`anthropicApiKey/BaseUrl`、`openaiApiKey/BaseUrl`、
 `openaiCompatibleApiKey/BaseUrl/Model`、`googleApiKey/BaseUrl`、`model`。
+
+## TUI 命令：`/model`（切换模型）
+
+`/model` 查看 / 切换当前 Provider 的模型，持久化并立即生效（复用 `/provider` 的
+`config + ReloadableLLMClient` 热替换链路）：
+
+| 命令 | 说明 |
+|------|------|
+| `/model list` | 列出当前 Provider 实际可用/已配置的模型。openai-compatible 会尝试拉取 `{baseUrl}/models` 真实目录（3s 超时），失败或未配置时回退到常见模型目录并标注当前模型 |
+| `/model <id>` | 切换模型：写入 `config.model`（openai-compatible 同时写 `openaiCompatibleModel`）→ 持久化到 `./.fengagent/config.json` → `reloadProvider` 重建并热替换 LLM Client → 更新当前会话 `session.model` |
+
+### 生效链路
+
+1. **持久化**：`writeConfigFile({ model, openaiCompatibleModel? })` 写入项目级 `./.fengagent/config.json`；
+2. **热替换**：`reloadProvider`（`packages/cli/src/create-agent.ts`）重建 LLM Client 并 `setClient` 原子替换；
+3. **会话同步**：App 层把 `newModel` 写回 `session.model`；Agent Loop
+   （`packages/agent/src/loop.ts`）每次 LLM 请求都以 `session.model` 作为 `request.model`，
+   因此后续对话真实走新模型（所有 Provider 的 client 均优先使用 `request.model`）。
+
+> 提示：`/model list` 在 openai-compatible 下返回的是服务端真实模型目录（如 DeepSeek 的
+> `deepseek-chat` / `deepseek-reasoner`），非硬编码列表。

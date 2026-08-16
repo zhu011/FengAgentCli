@@ -13,12 +13,17 @@ import { ChatView } from "./chat-view.tsx";
 import { Input } from "./input.tsx";
 import { StatusBar } from "./status-bar.tsx";
 import { ThinkingPet } from "./thinking-pet.tsx";
-import { handleCommand, type CommandContext } from "../commands.ts";
+import {
+  handleCommand,
+  buildModelListMessage,
+  type CommandContext,
+} from "../commands.ts";
 import type { ToolCallInfo } from "./tool-view.tsx";
 import {
   PermissionDialog,
   usePermissionRequester,
 } from "./permission-dialog.tsx";
+import { theme } from "./theme.ts";
 
 export interface AppProps {
   /** Agent 实例 */
@@ -112,6 +117,18 @@ export function App({
         const result = handleCommand(text, ctx);
 
         if (!result.handled) {
+          return;
+        }
+
+        // /model list — 异步构建真实模型列表（openai-compatible 尝试拉取 /models）
+        if (result.message === "__MODEL_LIST__") {
+          try {
+            const listText = await buildModelListMessage(ctx);
+            addSystemMessage(listText);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            addSystemMessage(`获取模型列表失败: ${message}`);
+          }
           return;
         }
 
@@ -279,56 +296,55 @@ export function App({
           <Box
             flexDirection="column"
             borderStyle="round"
-            borderColor="magenta"
+            borderColor={theme.brandDim}
             paddingX={2}
-            paddingY={2}
-            width={48}
+            paddingY={1}
+            width={52}
           >
             <Box flexDirection="row" justifyContent="center">
-              <Text bold color="magenta">
-                ⚡⚡  FENGAGENTCLI  ⚡⚡
+              <Text bold color={theme.brand}>
+                ⚡ FENGAGENTCLI
               </Text>
+              <Text dimColor>  v0.1.0</Text>
             </Box>
             <Box flexDirection="row" justifyContent="center">
-              <Text dimColor> v0.1.0</Text>
+              <Text color={theme.brandBright}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
             </Box>
-            <Box flexDirection="column" width={44}>
-              <Text> </Text>
-              <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
-              <Text> </Text>
-              <Box flexDirection="row" justifyContent="center">
-                <Text color="white" bold>开源本地 AI Agent 编程工具</Text>
-              </Box>
-              <Box flexDirection="row" justifyContent="center">
-                <Text dimColor>CLI · TUI · Web · Multi-Agent</Text>
-              </Box>
-              <Text> </Text>
-              <Box flexDirection="row">
-                <Box width={14}><Text>🗣  对话</Text></Box>
-                <Box width={14}><Text>🔧  工具</Text></Box>
-                <Box width={14}><Text>🤖  多Agent</Text></Box>
-              </Box>
-              <Box flexDirection="row">
-                <Box width={14}><Text>🧠  记忆</Text></Box>
-                <Box width={14}><Text>⚡  MCP</Text></Box>
-                <Box width={14}><Text>🎨  WebUI</Text></Box>
-              </Box>
-              <Text> </Text>
-              <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
-              <Text> </Text>
-              <Box flexDirection="row" justifyContent="center">
-                <Text color="cyan">📝  输入问题开始对话</Text>
-              </Box>
-              <Box flexDirection="row" justifyContent="center">
-                <Text color="gray" dimColor>❓  /help  查看帮助</Text>
-              </Box>
+            <Text> </Text>
+            <Box flexDirection="row" justifyContent="center">
+              <Text bold color={theme.text}>开源本地 AI Agent 编程工具</Text>
+            </Box>
+            <Box flexDirection="row" justifyContent="center">
+              <Text color={theme.dim}>CLI · TUI · Web · Multi-Agent</Text>
+            </Box>
+            <Text> </Text>
+            <Box flexDirection="row" justifyContent="center">
+              <Box width={16}><Text color={theme.brand}>🗣  对话</Text></Box>
+              <Box width={16}><Text color={theme.brand}>🔧  工具</Text></Box>
+              <Box width={16}><Text color={theme.brand}>🤖  多Agent</Text></Box>
+            </Box>
+            <Box flexDirection="row" justifyContent="center">
+              <Box width={16}><Text color={theme.brand}>🧠  记忆</Text></Box>
+              <Box width={16}><Text color={theme.brand}>⚡  MCP</Text></Box>
+              <Box width={16}><Text color={theme.brand}>🎨  WebUI</Text></Box>
+            </Box>
+            <Text> </Text>
+            <Box flexDirection="row" justifyContent="center">
+              <Text color={theme.brandBright}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+            </Box>
+            <Text> </Text>
+            <Box flexDirection="row" justifyContent="center">
+              <Text color={theme.text}>📝  输入问题开始对话</Text>
+            </Box>
+            <Box flexDirection="row" justifyContent="center">
+              <Text color={theme.dim}>❓  /help 查看帮助 · /model 切换模型</Text>
             </Box>
           </Box>
         </Box>
       ) : (
         <Box flexDirection="row" justifyContent="center" marginBottom={0}>
-          <Text bold color="magenta">⚡ FENGAGENTCLI</Text>
-          <Text dimColor> · v0.1.0</Text>
+          <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
+          <Text color={theme.subtle}> · v0.1.0</Text>
         </Box>
       )}
 
@@ -338,9 +354,11 @@ export function App({
         {ui.systemMessages.length > 0 && (
           <Box flexDirection="column" width="100%" marginBottom={1}>
             {ui.systemMessages.map((msg, i) => (
-              <Text key={i} color="gray" wrap="truncate">
-                {msg}
-              </Text>
+              <Box key={i} flexDirection="column" borderStyle="round" borderColor={theme.subtle} paddingX={1}>
+                <Text color={theme.dim} wrap="truncate">
+                  {msg}
+                </Text>
+              </Box>
             ))}
           </Box>
         )}
@@ -357,7 +375,7 @@ export function App({
       {/* 思考动画宠物 — AI 运行中且无流式文本时显示 */}
       {ui.status === "running" && ui.streamingText === "" && !pendingRequest && (
         <Box paddingX={1} marginBottom={0}>
-          <ThinkingPet />
+          <ThinkingPet text={ui.toolCalls.length > 0 ? "执行工具中" : "思考中"} />
         </Box>
       )}
 

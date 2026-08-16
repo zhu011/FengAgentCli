@@ -239,25 +239,216 @@ function handleModelCommand(
   ctx: CommandContext,
 ): CommandResult {
   if (args.length === 0 || args[0] === "help") {
+    const config = ctx.agent.getConfig();
     return {
       handled: true,
-      message: "用法:\n  /model <id>   — 切换到指定模型\n  /model list   — 列出常见模型\n当前模型: " + ctx.currentModel,
+      message:
+        "用法:\n" +
+        "  /model <id>   — 切换到指定模型（持久化并立即生效）\n" +
+        "  /model list   — 列出当前 Provider 可用/已配置的模型\n" +
+        `当前模型: ${ctx.currentModel}\n` +
+        `当前 Provider: ${config.provider}`,
     };
   }
 
   if (args[0] === "list") {
-    const models = [
-      "claude-sonnet-4-20250514    — Claude Sonnet 4 (Anthropic)",
-      "claude-haiku-3               — Claude Haiku 3 (Anthropic)",
-      "gpt-4o                       — GPT-4o (OpenAI)",
-      "gpt-4o-mini                  — GPT-4o Mini (OpenAI)",
-      "deepseek-v4-pro              — DeepSeek V4 Pro (OpenAI-Compatible)",
-    ];
-    return { handled: true, message: `常见模型:\n${models.map((m) => `  ${m}`).join("\n")}` };
+    // 列表需要异步构建（openai-compatible 会尝试拉取真实 /models 目录），
+    // 返回标记由 App 层异步处理（与 __COMPACT__ 同模式）。
+    return { handled: true, message: "__MODEL_LIST__" };
   }
 
-  const modelId = args.join(" ");
-  return { handled: true, message: `已切换模型: ${ctx.currentModel} → ${modelId}`, newModel: modelId };
+  return handleModelSwitch(args.join(" ").trim(), ctx);
+}
+
+/**
+ * 处理 /model <id> — 真正切换模型并立即生效。
+ *
+ * 机制（复用 /provider 的 config + ReloadableLLMClient 热替换链路）：
+ * 1. 持久化 config.model（openai-compatible 同时写入 openaiCompatibleModel）到 .fengagent/config.json
+ * 2. reloadProvider 重建底层 LLM Client（新 defaultModel），原子替换，无需重建 Agent
+ * 3. 返回 newModel，App 层同步更新当前会话的 session.model —
+ *    Agent Loop 每次请求都读取 session.model 作为 request.model，因此后续对话真实走新模型
+ */
+function handleModelSwitch(modelId: string, ctx: CommandContext): CommandResult {
+  if (!modelId) {
+    return {
+      handled: true,
+      message: "用法: /model <id>\n使用 /model list 查看可用模型。",
+    };
+  }
+
+  const config = ctx.agent.getConfig();
+  const provider = config.provider;
+
+  // 配置补丁：model 必写；openai-compatible 额外写 openaiCompatibleModel（与 /provider 一致）
+  const patch: Record<string, unknown> = { model: modelId };
+  if (provider === "openai-compatible") {
+    patch.openaiCompatibleModel = modelId;
+  }
+
+  // 持久化到 ./.fengagent/config.json（deepMerge 保留其他配置键）
+  const filePath = writeConfigFile(patch);
+
+  // 立即生效：重建 LLM Client 并热替换
+  let hotReloaded = false;
+  try {
+    hotReloaded = reloadProvider(patch) !== null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      handled: true,
+      message:
+        `配置已写入 ${filePath}，但热加载失败: ${message}\n请重启后生效。`,
+      newModel: modelId,
+    };
+  }
+
+  return {
+    handled: true,
+    message:
+      `✅ 已切换模型: ${ctx.currentModel} → ${modelId}\n` +
+      `  config: ${filePath}  (已持久化，重启后自动加载)\n` +
+      (hotReloaded
+        ? `  ✓ 已热加载生效 — 后续对话将使用新模型`
+        : `  ⚠ 当前实例未接入热加载，请重启后生效`),
+    newModel: modelId,
+  };
+}
+
+// ──────────────────────────────────────────────
+// /model list — 当前 Provider 实际可用/已配置的模型
+// ──────────────────────────────────────────────
+
+/** 各 Provider 的常用真实模型目录（fallback：无法联网拉取时使用） */
+const MODEL_CATALOG: Record<string, Array<{ id: string; note: string }>> = {
+  anthropic: [
+    { id: "claude-opus-4-1", note: "Claude Opus 4.1 (Anthropic)" },
+    { id: "claude-sonnet-4-20250514", note: "Claude Sonnet 4 (Anthropic)" },
+    { id: "claude-haiku-4-5-20251001", note: "Claude Haiku 4.5 (Anthropic)" },
+    { id: "claude-3-5-sonnet-20241022", note: "Claude 3.5 Sonnet (Anthropic)" },
+    { id: "claude-3-5-haiku-20241022", note: "Claude 3.5 Haiku (Anthropic)" },
+  ],
+  openai: [
+    { id: "gpt-4o", note: "GPT-4o (OpenAI)" },
+    { id: "gpt-4o-mini", note: "GPT-4o Mini (OpenAI)" },
+    { id: "gpt-4.1", note: "GPT-4.1 (OpenAI)" },
+    { id: "gpt-4.1-mini", note: "GPT-4.1 Mini (OpenAI)" },
+    { id: "o4-mini", note: "o4-mini (OpenAI)" },
+  ],
+  google: [
+    { id: "gemini-2.5-pro", note: "Gemini 2.5 Pro (Google)" },
+    { id: "gemini-2.5-flash", note: "Gemini 2.5 Flash (Google)" },
+    { id: "gemini-2.0-flash", note: "Gemini 2.0 Flash (Google)" },
+    { id: "gemini-1.5-pro", note: "Gemini 1.5 Pro (Google)" },
+  ],
+  // openai-compatible：优先拉取服务端真实目录，失败时回退到这份常见模型
+  "openai-compatible": [
+    { id: "deepseek-chat", note: "DeepSeek V3 (通用对话)" },
+    { id: "deepseek-reasoner", note: "DeepSeek R1 (推理)" },
+  ],
+};
+
+/** 3 秒超时的 AbortSignal */
+const MODEL_LIST_TIMEOUT_MS = 3000;
+
+/**
+ * 异步构建 /model list 输出。
+ *
+ * - openai-compatible：配置了 baseUrl + apiKey 时，尝试 GET {baseURL}/models
+ *   拉取真实可用模型目录；失败/未配置时回退到 MODEL_CATALOG 并注明。
+ * - 其他 Provider：使用 MODEL_CATALOG 真实模型 ID，并标注当前已配置模型。
+ *
+ * @param ctx - 命令上下文
+ * @returns 展示用的多行文本
+ */
+export async function buildModelListMessage(
+  ctx: CommandContext,
+): Promise<string> {
+  const config = ctx.agent.getConfig();
+  const provider = config.provider;
+  const currentModel =
+    (provider === "openai-compatible"
+      ? config.openaiCompatibleModel
+      : undefined) ?? config.model;
+
+  const lines: string[] = [];
+  lines.push(`当前 Provider: ${provider}  当前模型: ${currentModel}`);
+  lines.push("");
+
+  if (provider === "openai-compatible") {
+    const baseUrl = config.openaiCompatibleBaseUrl;
+    const apiKey = config.openaiCompatibleApiKey;
+    if (baseUrl && apiKey) {
+      const remote = await fetchProviderModels(baseUrl, apiKey);
+      if (remote.length > 0) {
+        lines.push(`模型列表 (${baseUrl}/models):`);
+        lines.push(...formatModelList(remote, currentModel));
+        lines.push("");
+        lines.push("提示: /model <id> 切换模型（持久化并立即生效）。");
+        return lines.join("\n");
+      }
+      lines.push(`⚠ 无法连接 ${baseUrl}/models，显示常见模型目录:`);
+    } else {
+      lines.push("⚠ 未配置 baseUrl/apiKey，显示常见模型目录:（可用 /provider set openai-compatible 配置）");
+    }
+  } else {
+    lines.push(`模型列表 (${provider} 常用真实模型):`);
+  }
+
+  const catalog = MODEL_CATALOG[provider] ?? MODEL_CATALOG["openai-compatible"]!;
+  lines.push(...formatModelList(catalog.map((m) => m.id), currentModel));
+  lines.push("");
+  lines.push("提示: /model <id> 切换模型（持久化并立即生效）。");
+  return lines.join("\n");
+}
+
+/** 将模型 ID 列表格式化为带「当前」标记的行 */
+function formatModelList(
+  modelIds: string[],
+  currentModel: string,
+): string[] {
+  const seen = new Set<string>();
+  const rows: string[] = [];
+  for (const id of modelIds) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const isCurrent = id === currentModel;
+    rows.push(`  ${id}${isCurrent ? "  ← 当前" : ""}`);
+  }
+  return rows;
+}
+
+/**
+ * 拉取 OpenAI 兼容端点 /models 的真实模型目录。
+ *
+ * @param baseUrl - 服务端地址（如 https://api.deepseek.com）
+ * @param apiKey - API Key
+ * @returns 模型 ID 列表；失败时返回空数组
+ */
+async function fetchProviderModels(
+  baseUrl: string,
+  apiKey: string,
+): Promise<string[]> {
+  try {
+    const endpoint = `${baseUrl.replace(/\/+$/, "")}/models`;
+    const response = await fetch(endpoint, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS),
+    });
+    if (!response.ok) return [];
+    const json = (await response.json()) as {
+      data?: Array<{ id?: string }>;
+    };
+    const ids = (json.data ?? [])
+      .map((m) => m.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    return ids;
+  } catch {
+    return [];
+  }
 }
 
 // ──────────────────────────────────────────────

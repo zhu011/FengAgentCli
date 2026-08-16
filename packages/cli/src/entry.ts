@@ -15,6 +15,7 @@ import { App } from "./tui/app.tsx";
 import { parseArgs, getHelpText, VERSION, type ArgParseError } from "./args.ts";
 import { createAgent } from "./create-agent.ts";
 import { runPrintMode } from "./print-mode.ts";
+import { ensureWindowsConsoleUtf8 } from "./tui/win-console.ts";
 import type { Session } from "@fengagent/core";
 import { createLogger } from "@fengagent/shared";
 
@@ -30,6 +31,9 @@ const log = createLogger("cli");
  * 4. 默认 → Ink TUI 交互模式
  */
 export async function main(argv: string[]): Promise<void> {
+  // Windows 中文控制台（代码页 936）下确保 UTF-8 输出，避免 TUI 中文/emoji 乱码
+  ensureWindowsConsoleUtf8();
+
   log.info("main", `CLI start, args=${argv.join(" ").slice(0, 50)}`);
   let parsed;
   try {
