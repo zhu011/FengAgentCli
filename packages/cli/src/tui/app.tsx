@@ -273,70 +273,64 @@ export function App({
 
   return (
     <Box flexDirection="column" height={stdoutStream.rows || 24}>
-      {/* 标题 + 欢迎页合并为单个大卡片（无消息时）/ 标题栏（有消息时） */}
-      <Box flexDirection="row" justifyContent="center" marginBottom={0}>
-        <Box
-          flexDirection="column"
-          borderStyle="round"
-          borderColor="magenta"
-          paddingX={2}
-          paddingY={2}
-          width={48}
-        >
-          {/* 标题 — 双闪电两端对称，居中 */}
-          <Box flexDirection="row" justifyContent="center">
-            <Text bold color="magenta">
-              ⚡⚡  FENGAGENTCLI  ⚡⚡
-            </Text>
-          </Box>
-          <Box flexDirection="row" justifyContent="center">
-            <Text dimColor> v0.1.0</Text>
-          </Box>
-
-          {/* 欢迎内容（仅无消息时展示） */}
-          {messages.length === 0 &&
-            ui.streamingText === "" &&
-            ui.systemMessages.length === 0 && (
-              <Box flexDirection="column" width={44}>
-                {/* 空白呼吸行 */}
-                <Text> </Text>
-                {/* 连续分隔线 — 44 字符覆盖内容宽度 */}
-                <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
-                <Text> </Text>
-                {/* 简介 */}
-                <Box flexDirection="row" justifyContent="center">
-                  <Text color="white" bold>开源本地 AI Agent 编程工具</Text>
-                </Box>
-                <Box flexDirection="row" justifyContent="center">
-                  <Text dimColor>CLI · TUI · Web · Multi-Agent</Text>
-                </Box>
-                <Text> </Text>
-                {/* 6 核心能力 — 2 行 3 列，每列用 Box 固定宽度 14 等宽分布 */}
-                <Box flexDirection="row">
-                  <Box width={14}><Text>🗣  对话</Text></Box>
-                  <Box width={14}><Text>🔧  工具</Text></Box>
-                  <Box width={14}><Text>🤖  多Agent</Text></Box>
-                </Box>
-                <Box flexDirection="row">
-                  <Box width={14}><Text>🧠  记忆</Text></Box>
-                  <Box width={14}><Text>⚡  MCP</Text></Box>
-                  <Box width={14}><Text>🎨  WebUI</Text></Box>
-                </Box>
-                <Text> </Text>
-                {/* 连续分隔线 — 44 字符 */}
-                <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
-                <Text> </Text>
-                {/* 操作提示 */}
-                <Box flexDirection="row" justifyContent="center">
-                  <Text color="cyan">📝  输入问题开始对话</Text>
-                </Box>
-                <Box flexDirection="row" justifyContent="center">
-                  <Text color="gray" dimColor>❓  /help  查看帮助</Text>
-                </Box>
+      {/* 标题栏：有消息时单行无边框，无消息时完整欢迎大卡片 */}
+      {messages.length === 0 && ui.streamingText === "" && ui.systemMessages.length === 0 ? (
+        <Box flexDirection="row" justifyContent="center" marginBottom={0}>
+          <Box
+            flexDirection="column"
+            borderStyle="round"
+            borderColor="magenta"
+            paddingX={2}
+            paddingY={2}
+            width={48}
+          >
+            <Box flexDirection="row" justifyContent="center">
+              <Text bold color="magenta">
+                ⚡⚡  FENGAGENTCLI  ⚡⚡
+              </Text>
+            </Box>
+            <Box flexDirection="row" justifyContent="center">
+              <Text dimColor> v0.1.0</Text>
+            </Box>
+            <Box flexDirection="column" width={44}>
+              <Text> </Text>
+              <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+              <Text> </Text>
+              <Box flexDirection="row" justifyContent="center">
+                <Text color="white" bold>开源本地 AI Agent 编程工具</Text>
               </Box>
-            )}
+              <Box flexDirection="row" justifyContent="center">
+                <Text dimColor>CLI · TUI · Web · Multi-Agent</Text>
+              </Box>
+              <Text> </Text>
+              <Box flexDirection="row">
+                <Box width={14}><Text>🗣  对话</Text></Box>
+                <Box width={14}><Text>🔧  工具</Text></Box>
+                <Box width={14}><Text>🤖  多Agent</Text></Box>
+              </Box>
+              <Box flexDirection="row">
+                <Box width={14}><Text>🧠  记忆</Text></Box>
+                <Box width={14}><Text>⚡  MCP</Text></Box>
+                <Box width={14}><Text>🎨  WebUI</Text></Box>
+              </Box>
+              <Text> </Text>
+              <Text color="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+              <Text> </Text>
+              <Box flexDirection="row" justifyContent="center">
+                <Text color="cyan">📝  输入问题开始对话</Text>
+              </Box>
+              <Box flexDirection="row" justifyContent="center">
+                <Text color="gray" dimColor>❓  /help  查看帮助</Text>
+              </Box>
+            </Box>
+          </Box>
         </Box>
-      </Box>
+      ) : (
+        <Box flexDirection="row" justifyContent="center" marginBottom={0}>
+          <Text bold color="magenta">⚡ FENGAGENTCLI</Text>
+          <Text dimColor> · v0.1.0</Text>
+        </Box>
+      )}
 
       {/* 对话区域（占满剩余空间，width 100% 平铺填充） */}
       <Box flexDirection="column" flexGrow={1} width="100%" overflowY="hidden">
