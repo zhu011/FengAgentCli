@@ -704,7 +704,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows</code></pre
   <p class="section-desc">深入了解 FengAgentCli 的核心能力。</p>
 
   <h3>对话系统</h3>
-  <p>支持多轮上下文对话，通过 SSE（Server-Sent Events）实现流式输出。CLI 模式使用 Ink TUI 渲染，WebUI 模式使用 React + Markdown 渲染。内置思考动画和状态栏提示。</p>
+  <p>支持多轮上下文对话，通过 SSE（Server-Sent Events）实现流式输出。CLI 模式使用 Ink TUI 渲染，WebUI 模式使用 React + Markdown 渲染。TUI 借鉴 dsh-TUI 的 Gentle Mist Blue 设计语言做了统一美化：标题卡片、消息列表、状态栏（上下文占用进度条 + 动态运行指示）、输入框、工具卡片、权限对话框视觉统一；AI 思考/运行时显示逐帧循环动态图标（<code>SpinnerGlyph</code> 星形/月亮/跑马灯帧序列 + 宠物 emoji 轮播）。</p>
 
   <h3 id="feat-agent">多 Agent 协作</h3>
   <p>通过 <strong>Task 工具</strong>派遣子 Agent，支持独立 Session 和角色定义。在 <code>.fengagent/agents/*.md</code> 中创建 Agent 定义文件：</p>
@@ -847,8 +847,8 @@ feng serve --port 8080</code></pre>
       <tr><td><code>/session new [title]</code></td><td>新建会话</td></tr>
       <tr><td><code>/session list</code></td><td>列出所有会话</td></tr>
       <tr><td><code>/session switch &lt;id&gt;</code></td><td>切换到指定会话</td></tr>
-      <tr><td><code>/model &lt;id&gt;</code></td><td>切换模型</td></tr>
-      <tr><td><code>/model list</code></td><td>列出常见模型</td></tr>
+      <tr><td><code>/model &lt;id&gt;</code></td><td>切换模型（持久化并立即生效，后续对话真实走新模型）</td></tr>
+      <tr><td><code>/model list</code></td><td>列出当前 Provider 实际可用/已配置的模型（openai-compatible 拉取服务端真实目录）</td></tr>
       <tr><td><code>/provider show</code></td><td>查看当前 Provider（apiKey 自动打码）</td></tr>
       <tr><td><code>/provider set &lt;type&gt; [--api-key X] [--base-url Y] [--model Z]</code></td><td>配置 Provider（anthropic / openai / openai-compatible / google），持久化到 <code>.fengagent/config.json</code> 并热加载生效；缺省项逐项提示输入</td></tr>
       <tr><td><code>/export [file]</code></td><td>导出当前会话为 Markdown</td></tr>

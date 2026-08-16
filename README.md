@@ -190,7 +190,7 @@ bun run clean            # 清理构建产物
 
 | 文档 | 说明 |
 |------|------|
-| [在线文档站](docs/site/index.html) | 交互式文档（暗色主题） |
+| [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档（暗色主题） |
 | [架构设计](docs/ARCHITECTURE.md) | 系统架构与模块设计 |
 | [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件、权限规则 |
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建流程 |
