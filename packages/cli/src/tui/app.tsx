@@ -332,8 +332,8 @@ export function App({
         </Box>
       )}
 
-      {/* 对话区域（占满剩余空间，width 100% 平铺填充） */}
-      <Box flexDirection="column" flexGrow={1} width="100%" overflowY="hidden">
+      {/* 对话区域（占满剩余空间，flexShrink 让出高度给补全列表） */}
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} width="100%" overflowY="hidden">
         {/* 系统消息（命令输出等） */}
         {ui.systemMessages.length > 0 && (
           <Box flexDirection="column" width="100%" marginBottom={1}>

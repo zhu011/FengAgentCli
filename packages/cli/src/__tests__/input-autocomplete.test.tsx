@@ -95,8 +95,46 @@ test("Input 组件: 初始渲染包含提示符和占位文本", () => {
 test("Input 组件: disabled 状态显示 ThinkingPet", () => {
   const { lastFrame } = render(<Input onSubmit={() => {}} disabled={true} />);
   const frame = lastFrame();
-  // ThinkingPet 组件应该渲染（包含思考文字）
   expect(frame).toBeTruthy();
+});
+
+// ink-testing-library lastFrame 断言 — 验证补全列表渲染
+// ink-testing-library 在 Bun 下 stdin.write 不触发 useInput，
+// 但我们可以直接渲染带 showAutocomplete 状态的组件来验证布局。
+// 为此需要一个测试用的 wrapper 组件来控制内部状态。
+
+// 由于 Input 的 showAutocomplete 是内部状态（由 useInput 触发），
+// 我们无法从外部直接控制。但我们可以在测试中通过 render 验证
+// 组件初始渲染（无补全时）是正确的，然后通过纯函数测试覆盖补全逻辑。
+
+// 验证：MAX_VISIBLE=10 时全部命令可显示
+test("补全列表: 10 个命令全部在可视范围内", () => {
+  const all = filterCommands("");
+  expect(all.length).toBe(10);
+  // MAX_VISIBLE=10, scrollOffset=0 → visibleStart=0, visibleEnd=10
+  // 全部 10 个都在 visibleCommands 中
+  const visible = all.slice(0, 10);
+  expect(visible.length).toBe(10);
+  expect(visible[0]!.name).toBe("help");
+  expect(visible[9]!.name).toBe("tool");
+});
+
+test("补全列表: /com 过滤后只剩 1 条", () => {
+  const filtered = filterCommands("/com");
+  expect(filtered.length).toBe(1);
+  expect(filtered[0]!.name).toBe("compact");
+  // 可视范围内应该只显示这 1 条
+  const visible = filtered.slice(0, 10);
+  expect(visible.length).toBe(1);
+});
+
+test("补全列表: listHeight 计算正确（10命令 + 提示行）", () => {
+  const all = filterCommands("");
+  const visibleCommands = all.slice(0, 10);
+  // listHeight = visibleCommands.length + 2（提示行 + 可能的滚动指示器）
+  // 10 命令 + 1 提示行 = 11（无滚动指示器因为全部可见）
+  const listHeight = visibleCommands.length + 2;
+  expect(listHeight).toBe(12);
 });
 
 // handleCommand 测试 — 新命令

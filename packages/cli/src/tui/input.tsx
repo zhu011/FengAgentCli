@@ -5,14 +5,14 @@
  * 支持 / 命令自动补全（↑↓ 选择、Tab/Enter 补全、Esc 关闭）。
  *
  * 设计要点：
- * 1. 补全列表用 position="absolute" 悬浮层，不占流式布局
+ * 1. 补全列表用流式布局 + 显式 height，防止被 flexGrow 压缩
  * 2. 滚动窗口：selectedIdx 变化时自动调整可视范围
  * 3. useRef 避免 useInput 闭包陈旧
  * 4. 方向键转义序列兜底兼容（\x1b[A/\x1b[B/\x1bOA/\x1bOB）
  */
 
 import React, { useState, useRef, useMemo } from "react";
-import { Box, Text, useInput, useStdout } from "ink";
+import { Box, Text, useInput } from "ink";
 import { ThinkingPet } from "./thinking-pet.tsx";
 import { filterCommands, COMMANDS } from "../commands.ts";
 
@@ -30,7 +30,6 @@ export function Input({
   disabled = false,
   placeholder = "输入消息，按 Enter 发送...",
 }: InputProps): React.ReactElement {
-  const { stdout } = useStdout();
   const [value, setValue] = useState("");
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -197,22 +196,11 @@ export function Input({
     <Text color="green" bold>{">"} </Text>
   );
 
-  // 计算悬浮层位置：用 marginTop 偏移到终端底部上方
-  const termHeight = stdout?.rows ?? 24;
-  // 列表悬浮在输入框上方，用 marginTop 推到正确位置
-  const marginTop = Math.max(0, termHeight - listHeight - 2);
-
   return (
     <Box flexDirection="column">
-      {/* 补全列表 — 悬浮层，不占流式布局 */}
+      {/* 补全列表 — 流式布局，输入行正上方，显式 height 防止被压缩 */}
       {showAutocomplete && matchedCommands.length > 0 && !disabled && (
-        <Box
-          flexDirection="column"
-          position="absolute"
-          marginTop={marginTop}
-          marginLeft={0}
-          width="100%"
-        >
+        <Box flexDirection="column" height={listHeight}>
           {visibleStart > 0 && (
             <Text dimColor>  ↑ 还有 {visibleStart} 个命令</Text>
           )}
