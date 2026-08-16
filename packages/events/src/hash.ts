@@ -8,6 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { AnySessionEvent } from "./types.ts";
 
 /**
  * 稳定 JSON 序列化：对象键按字典序排序，数组保序。
@@ -40,4 +41,31 @@ export function computeEventHash(
   payload: unknown,
 ): string {
   return sha256(`${prevHash ?? ""}|${seq}|${type}|${canonicalJson(payload)}`);
+}
+
+/**
+ * 事件日志完整性自检：seq 从 1 连续 + #5 hash 链一致。
+ * 导出/导入校验与对账配套自检共用（Phase 3 import 走本函数）。
+ * @returns 问题清单（空 = 完整）
+ */
+export function verifyEventChain(events: AnySessionEvent[]): string[] {
+  const problems: string[] = [];
+  const sorted = [...events].sort((a, b) => a.seq - b.seq);
+  let prevHash: string | null = null;
+  for (let i = 0; i < sorted.length; i++) {
+    const e = sorted[i]!;
+    const expectedSeq = i + 1;
+    if (e.seq !== expectedSeq) {
+      problems.push(`seq 不连续：第 ${i + 1} 条应为 ${expectedSeq}，实际 ${e.seq}`);
+    }
+    if (e.prevHash !== prevHash) {
+      problems.push(`seq=${e.seq} prevHash 断裂：期望 ${String(prevHash).slice(0, 12)}…，实际 ${String(e.prevHash).slice(0, 12)}…`);
+    }
+    const h = computeEventHash(e.prevHash, e.seq, e.type, e.payload);
+    if (h !== e.hash) {
+      problems.push(`seq=${e.seq} hash 不匹配`);
+    }
+    prevHash = e.hash;
+  }
+  return problems;
 }

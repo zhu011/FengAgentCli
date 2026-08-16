@@ -4,7 +4,8 @@
  * reconcileSession：对同一会话，「事件投影产物」与「旧 SQLite/存储」逐条等价
  * （title/model/status/tokenCount/createdAt/updatedAt + messages 逐条 id/role/content/createdAt）；
  * reconcileAll：批量对账全部会话；
- * verifyEventChain：事件日志完整性（seq 连续 + #5 hash 链），作为对账的配套自检。
+ * verifyEventChain：事件日志完整性（seq 连续 + #5 hash 链），作为对账的配套自检
+ * （实现位于 hash.ts，导出/导入校验共用；此处 re-export 保持既有导入路径兼容）。
  *
  * 对账不通过（diffs 非空）即为红 — 不允许进入 Phase 2。
  */
@@ -12,9 +13,10 @@
 import type { Session, SessionMeta } from "@fengagent/core";
 import { EventStore } from "./event-store.ts";
 import { projectSession } from "./projection.ts";
-import { canonicalJson, computeEventHash } from "./hash.ts";
+import { canonicalJson } from "./hash.ts";
 import type { SessionStorePort } from "./dual-write.ts";
-import type { AnySessionEvent } from "./types.ts";
+
+export { verifyEventChain } from "./hash.ts";
 
 export interface ReconcileDiff {
   /** 字段路径（如 messages[2].content） */
@@ -112,30 +114,4 @@ export function reconcileAll(
     if (!r.ok) failed.push(id);
   }
   return { ok: failed.length === 0, total: ids.length, failed };
-}
-
-/**
- * 事件日志完整性自检：seq 从 1 连续 + #5 hash 链一致。
- * @returns 问题清单（空 = 完整）
- */
-export function verifyEventChain(events: AnySessionEvent[]): string[] {
-  const problems: string[] = [];
-  const sorted = [...events].sort((a, b) => a.seq - b.seq);
-  let prevHash: string | null = null;
-  for (let i = 0; i < sorted.length; i++) {
-    const e = sorted[i]!;
-    const expectedSeq = i + 1;
-    if (e.seq !== expectedSeq) {
-      problems.push(`seq 不连续：第 ${i + 1} 条应为 ${expectedSeq}，实际 ${e.seq}`);
-    }
-    if (e.prevHash !== prevHash) {
-      problems.push(`seq=${e.seq} prevHash 断裂：期望 ${String(prevHash).slice(0, 12)}…，实际 ${String(e.prevHash).slice(0, 12)}…`);
-    }
-    const h = computeEventHash(e.prevHash, e.seq, e.type, e.payload);
-    if (h !== e.hash) {
-      problems.push(`seq=${e.seq} hash 不匹配`);
-    }
-    prevHash = e.hash;
-  }
-  return problems;
 }

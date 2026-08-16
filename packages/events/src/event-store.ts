@@ -14,7 +14,7 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, truncateSync } fr
 import { join } from "node:path";
 import { resolveDataRoot } from "@fengagent/shared";
 import { createEventRegistry } from "./registry.ts";
-import { computeEventHash } from "./hash.ts";
+import { computeEventHash, verifyEventChain } from "./hash.ts";
 import type { AnySessionEvent, SessionEvent, SessionEventRegistry, SessionEventType } from "./types.ts";
 
 /** 追加事件的输入（seq/hash/prevHash 由存储计算） */
@@ -24,6 +24,27 @@ export interface AppendEventInput {
   payload: unknown;
   /** ISO-8601 时间戳（默认当前时刻） */
   timestamp?: string;
+}
+
+/** 事件导入结果（Phase 3 可移植文件导入） */
+export interface ImportOutcome {
+  sessionId: string;
+  /** imported=全新写入；appended=目标日志为前缀、增量续写；noop=幂等去重跳过 */
+  status: "imported" | "appended" | "noop";
+  /** 实际写入条数 */
+  imported: number;
+  /** 幂等去重跳过的条数 */
+  skipped: number;
+}
+
+/** 导入被拒绝（链校验失败 / 与目标日志冲突）；携带具体问题清单 */
+export class ImportConflictError extends Error {
+  readonly problems: string[];
+  constructor(message: string, problems: string[]) {
+    super(message);
+    this.name = "ImportConflictError";
+    this.problems = problems;
+  }
 }
 
 export interface EventStoreOptions {
@@ -133,6 +154,112 @@ export class EventStore {
   lastSeq(sessionId: string): number {
     const events = this.readSessionFile(sessionId).events;
     return events.length > 0 ? events[events.length - 1]!.seq : 0;
+  }
+
+  /* ------------------------------ 导入（Phase 3：可移植文件 → 事件日志） ------------------------------ */
+
+  /**
+   * 导入一批已验证的事件（逐字写入，保留原 seq/hash/timestamp 信封，不重算）。
+   * Phase 3 可移植文件导入的落盘路径：
+   * 1) 同一会话约束：全部事件 sessionId 一致；
+   * 2) 运行时注册表校验（#1）：未注册类型或校验失败 → 拒绝；
+   * 3) hash/prevHash 链 + seq 连续校验（#5，verifyEventChain）→ 拒绝坏链；
+   * 4) 幂等去重：与目标日志逐条 hash 对齐 —
+   *    - 完全相同 → noop（重复导入跳过）；
+   *    - 目标日志是导入链前缀 → appended（增量续写后缀）；
+   *    - 导入链是目标日志前缀（重复导入旧文件）→ noop（已包含）；
+   *    - 链分叉（hash 序列对不上）→ 抛 ImportConflictError，目标日志不动。
+   *
+   * @param events 待导入事件（按 seq 升序；内部会排序归一化）
+   * @returns 导入结果（imported = 实际写入条数；skipped = 幂等去重跳过条数）
+   * @throws ImportConflictError — 链校验失败或与目标日志冲突
+   */
+  importEvents(events: AnySessionEvent[]): ImportOutcome {
+    if (!Array.isArray(events) || events.length === 0) {
+      throw new Error("EventStore.importEvents: 事件列表不能为空");
+    }
+    const sorted = [...events].sort((a, b) => a.seq - b.seq);
+    const sessionId = sorted[0]!.sessionId;
+    if (typeof sessionId !== "string" || sessionId === "") {
+      throw new Error("EventStore.importEvents: sessionId 非法");
+    }
+
+    // 1) 同一会话约束
+    for (const e of sorted) {
+      if (e.sessionId !== sessionId) {
+        throw new ImportConflictError(
+          "importEvents: 事件流混入其他会话",
+          [`seq=${e.seq} sessionId=${e.sessionId} ≠ ${sessionId}`],
+        );
+      }
+    }
+    // 2) 运行时注册表校验（#1）
+    for (const e of sorted) {
+      if (!this.registry.validate(e)) {
+        throw new ImportConflictError(
+          "importEvents: 事件类型未注册或校验失败",
+          [`type=${e.type} seq=${e.seq}`],
+        );
+      }
+    }
+    // 3) hash/prevHash 链 + seq 连续（#5）
+    const problems = verifyEventChain(sorted);
+    if (problems.length > 0) {
+      throw new ImportConflictError("importEvents: 事件链校验失败", problems);
+    }
+
+    const existing = this.readSessionFile(sessionId).events;
+
+    // 4) 幂等去重：与目标日志逐条 hash 对齐
+    if (existing.length === 0) {
+      this.writeRawEvents(sessionId, sorted);
+      return { sessionId, status: "imported", imported: sorted.length, skipped: 0 };
+    }
+    let common = 0;
+    while (
+      common < existing.length &&
+      common < sorted.length &&
+      existing[common]!.hash === sorted[common]!.hash
+    ) {
+      common++;
+    }
+    if (common === sorted.length) {
+      // 导入链已完整包含于目标日志（完全相同或旧文件重复导入）→ noop
+      return {
+        sessionId,
+        status: "noop",
+        imported: 0,
+        skipped: sorted.length,
+      };
+    }
+    if (common === existing.length) {
+      // 目标日志是导入链前缀 → 增量续写后缀
+      const suffix = sorted.slice(existing.length);
+      this.writeRawEvents(sessionId, suffix);
+      return {
+        sessionId,
+        status: "appended",
+        imported: suffix.length,
+        skipped: existing.length,
+      };
+    }
+    throw new ImportConflictError(
+      "importEvents: 与目标事件日志链冲突（hash 序列对不上），拒绝导入",
+      [`共同前缀 ${common} 条后分叉：目标 ${existing.length} 条 vs 导入 ${sorted.length} 条`],
+    );
+  }
+
+  /** 逐字追加一批事件行（保留原信封；调用方保证已通过全部校验） */
+  private writeRawEvents(sessionId: string, events: AnySessionEvent[]): void {
+    const path = this.pathFor(sessionId);
+    try {
+      mkdirSync(this.dir, { recursive: true });
+    } catch {
+      // 目录可能已存在或不可创建 — 交给 append 报错
+    }
+    this.ensureTrailingNewline(path);
+    const lines = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+    appendFileSync(path, lines, "utf8");
   }
 
   /**
