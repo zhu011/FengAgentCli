@@ -209,7 +209,7 @@ bun run clean            # 清理构建产物
 
 | 文档 | 说明 |
 |------|------|
-| [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档（暗色主题，当前展示 refactor/cordis-graph-architecture 分支状态） |
+| [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档（暗色主题；在线站点对应 `main` 分支稳定版，本分支（Cordis）文档以本仓库 `docs/` 为准） |
 | [小白保姆级操作手册](docs/GUIDE-CORDIS.md) | **新手推荐**：从安装到 /graph /rollback /provider /model /compact /clear /联想、事件溯源、分支隔离、测评、KV Cache 统计，每个功能都有可照抄命令 + 预期输出 |
 | [架构设计（本分支）](docs/ARCHITECTURE.md) | 本分支（refactor/cordis-graph-architecture）系统架构：Cordis 插件化 + 对话图/可回溯 + 事件溯源 + 模块设计 |
 | [Cordis 架构设计细节](docs/ARCHITECTURE-CORDIS.md) | 重构设计文档：插件域、Graph 机制、事件溯源、迁移路线、分支隔离（§6）、数据根隔离（§6.1） |

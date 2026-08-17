@@ -1,6 +1,6 @@
 # FengAgentCli 小白保姆级操作手册（refactor/cordis-graph-architecture）
 
-> **本手册适用于 `refactor/cordis-graph-architecture` 分支（HEAD `db18dd8`，Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。**
+> **本手册适用于 `refactor/cordis-graph-architecture` 分支（HEAD `e5f8c49`，Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。**
 >
 > 老分支 `main` 的数据与配置文件与本分支**完全隔离**：main 用 `.fengagent/`，本分支用 `.fengagent-cordis/`，
 > 两分支同机运行互不干扰。隔离细节见 [ARCHITECTURE-CORDIS.md §6](./ARCHITECTURE-CORDIS.md)。
