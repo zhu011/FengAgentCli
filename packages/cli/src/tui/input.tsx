@@ -162,6 +162,8 @@ export function Input({
     if (key.ctrl || key.meta) return;
     if (key.upArrow || key.downArrow) return;
     if (key.leftArrow || key.rightArrow) return;
+    // 翻页键由对话视图（ChatView）处理，不应进入输入框内容
+    if (key.pageUp || key.pageDown) return;
 
     // 追加可打印字符（过滤转义序列）
     if (input && input.length > 0 && input !== "\x1b") {

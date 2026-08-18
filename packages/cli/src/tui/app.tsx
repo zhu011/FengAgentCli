@@ -401,8 +401,18 @@ export function App({
         </Box>
       )}
 
-      {/* 对话区域（占满剩余空间，flexShrink 让出高度给补全列表） */}
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} width="100%" overflowY="hidden">
+      {/* 对话区域（占满剩余空间，flexShrink 让出高度给补全列表）
+          注意：必须 flexBasis={0} + minHeight={0}，否则消息内容很长时
+          该区域按内容固有高度参与布局，会把宠物/输入框/状态栏挤出屏幕 */}
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        flexBasis={0}
+        minHeight={0}
+        width="100%"
+        overflowY="hidden"
+      >
         {/* 系统消息（命令输出等） */}
         {ui.systemMessages.length > 0 && (
           <Box flexDirection="column" width="100%" marginBottom={1}>
