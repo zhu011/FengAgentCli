@@ -16,6 +16,8 @@ export interface SystemContextOptions {
   agentsMdPath?: string;
   /** 额外的系统指令 */
   extraInstructions?: string;
+  /** 是否加载 AGENTS.md（默认 true；设为 false 可避免运行时指令注入对话 Agent） */
+  loadAgentsMd?: boolean;
   /** 是否加载 MEMORY.md 和记忆目录（默认 true） */
   loadMemory?: boolean;
   /** 额外的记忆提示片段（手动注入，不读取文件系统） */
@@ -46,19 +48,21 @@ export async function loadSystemContext(
   const now = new Date();
   parts.push(`\nCurrent date and time: ${now.toISOString()}`);
 
-  // 3. AGENTS.md
-  const agentsPath =
-    options?.agentsMdPath ??
-    `${options?.workdir ?? "."}/AGENTS.md`;
-  try {
-    const expanded = expandTilde(agentsPath);
-    const file = Bun.file(expanded);
-    if (await file.exists()) {
-      const content = await file.text();
-      parts.push(`\n## Project Instructions (AGENTS.md)\n${content}`);
+  // 3. AGENTS.md（可选：默认加载，可通过 loadAgentsMd: false 禁用）
+  if (options?.loadAgentsMd !== false) {
+    const agentsPath =
+      options?.agentsMdPath ??
+      `${options?.workdir ?? "."}/AGENTS.md`;
+    try {
+      const expanded = expandTilde(agentsPath);
+      const file = Bun.file(expanded);
+      if (await file.exists()) {
+        const content = await file.text();
+        parts.push(`\n## Project Instructions (AGENTS.md)\n${content}`);
+      }
+    } catch {
+      // 文件不存在或读取失败 — 忽略
     }
-  } catch {
-    // 文件不存在或读取失败 — 忽略
   }
 
   // 4. 记忆（MEMORY.md + 记忆目录）

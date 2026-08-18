@@ -242,7 +242,7 @@ export async function createRuntimeAgent(
       smallModel: config.smallModel,
     },
     summaryGenerator: llmClient,
-    systemContextOptions: { workdir },
+    systemContextOptions: { workdir, loadMemory: true, loadAgentsMd: false },
   });
 
   // 6. 会话存储 + 图存储（走 ctx.storage / ctx.graph 插件）
