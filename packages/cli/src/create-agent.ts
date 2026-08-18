@@ -211,7 +211,7 @@ export async function createAgent(
       smallModel: config.smallModel,
     },
     summaryGenerator: llmClient,
-    systemContextOptions: { workdir },
+    systemContextOptions: { workdir, loadAgentsMd: false },
   });
 
   // 7. 会话存储

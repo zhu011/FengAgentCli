@@ -85,7 +85,7 @@ async function main() {
         smallModel: config.smallModel,
       },
       summaryGenerator: client,
-      systemContextOptions: { workdir },
+      systemContextOptions: { workdir, loadAgentsMd: false },
     });
     return new Agent({
       llmClient: client,
