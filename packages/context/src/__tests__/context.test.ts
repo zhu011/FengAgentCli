@@ -114,6 +114,20 @@ describe("系统上下文加载", () => {
       expect(ctx).toContain("AGENTS.md");
     }
   });
+
+  test("loadAgentsMd:false 时不注入 AGENTS.md 内容（对话卡死修复回归）", async () => {
+    const ctx = await loadSystemContext({ workdir: ".", loadAgentsMd: false });
+    expect(ctx).toContain("AI coding assistant");
+    expect(ctx).not.toContain("## Project Instructions (AGENTS.md)");
+    expect(ctx).not.toContain("FengAgentCli 项目开发规范");
+  });
+
+  test("loadAgentsMd:true 显式开启时注入 AGENTS.md 内容", async () => {
+    if (await Bun.file("AGENTS.md").exists()) {
+      const ctx = await loadSystemContext({ workdir: ".", loadAgentsMd: true });
+      expect(ctx).toContain("## Project Instructions (AGENTS.md)");
+    }
+  });
 });
 
 // ──────────────────────────────────────────────
