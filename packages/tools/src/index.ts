@@ -46,6 +46,13 @@ export { fileRead } from "./builtin/file-read.ts";
 export { fileWrite } from "./builtin/file-write.ts";
 export { fileEdit } from "./builtin/file-edit.ts";
 export { bashTool } from "./builtin/bash.ts";
+export { sandboxTool, disposeSandbox, disposeAllSandboxes } from "./builtin/sandbox-tool.ts";
+export { Sandbox, SandboxEscapeError, SANDBOX_ENV_MARKER } from "./sandbox.ts";
+export type {
+  SandboxOptions,
+  SandboxCommandOptions,
+  SandboxCommandResult,
+} from "./sandbox.ts";
 export { globTool } from "./builtin/glob.ts";
 export { grepTool } from "./builtin/grep.ts";
 export { taskTool } from "./builtin/task.ts";
@@ -86,6 +93,7 @@ import { fileRead } from "./builtin/file-read.ts";
 import { fileWrite } from "./builtin/file-write.ts";
 import { fileEdit } from "./builtin/file-edit.ts";
 import { bashTool } from "./builtin/bash.ts";
+import { sandboxTool } from "./builtin/sandbox-tool.ts";
 import { globTool } from "./builtin/glob.ts";
 import { grepTool } from "./builtin/grep.ts";
 import { taskTool } from "./builtin/task.ts";
@@ -99,6 +107,7 @@ export function registerBuiltinTools(registry: ReturnType<typeof createToolRegis
   registry.register(fileWrite);
   registry.register(fileEdit);
   registry.register(bashTool);
+  registry.register(sandboxTool);
   registry.register(globTool);
   registry.register(grepTool);
   registry.register(taskTool);

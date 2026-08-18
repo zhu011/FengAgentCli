@@ -161,7 +161,8 @@ export async function main(argv: string[]): Promise<void> {
           smallModel: config.smallModel,
         },
         summaryGenerator: llmClient,
-        systemContextOptions: { workdir },
+        // serve/WebUI 路径同样禁用 AGENTS.md 注入（与对话卡死修复一致，防止运行时指令注入系统提示）
+        systemContextOptions: { workdir, loadAgentsMd: false },
       });
       return new Agent({
         llmClient,
@@ -220,7 +221,8 @@ export async function main(argv: string[]): Promise<void> {
           smallModel: config.smallModel,
         },
         summaryGenerator: llmClient,
-        systemContextOptions: { workdir },
+        // ACP 路径同样禁用 AGENTS.md 注入（与对话卡死修复一致，防止运行时指令注入系统提示）
+        systemContextOptions: { workdir, loadAgentsMd: false },
       });
       return new Agent({
         llmClient,

@@ -112,7 +112,7 @@ describe("ToolRegistry", () => {
 // ──────────────────────────────────────────────
 
 describe("registerBuiltinTools", () => {
-  it("registers all 11 built-in tools", () => {
+  it("registers all 12 built-in tools", () => {
     const reg = createToolRegistry();
     registerBuiltinTools(reg);
     const names = reg.list().map((t) => t.name).sort();
@@ -126,6 +126,7 @@ describe("registerBuiltinTools", () => {
       "memory-list",
       "memory-save",
       "memory-search",
+      "sandbox",
       "skill",
       "task",
     ]);

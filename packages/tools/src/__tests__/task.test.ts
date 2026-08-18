@@ -291,7 +291,7 @@ describe("taskTool — 执行", () => {
 // ──────────────────────────────────────────────
 
 describe("registerBuiltinTools — 包含 task", () => {
-  test("注册了 11 个内置工具（含 task + memory + skill）", () => {
+  test("注册了 12 个内置工具（含 task + memory + skill + sandbox）", () => {
     const reg = createToolRegistry();
     registerBuiltinTools(reg);
     const names = reg.list().map((t) => t.name).sort();
@@ -305,6 +305,7 @@ describe("registerBuiltinTools — 包含 task", () => {
       "memory-list",
       "memory-save",
       "memory-search",
+      "sandbox",
       "skill",
       "task",
     ]);
