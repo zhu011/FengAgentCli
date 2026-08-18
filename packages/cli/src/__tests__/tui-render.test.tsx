@@ -3,6 +3,7 @@
  * 校验美化后的文字输出（欢迎卡片、状态栏、消息列表、动态指示器）。
  */
 
+import { Box, Text } from "ink";
 import { test, expect, describe } from "bun:test";
 import { render } from "ink-testing-library";
 import { ChatView } from "../tui/chat-view.tsx";
@@ -16,6 +17,8 @@ import type { Message } from "@fengagent/core";
 function stripAnsi(s: string): string {
   return s.replace(/\u001b\[[0-9;]*m/g, "");
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("TUI 美化渲染快照", () => {
   test("状态栏包含 model/tokens/session 与进度条", () => {
@@ -104,5 +107,113 @@ describe("TUI 美化渲染快照", () => {
     expect(theme.success).toBe("#82B89D");
     expect(theme.error).toBe("#DA8A93");
     expect(theme.warning).toBe("#D8B270");
+  });
+});
+
+// ──────────────────────────────────────────────
+// 长对话回归：内容较多时图标/问答/token百分比必须保持可见
+// ──────────────────────────────────────────────
+
+/** 模拟 App 的布局：固定高度根 + 对话区域 + 宠物/输入框/状态栏 */
+function AppLikeLayout({
+  messages,
+  streamingText = "",
+  isRunning = false,
+  rows = 30,
+}: {
+  messages: Message[];
+  streamingText?: string;
+  isRunning?: boolean;
+  rows?: number;
+}) {
+  return (
+    <Box flexDirection="column" height={rows}>
+      <Box flexDirection="row" justifyContent="center"><Text>⚡ HEADER</Text></Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0} minHeight={0} width="100%" overflowY="hidden">
+        <ChatView messages={messages} streamingText={streamingText} toolCalls={[]} isRunning={isRunning} />
+      </Box>
+      <Box paddingX={1} marginBottom={0}>
+        <ThinkingPet text="执行工具中" />
+      </Box>
+      <Box><Text>INPUT-LINE</Text></Box>
+      <StatusBar model="deepseek-chat" tokenCount={12345} status="running" sessionId="abc12345" contextWindow={1000000} />
+    </Box>
+  );
+}
+
+/** 1000 行故事文本 */
+const LONG_STORY = Array.from(
+  { length: 1000 },
+  (_, i) => `第${i + 1}行：这是一个非常长的故事内容，用来模拟 agent 写一千字故事时的场景，不断填充对话区域。`,
+).join("\n");
+
+const LONG_CONV: Message[] = [
+  { id: "u1", role: "user", content: [{ type: "text", text: "请写一个一千字故事" }], createdAt: Date.now() },
+  { id: "a1", role: "assistant", content: [{ type: "text", text: LONG_STORY }], createdAt: Date.now() },
+  { id: "u2", role: "user", content: [{ type: "text", text: "继续讲" }], createdAt: Date.now() },
+  { id: "a2", role: "assistant", content: [{ type: "text", text: "故事讲完了，谢谢！" }], createdAt: Date.now() },
+];
+
+describe("长对话布局回归（内容较多不撑破界面）", () => {
+  test("底部图标/输入框/状态栏/token百分比始终可见，最新问答可见", async () => {
+    const { lastFrame } = render(<AppLikeLayout messages={LONG_CONV} />);
+    // 等待 measureElement 布局后重渲染稳定
+    for (let i = 0; i < 5; i++) await sleep(20);
+
+    const out = stripAnsi(lastFrame() ?? "");
+    // 底部 UI 不再被长内容挤出屏幕
+    expect(out).toContain("HEADER");
+    expect(out).toContain("执行工具中");
+    expect(out).toContain("INPUT-LINE");
+    expect(out).toContain("Tokens: 12,345");
+    expect(out).toMatch(/[0-9]+%/); // token 使用百分比
+    // 贴底：最新问答与故事结尾可见
+    expect(out).toContain("继续讲");
+    expect(out).toContain("故事讲完了");
+    expect(out).toContain("第1000行");
+    // 已滚到最底，故事开头不在视口内
+    expect(out).not.toContain("第1行");
+  });
+
+  test("流式长文本到达时自动贴底，最新内容可见", async () => {
+    const { lastFrame, rerender } = render(<AppLikeLayout messages={[]} />);
+    for (let i = 0; i < 5; i++) await sleep(20);
+    rerender(<AppLikeLayout messages={[]} streamingText={LONG_STORY} isRunning />);
+    for (let i = 0; i < 5; i++) await sleep(20);
+
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("第1000行"); // 流式文本结尾可见
+    expect(out).toContain("INPUT-LINE");
+    expect(out).toMatch(/[0-9]+%/);
+  });
+
+  test("PgUp 可翻阅历史，PgDn 回到最底", async () => {
+    const { lastFrame, stdin } = render(<AppLikeLayout messages={LONG_CONV} />);
+    for (let i = 0; i < 5; i++) await sleep(20);
+
+    // 初始贴底
+    const initial = stripAnsi(lastFrame() ?? "");
+    expect(initial).toContain("故事讲完了");
+    expect(initial).not.toContain("第1行");
+
+    // 多次 PgUp 滚到顶部
+    for (let i = 0; i < 60; i++) {
+      stdin.write("\u001b[5~");
+      await sleep(10);
+    }
+    await sleep(20);
+    const top = stripAnsi(lastFrame() ?? "");
+    expect(top).toContain("第1行"); // 故事开头可见
+    expect(top).toMatch(/还有 \d+ 行/); // 下翻指示器
+
+    // PgDn 回到最底并恢复贴底
+    for (let i = 0; i < 60; i++) {
+      stdin.write("\u001b[6~");
+      await sleep(10);
+    }
+    await sleep(20);
+    const bottom = stripAnsi(lastFrame() ?? "");
+    expect(bottom).toContain("故事讲完了");
+    expect(bottom).not.toMatch(/还有 \d+ 行/);
   });
 });
