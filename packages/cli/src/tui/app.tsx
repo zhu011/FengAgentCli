@@ -483,7 +483,7 @@ function handleAgentEvent(
         ...prev,
         inputTokens: prev.inputTokens + event.inputTokens,
         outputTokens: prev.outputTokens + event.outputTokens,
-        tokenCount: ctx.session.tokenCount,
+        tokenCount: prev.tokenCount + event.inputTokens + event.outputTokens,
       }));
       break;
 
