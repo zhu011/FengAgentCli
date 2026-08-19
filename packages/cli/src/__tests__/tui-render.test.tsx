@@ -104,9 +104,30 @@ describe("TUI 美化渲染快照", () => {
 
   test("主题令牌完整", () => {
     expect(theme.brand).toBe("#7DA1DE");
-    expect(theme.success).toBe("#82B89D");
-    expect(theme.error).toBe("#DA8A93");
-    expect(theme.warning).toBe("#D8B270");
+    expect(theme.success).toBe("#7FD88F");
+    expect(theme.error).toBe("#E06C75");
+    expect(theme.warning).toBe("#F5A742");
+  });
+
+  test("token 进度：大 contextWindow 下百分比不显示 0（保留 1 位小数）", () => {
+    // 项目配置 contextWindow=1,000,000，普通对话 token 占比 <1%，
+    // 旧实现 Math.round 后恒为 0%——必须显示 0.2% 这类非零进度
+    const { lastFrame } = render(
+      <StatusBar model="deepseek-v4-pro" tokenCount={2345} status="idle" sessionId="abc12345" contextWindow={1000000} />,
+    );
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("0.2%");
+    expect(out).toContain("2,345 tok");
+    expect(out).toMatch(/\d+%/);
+  });
+
+  test("token 进度：极小占比显示 <0.1%，且进度条至少有 1 格填充", () => {
+    const { lastFrame } = render(
+      <StatusBar model="m" tokenCount={100} status="idle" sessionId="s" contextWindow={1000000} />,
+    );
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("<0.1%");
+    expect(out).toContain("█"); // 有 token 时进度条至少 1 格
   });
 });
 
@@ -154,6 +175,19 @@ const LONG_CONV: Message[] = [
   { id: "a2", role: "assistant", content: [{ type: "text", text: "故事讲完了，谢谢！" }], createdAt: Date.now() },
 ];
 
+/** 200 行短故事 — 滚动交互测试用（仍远超视口，事件数少跑得快） */
+const SHORT_STORY = Array.from(
+  { length: 200 },
+  (_, i) => `第${i + 1}行：这是一个比较长的故事内容，用来模拟 agent 写长故事时的滚动场景。`,
+).join("\n");
+
+const SHORT_CONV: Message[] = [
+  { id: "u1", role: "user", content: [{ type: "text", text: "写一个故事" }], createdAt: Date.now() },
+  { id: "a1", role: "assistant", content: [{ type: "text", text: SHORT_STORY }], createdAt: Date.now() },
+  { id: "u2", role: "user", content: [{ type: "text", text: "继续" }], createdAt: Date.now() },
+  { id: "a2", role: "assistant", content: [{ type: "text", text: "故事讲完了" }], createdAt: Date.now() },
+];
+
 describe("长对话布局回归（内容较多不撑破界面）", () => {
   test("底部图标/输入框/状态栏/token百分比始终可见，最新问答可见", async () => {
     const { lastFrame } = render(<AppLikeLayout messages={LONG_CONV} />);
@@ -187,8 +221,44 @@ describe("长对话布局回归（内容较多不撑破界面）", () => {
     expect(out).toMatch(/[0-9]+%/);
   });
 
+  test("含代码块/markdown 的长回复贴底时，最新问答仍可见（估算含代码块边框/标签行）", async () => {
+    // 回归：行数估算漏算代码块边框(2)+语言标签(1)行 → 总高度低估 → 贴底时
+    // 最后一条消息内容被 overflowY:hidden 裁掉（"继续讲"/"故事讲完了"不可见）
+    const story = Array.from(
+      { length: 40 },
+      (_, i) => `第${i + 1}行：这是一个比较长的故事内容，用来模拟 agent 写长故事时的滚动场景，包含一些 **加粗** 和 \`code\`。`,
+    ).join("\n");
+    const mdMessages: Message[] = [
+      { id: "u1", role: "user", content: [{ type: "text", text: "请写一个故事" }], createdAt: Date.now() },
+      {
+        id: "a1",
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text:
+              `## 故事\n\n${story}\n\n下面是代码示例：\n` +
+              "```ts\nconst hello = (name: string): string => {\n  // 注释\n  return `Hello ${name}!`; // 42\n};\n```",
+          },
+        ],
+        createdAt: Date.now(),
+      },
+      { id: "u2", role: "user", content: [{ type: "text", text: "继续讲" }], createdAt: Date.now() },
+      { id: "a2", role: "assistant", content: [{ type: "text", text: "故事讲完了，谢谢！" }], createdAt: Date.now() },
+    ];
+    const { lastFrame } = render(<AppLikeLayout messages={mdMessages} />);
+    for (let i = 0; i < 5; i++) await sleep(20);
+
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("继续讲");
+    expect(out).toContain("故事讲完了");
+    expect(out).toContain("const hello ="); // 代码块完整渲染
+    expect(out).toContain("INPUT-LINE");
+    expect(out).toMatch(/[0-9]+%/);
+  });
+
   test("PgUp 可翻阅历史，PgDn 回到最底", async () => {
-    const { lastFrame, stdin } = render(<AppLikeLayout messages={LONG_CONV} />);
+    const { lastFrame, stdin } = render(<AppLikeLayout messages={SHORT_CONV} />);
     for (let i = 0; i < 5; i++) await sleep(20);
 
     // 初始贴底
@@ -197,9 +267,9 @@ describe("长对话布局回归（内容较多不撑破界面）", () => {
     expect(initial).not.toContain("第1行");
 
     // 多次 PgUp 滚到顶部
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 30; i++) {
       stdin.write("\u001b[5~");
-      await sleep(10);
+      await sleep(5);
     }
     await sleep(20);
     const top = stripAnsi(lastFrame() ?? "");
@@ -207,10 +277,57 @@ describe("长对话布局回归（内容较多不撑破界面）", () => {
     expect(top).toMatch(/还有 \d+ 行/); // 下翻指示器
 
     // PgDn 回到最底并恢复贴底
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 30; i++) {
       stdin.write("\u001b[6~");
-      await sleep(10);
+      await sleep(5);
     }
+    await sleep(20);
+    const bottom = stripAnsi(lastFrame() ?? "");
+    expect(bottom).toContain("故事讲完了");
+    expect(bottom).not.toMatch(/还有 \d+ 行/);
+  }, 20_000);
+
+  test("鼠标滚轮可上翻到顶部 / 下翻回到底部", async () => {
+    const { lastFrame, stdin } = render(<AppLikeLayout messages={SHORT_CONV} />);
+    for (let i = 0; i < 5; i++) await sleep(20);
+
+    // 初始贴底：故事开头不可见
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("第1行");
+
+    // SGR 滚轮上滚（<64 = 上滚）：多次滚动后到达顶部
+    for (let i = 0; i < 100; i++) {
+      stdin.write("\u001b[<64;5;10M");
+      await sleep(5);
+    }
+    await sleep(20);
+    const top = stripAnsi(lastFrame() ?? "");
+    expect(top).toContain("第1行");
+    expect(top).toMatch(/还有 \d+ 行/);
+
+    // SGR 滚轮下滚（<65 = 下滚）：回到底部并恢复贴底
+    for (let i = 0; i < 100; i++) {
+      stdin.write("\u001b[<65;5;10M");
+      await sleep(5);
+    }
+    await sleep(20);
+    const bottom = stripAnsi(lastFrame() ?? "");
+    expect(bottom).toContain("故事讲完了");
+    expect(bottom).not.toMatch(/还有 \d+ 行/);
+  }, 20_000);
+
+  test("Home/End 一键跳顶/回底", async () => {
+    const { lastFrame, stdin } = render(<AppLikeLayout messages={LONG_CONV} />);
+    for (let i = 0; i < 5; i++) await sleep(20);
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("第1行");
+
+    // Home — 跳到最顶端
+    stdin.write("\u001b[H");
+    await sleep(20);
+    const top = stripAnsi(lastFrame() ?? "");
+    expect(top).toContain("第1行");
+
+    // End — 回到底部恢复贴底
+    stdin.write("\u001b[F");
     await sleep(20);
     const bottom = stripAnsi(lastFrame() ?? "");
     expect(bottom).toContain("故事讲完了");
