@@ -349,7 +349,7 @@ export function App({
           <Box
             flexDirection="column"
             borderStyle="round"
-            borderColor={theme.brandDim}
+            borderColor={theme.borderActive}
             paddingX={2}
             paddingY={1}
             width={52}
@@ -361,7 +361,7 @@ export function App({
               <Text dimColor>  v0.1.0</Text>
             </Box>
             <Box flexDirection="row" justifyContent="center">
-              <Text color={theme.brandBright}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+              <Text color={theme.borderActive}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
             </Box>
             <Text> </Text>
             <Box flexDirection="row" justifyContent="center">
@@ -383,7 +383,7 @@ export function App({
             </Box>
             <Text> </Text>
             <Box flexDirection="row" justifyContent="center">
-              <Text color={theme.brandBright}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+              <Text color={theme.borderActive}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
             </Box>
             <Text> </Text>
             <Box flexDirection="row" justifyContent="center">

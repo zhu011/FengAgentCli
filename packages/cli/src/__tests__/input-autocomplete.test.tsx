@@ -93,7 +93,7 @@ test("getHelpMessage: 包含所有命令分类", () => {
 test("Input 组件: 初始渲染包含提示符和占位文本", () => {
   const { lastFrame } = render(<Input onSubmit={() => {}} />);
   const frame = lastFrame();
-  expect(frame).toContain(">");
+  expect(frame).toContain("❯");
   expect(frame).toContain("输入消息");
 });
 

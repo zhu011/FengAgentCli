@@ -17,8 +17,8 @@
  * 消息分隔用细点线，整体低调统一。
  */
 
-import React, { useRef, useState, useMemo, useLayoutEffect } from "react";
-import { Box, Text, useInput, useStdout, measureElement } from "ink";
+import React, { useRef, useState, useMemo, useLayoutEffect, useEffect } from "react";
+import { Box, Text, useInput, useStdout, useStdin, measureElement } from "ink";
 import type { DOMElement } from "ink";
 import type { Message } from "@fengagent/core";
 import { ToolView, type ToolCallInfo } from "./tool-view.tsx";
@@ -81,6 +81,42 @@ function wrappedLineCount(text: string, width: number): number {
   return total;
 }
 
+/**
+ * Markdown 文本渲染行数估算（与 MarkdownText 实际渲染一致）。
+ *
+ * 修复：普通按行换行估算会漏掉代码块的边框（2 行）与语言标签（1 行），
+ * 导致总高度低估、贴底时最后一条消息的内容被 overflowY:hidden 裁掉。
+ * 这里逐行扫描，``` 围栏内按代码块渲染结构计数：
+ *   2（上下边框）+ 1（语言标签，若有）+ 内容行（按内部宽度 = 总宽 - 边框2 - padding2 换行）
+ */
+function estimateTextRows(text: string, width: number): number {
+  const lines = text.split("\n");
+  let total = 0;
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (line.trim().startsWith("```")) {
+      const lang = line.trim().slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i]!.trim().startsWith("```")) {
+        codeLines.push(lines[i]!);
+        i++;
+      }
+      i++; // 跳过结束 ```
+      const innerWidth = Math.max(1, width - 4); // 边框 2 + paddingX 2
+      total += 2 + (lang ? 1 : 0);
+      for (const cl of codeLines) {
+        total += Math.max(1, Math.ceil(displayWidthOf(cl) / innerWidth));
+      }
+    } else {
+      total += line === "" ? 1 : Math.max(1, Math.ceil(displayWidthOf(line) / Math.max(1, width)));
+      i++;
+    }
+  }
+  return total;
+}
+
 /** 截断字符串（与 ToolView 内部一致） */
 function truncateText(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -125,7 +161,7 @@ function estimateMessageHeight(message: Message, columns: number): number {
   for (const block of message.content) {
     switch (block.type) {
       case "text":
-        h += wrappedLineCount(block.text, contentWidth);
+        h += estimateTextRows(block.text, contentWidth);
         break;
       case "thinking":
         h += 1 + wrappedLineCount(block.text, contentWidth);
@@ -154,7 +190,7 @@ function estimateStreamingHeight(
   if (!isRunning && streamingText === "" && toolCalls.length === 0) return 0;
   let h = 1; // "FengAgentCli:" 标签
   if (streamingText !== "") {
-    h += wrappedLineCount(streamingText, columns);
+    h += estimateTextRows(streamingText, columns);
   } else {
     h += 1; // ThinkingPet
   }
@@ -455,23 +491,30 @@ function MarkdownBlock({ block }: { block: Mdblock }): React.ReactElement | null
   switch (block.type) {
     case "code":
       return (
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.brandDim} paddingX={1}>
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={theme.border}
+          paddingX={1}
+        >
           {block.lang && (
             <Text color={theme.dim} italic>{block.lang}</Text>
           )}
-          <Text color={theme.brand}>{block.content}</Text>
+          <SyntaxText code={block.content} />
         </Box>
       );
 
     case "heading": {
       const sizes = {
         1: { bold: true, color: theme.text },
-        2: { bold: true, color: theme.brandBright },
+        2: { bold: true, color: theme.brand },
         3: { bold: false, color: theme.dim },
       };
       const style = sizes[block.level as 1 | 2 | 3] ?? sizes[3]!;
+      const marker = "#".repeat(block.level);
       return (
         <Text bold={style.bold} color={style.color}>
+          <Text color={theme.brandDim}>{marker} </Text>
           {block.content}
         </Text>
       );
@@ -500,6 +543,78 @@ function MarkdownBlock({ block }: { block: Mdblock }): React.ReactElement | null
   }
 }
 
+// ──────────────────────────────────────────────
+// 轻量语法高亮（借鉴 opencode 语法着色令牌）
+// ──────────────────────────────────────────────
+
+/** 常见关键字集合（TS/JS/JSON/Bash/Python/Rust 等常用子集） */
+const SYNTAX_KEYWORDS = new Set([
+  "const", "let", "var", "function", "return", "if", "else", "for", "while",
+  "do", "switch", "case", "break", "continue", "new", "delete", "typeof",
+  "instanceof", "in", "of", "class", "extends", "super", "this", "async",
+  "await", "yield", "import", "export", "from", "default", "try", "catch",
+  "finally", "throw", "interface", "type", "enum", "implements", "public",
+  "private", "protected", "static", "readonly", "abstract", "as", "satisfies",
+  "using", "package", "require", "module", "exports", "def", "lambda", "and",
+  "or", "not", "is", "with", "pass", "raise", "elif", "except", "fn", "mut",
+  "pub", "struct", "impl", "match", "use", "mod", "where", "int", "float",
+  "str", "bool", "void", "string", "number", "boolean", "any", "unknown",
+  "never", "object", "null", "undefined", "true", "false", "None", "True",
+  "False", "self", "stdout", "stderr",
+]);
+
+/** 判断标识符是否为函数调用（后随 `(`） */
+function isFunctionCall(line: string, identStart: number, ident: string): boolean {
+  return /^\s*\(/.test(line.slice(identStart + ident.length));
+}
+
+/** 单行语法着色：注释 / 字符串 / 数字 / 关键字 / 函数 / 运算符 / 标点 */
+function highlightLine(line: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const re =
+    /(\/\/[^\n]*|#[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(\d+(?:\.\d+)?)\b|\b([A-Za-z_$][\w$]*)\b|(==|===|!==|!=|<=|>=|=>|\+\+|--|&&|\|\||[-+*/%=<>!&|^~?:]+)|([(){}[\].,;:])/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) parts.push(line.slice(last, m.index));
+    const [full, comment, str, num, ident, op, punct] = m;
+    if (comment) {
+      parts.push(<Text key={`${m.index}-c`} color={theme.syntaxComment}>{comment}</Text>);
+    } else if (str) {
+      parts.push(<Text key={`${m.index}-s`} color={theme.syntaxString}>{str}</Text>);
+    } else if (num) {
+      parts.push(<Text key={`${m.index}-n`} color={theme.syntaxNumber}>{num}</Text>);
+    } else if (ident) {
+      if (SYNTAX_KEYWORDS.has(ident)) {
+        parts.push(<Text key={`${m.index}-i`} color={theme.syntaxKeyword}>{ident}</Text>);
+      } else if (isFunctionCall(line, m.index, ident)) {
+        parts.push(<Text key={`${m.index}-i`} color={theme.syntaxFunction}>{ident}</Text>);
+      } else {
+        parts.push(ident);
+      }
+    } else if (op) {
+      parts.push(<Text key={`${m.index}-o`} color={theme.syntaxOperator}>{op}</Text>);
+    } else if (punct) {
+      parts.push(<Text key={`${m.index}-p`} color={theme.dim}>{punct}</Text>);
+    }
+    last = m.index + full.length;
+  }
+  if (last < line.length) parts.push(line.slice(last));
+  return parts;
+}
+
+/** 代码块内容（逐行语法着色） */
+function SyntaxText({ code }: { code: string }): React.ReactElement {
+  const lines = code.split("\n");
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, i) => (
+        <Text key={i}>{highlightLine(line)}</Text>
+      ))}
+    </Box>
+  );
+}
+
 /** 渲染行内格式（粗体、行内代码） */
 function InlineFormatted({ text }: { text: string }): React.ReactElement {
   // 分割行内代码和粗体
@@ -509,7 +624,7 @@ function InlineFormatted({ text }: { text: string }): React.ReactElement {
       {parts.map((part, i) => {
         if (part.type === "code") {
           return (
-            <Text key={i} color={theme.brandBright} backgroundColor={theme.border}>
+            <Text key={i} color={theme.markdownCode} backgroundColor={theme.backgroundElement}>
               {` ${part.content} `}
             </Text>
           );
@@ -578,8 +693,8 @@ function splitInline(text: string): InlinePart[] {
 /** 可视区域高度缺失时的估算兜底（终端行数 - 头部/宠物/输入/状态栏等固定 UI） */
 const FALLBACK_CHROME_ROWS = 6;
 
-/** 底部裁剪的安全余量：换行估算偏差时避免渲染内容超出视口 */
-const BOTTOM_CUT_SAFETY = 2;
+/** 底部裁剪的安全余量：换行估算偏差时避免渲染内容超出视口（尽量小，避免裁掉最后一条消息内容） */
+const BOTTOM_CUT_SAFETY = 1;
 
 /** 流式输出区切片渲染（按行裁剪） */
 function StreamingSection({
@@ -656,12 +771,23 @@ export function ChatView({
   isRunning,
 }: ChatViewProps): React.ReactElement {
   const { stdout } = useStdout();
+  const { stdin } = useStdin();
   const columns = stdout.columns ?? 80;
 
   const viewportRef = useRef<DOMElement | null>(null);
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const stickRef = useRef(true);
+
+  // 启用鼠标滚轮追踪（SGR 1006）：滚轮事件经 useInput 原始输入到达。
+  // 仅在真实 TTY 下启用（ink-testing-library 的伪 stdin 不启用，避免污染测试输出）。
+  useEffect(() => {
+    if (!process.stdin.isTTY) return;
+    stdout.write("\x1b[?1000h\x1b[?1006h");
+    return () => {
+      stdout.write("\x1b[?1000l\x1b[?1006l");
+    };
+  }, [stdout]);
 
   // 测量视口实际高度（每帧渲染后执行，值不变时避免多余 setState）
   useLayoutEffect(() => {
@@ -696,6 +822,26 @@ export function ChatView({
       setScrollTop(maxScroll);
     }
   });
+
+  // Home/End 直接监听原始 stdin（Ink 的 key 对象不暴露 home/end 标志，
+  // 且会把 \x1b[H 解析成 name='home' 后把 input 置空，因此需绕过 useInput）
+  useEffect(() => {
+    if (!stdin) return;
+    const onData = (data: Buffer) => {
+      const s = data.toString();
+      if (s === "\x1b[H" || s === "\x1b[1~") {
+        stickRef.current = false;
+        setScrollTop(0); // Home — 跳到对话最顶端
+      } else if (s === "\x1b[F" || s === "\x1b[4~") {
+        stickRef.current = true;
+        setScrollTop(maxScroll); // End — 跳回最底并恢复贴底
+      }
+    };
+    stdin.on("data", onData);
+    return () => {
+      stdin.off("data", onData);
+    };
+  }, [stdin, maxScroll]);
 
   const clampedScrollTop = Math.min(Math.max(0, scrollTop), maxScroll);
   const windowStart = clampedScrollTop;
@@ -734,24 +880,51 @@ export function ChatView({
     return { first, last, belowLines };
   }, [blocks, windowStart, contentEnd, totalHeight]);
 
-  // PgUp/PgDn 翻阅历史
-  useInput((_input, key) => {
-    if (key.pageUp) {
+  // PgUp/PgDn 翻阅历史 + 鼠标滚轮滚动（兼容 Windows/Bun 下未解析的原始转义序列）
+  useInput((input, key) => {
+    // Ink 会把原始输入去掉前导 ESC（如 \x1b[5~ → [5~），两种形态都兼容
+    const isPageUp =
+      key.pageUp || input === "[5~" || input === "[5;5~" ||
+      input === "\x1b[5~" || input === "\x1b[5;5~";
+    const isPageDown =
+      key.pageDown || input === "[6~" || input === "[6;5~" ||
+      input === "\x1b[6~" || input === "\x1b[6;5~";
+
+    if (isPageUp) {
       const step = Math.max(1, Math.floor(vh * 0.8));
       setScrollTop((prev) => {
         const next = Math.max(0, prev - step);
-        if (next < maxScroll) stickRef.current = false;
+        stickRef.current = next >= maxScroll;
         return next;
       });
       return;
     }
-    if (key.pageDown) {
+    if (isPageDown) {
       const step = Math.max(1, Math.floor(vh * 0.8));
       setScrollTop((prev) => {
         const next = Math.min(maxScroll, prev + step);
-        if (next >= maxScroll) stickRef.current = true;
+        stickRef.current = next >= maxScroll;
         return next;
       });
+      return;
+    }
+    // 鼠标滚轮（SGR 1006）：<64 = 上滚，<65 = 下滚
+    const wheel =
+      /^\[<(\d+);(\d+);(\d+)([Mm])$/.exec(input) ??
+      /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(input);
+    if (wheel) {
+      const code = Number(wheel[1]);
+      if (code === 64 || code === 65) {
+        const lines = 3;
+        setScrollTop((prev) => {
+          const next =
+            code === 64
+              ? Math.max(0, prev - lines)
+              : Math.min(maxScroll, prev + lines);
+          stickRef.current = next >= maxScroll;
+          return next;
+        });
+      }
       return;
     }
   });
@@ -812,7 +985,7 @@ export function ChatView({
         {rendered}
         {showBelowIndicator && (
           <Text color={theme.dim} dimColor>
-            ↓ 还有 {slice.belowLines} 行 · PgUp/PgDn 滚动
+            ↓ 还有 {slice.belowLines} 行 · PgUp/PgDn/滚轮 上翻 · Home 回顶
           </Text>
         )}
       </Box>

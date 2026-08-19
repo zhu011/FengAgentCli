@@ -162,8 +162,17 @@ export function Input({
     if (key.ctrl || key.meta) return;
     if (key.upArrow || key.downArrow) return;
     if (key.leftArrow || key.rightArrow) return;
-    // 翻页键由对话视图（ChatView）处理，不应进入输入框内容
+    // 翻页/跳转键由对话视图（ChatView）处理，不应进入输入框内容
+    // （同时兼容 Windows/Bun 下未解析成 key 标志的原始转义序列）
     if (key.pageUp || key.pageDown) return;
+    if (
+      input === "\x1b[5~" || input === "\x1b[6~" ||
+      input === "\x1b[5;5~" || input === "\x1b[6;5~" ||
+      input === "[5~" || input === "[6~" ||
+      input === "[5;5~" || input === "[6;5~"
+    ) {
+      return;
+    }
 
     // 追加可打印字符（过滤转义序列）
     if (input && input.length > 0 && input !== "\x1b") {
@@ -196,7 +205,7 @@ export function Input({
   const promptText = disabled ? (
     <ThinkingPet />
   ) : (
-    <Text color={theme.prompt} bold>{">"} </Text>
+    <Text color={theme.prompt} bold>{"❯ "}</Text>
   );
 
   return (
