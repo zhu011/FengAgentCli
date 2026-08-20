@@ -131,11 +131,20 @@ fengagent acp                 # 启动 ACP 服务（Multica 运行时）
 
 ### 注册为 Multica 运行时（其他电脑也可被检测）
 
-Multica 桌面端通过 `~/.multica/runtimes/*.json` 发现本机自定义运行时。全局安装后执行：
+Multica 通过**服务端运行时 Profile**（`multica runtime profile`）发现自定义运行时：profile 中的 `command-name` 需要在运行 Multica 的电脑上可解析（PATH 或绝对路径），daemon 启动/探测时即将其注册为可用运行时。
 
 ```bash
-fengagent runtime install      # 写入 ~/.multica/runtimes/fengagent.json
-fengagent runtime uninstall    # 移除注册
+# 1. 在任一已连接 workspace 的电脑上创建/确认 profile（workspace 级，各电脑共享）
+multica runtime profile create --display-name "FengAgentCli" \
+  --command-name fengagent --protocol-family hermes
+multica runtime profile list            # 确认 FengAgentCli 存在且 enabled
+
+# 2. 在每台目标电脑上全局安装 fengagent（让 command 可解析）
+npm install -g fengagent
+
+# 3. 本机补充注册信息（可选，写入 ~/.multica/runtimes/fengagent.json）
+fengagent runtime install      # 写入本地注册文件
+fengagent runtime uninstall    # 移除本地注册
 ```
 
 注册内容（自动生成）：
@@ -158,6 +167,7 @@ fengagent runtime uninstall    # 移除注册
 - 运行时的 API Key 配置：Multica 启动运行时时若当前工作目录没有 `.fengagent/config.json`，请通过
   Multica 运行时环境变量（`OPENAI_COMPATIBLE_API_KEY` / `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_MODEL`）或
   本机全局配置 `~/.fengagent/config.json` 提供（配置分层见 [docs/CONFIGURATION.md](docs/CONFIGURATION.md)）。
+- `~/.multica/runtimes/fengagent.json` 是**本地补充注册信息**（launchHeader / workdir 等），Multica 检测运行时的依据是服务端 profile + 命令可解析性；新增电脑上 `npm install -g fengagent` 后重启 Multica daemon（或下次启动）即会被检测到。
 
 ### 配置 Provider（`/provider` 命令）
 

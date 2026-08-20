@@ -154,7 +154,7 @@ interface LLMRequest {
 | `ContextManager` | `manager.ts` | 上下文组装（系统提示 + 历史）、压缩触发 |
 | `CompactionEngine` | `compaction.ts` | 摘要 head 段 + 保留 recent 段 |
 | `TokenCounter` | `token-counter.ts` | Token 估算（chars / 4 启发式） |
-| `SystemContextLoader` | `system-context.ts` | 加载 AGENTS.md、日期、MEMORY.md |
+| `SystemContextLoader` | `system-context.ts` | 加载日期、MEMORY.md；AGENTS.md 按 `loadAgentsMd` 选项注入（CLI / ACP 路径默认 `false` 不注入，避免项目指令触发工具调用循环导致对话卡死） |
 | `MemoryManager` | `memory.ts` | MEMORY.md 加载/注入 + `<数据根>/memory/` 目录（先读数据根，空则只读回退 main 的 `.fengagent/memory`） |
 | `VectorMemory` | `vector-memory.ts` | 向量化存储 + 检索 |
 

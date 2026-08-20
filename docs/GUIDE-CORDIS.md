@@ -87,6 +87,40 @@ git log --oneline -1
 
 ---
 
+## 3.5 全局安装（可选，安装后任意目录直接 `fengagent`）
+
+不想每次 `bun run` 源码的话，可以全局安装：
+
+```bash
+# 方式一：npm 全局安装（需要已发布 npm 包或本地打包产物）
+bun run pack                       # 项目根目录：编译当前平台二进制 + 打出 fengagent-0.1.0.tgz
+npm install -g ./fengagent-0.1.0.tgz
+
+# 方式二：bun link（本地开发，链接到本仓库）
+bun link && bun link fengagent
+
+# 安装后直接使用
+fengagent                          # 启动 TUI 交互界面
+fengagent --version                # FengAgentCli v0.1.0
+```
+
+启动器（`bin/fengagent.js`）优先执行 `dist/` 下当前平台的预编译二进制（无需 Bun/Node），
+否则退回 bun 源码直跑。
+
+**注册为 Multica 运行时**（在其他电脑的 Multica 中可被检测到）：
+
+```bash
+fengagent runtime install          # 写入 ~/.multica/runtimes/fengagent.json
+fengagent runtime uninstall        # 移除注册
+```
+
+> 说明：Multica 检测自定义运行时的依据是服务端运行时 Profile（`multica runtime profile`）
+> 中登记的 `command-name`（本项目的 profile 名为 `FengAgentCli`，命令 `fengagent`）在
+> 目标电脑上可解析；因此**全局安装是让 Multica 找到运行时的关键一步**，本地注册文件
+> 只是补充信息。详见 README「注册为 Multica 运行时」一节。
+
+---
+
 ## 4. 安装依赖
 
 ```bash
@@ -199,7 +233,23 @@ bun run packages/cli/src/entry.ts
 你好，请介绍一下这个项目
 ```
 
-AI 回答时状态栏会显示动态图标动画；回答完成后消息区出现 Markdown 渲染结果。
+AI 回答时状态栏会显示动态图标动画；回答完成后消息区出现 Markdown 渲染结果（代码块带语法高亮：关键字/字符串/数字/函数分色）。
+
+**长对话滚动** —— 对话很长时内容超屏，用以下按键翻阅历史：
+
+| 操作 | 效果 |
+|------|------|
+| `PgUp` / `PgDn` | 向上 / 向下翻一屏（约 80% 视口高） |
+| 鼠标滚轮 | 向上 / 向下滚动（每格 3 行） |
+| `Home` | 一键回到对话最顶端 |
+| `End` | 一键回到最底并恢复「贴底跟随」 |
+
+上翻会自动解除贴底，滚到最底自动恢复跟随最新消息；底部出现
+`↓ 还有 N 行 · PgUp/PgDn/滚轮 上翻 · Home 回顶` 提示时说明还有未读内容。
+
+**状态栏 token 进度** —— 底部状态栏的进度条显示当前会话上下文占用：百分比保留 1 位小数
+（如 `0.2%`，极小值显示 `<0.1%`），旁边有真实 token 计数（`· 12,345 tok`）。占用 ≥85% 时进度条
+转警告色，提示接近压缩阈值。
 
 **非交互（管道）模式** —— 不想进界面，问一句就退出：
 
