@@ -88,7 +88,7 @@ export async function main(argv: string[]): Promise<void> {
 
   // acp 子命令 — 启动 ACP 服务（Multica 运行时集成）
   if (parsed.acp) {
-    const { loadConfigFromEnv } = await import("@fengagent/core");
+    const { loadConfig } = await import("@fengagent/core");
     const { Agent } = await import("@fengagent/agent");
     const { createClientFromEnv } = await import("@fengagent/llm");
     const {
@@ -99,10 +99,17 @@ export async function main(argv: string[]): Promise<void> {
       createHookRegistry,
     } = await import("@fengagent/tools");
     const { createContextManager } = await import("@fengagent/context");
-    const { startAcpServer } = await import("@fengagent/server");
+    const { startAcpServer, buildEnvForLLM } = await import("@fengagent/server");
 
-    const config = loadConfigFromEnv();
-    const { client: llmClient } = createClientFromEnv();
+    // 与 TUI/serve 路径一致：分层加载配置（默认值 → 全局 ~/.fengagent/config.json
+    // → 项目 .fengagent/config.json → 分支 .fengagent-cordis/config.json → FENG_* 环境变量），
+    // 再经 buildEnvForLLM 把配置文件中的 API Key / BaseURL / Model 注入为 LLM 环境变量。
+    // 修复：此前用 loadConfigFromEnv() + createClientFromEnv() 只读环境变量，
+    // 未读配置文件，导致 FENG_PROVIDER=openai-compatible 时
+    // “OPENAI_COMPATIBLE_API_KEY is required” 运行时报错。
+    const config = await loadConfig();
+    const envForLLM = buildEnvForLLM(config);
+    const { client: llmClient } = createClientFromEnv(envForLLM);
     const workdir = process.cwd();
 
     const hookRegistry = createHookRegistry();
@@ -136,6 +143,31 @@ export async function main(argv: string[]): Promise<void> {
     }
 
     startAcpServer({ config, createAgent: createAcpAgent });
+    return;
+  }
+
+  // runtime 子命令 — 注册/卸载 Multica 本地运行时（全局安装后 `fengagent runtime install`）
+  if (parsed.runtime) {
+    const {
+      installRuntimeRegistration,
+      uninstallRuntimeRegistration,
+      runtimeRegistrationPath,
+    } = await import("./runtime-install.ts");
+
+    if (parsed.runtime === "install") {
+      const file = installRuntimeRegistration();
+      process.stdout.write(`FengAgentCli 已注册为 Multica 本地运行时：\n  ${file}\n`);
+      process.stdout.write(
+        "Multica 应能检测到 \"FengAgentCli\" 运行时（launchHeader: fengagent acp）。\n",
+      );
+    } else {
+      const file = uninstallRuntimeRegistration();
+      if (file) {
+        process.stdout.write(`已移除 Multica 运行时注册：\n  ${file}\n`);
+      } else {
+        process.stdout.write(`未找到运行时注册文件：${runtimeRegistrationPath()}\n`);
+      }
+    }
     return;
   }
 

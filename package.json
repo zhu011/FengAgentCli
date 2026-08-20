@@ -27,13 +27,14 @@
     "bun"
   ],
   "bin": {
-    "fengagent": "bin/fengagent"
+    "fengagent": "bin/fengagent.js"
   },
   "workspaces": [
     "packages/*"
   ],
   "files": [
     "bin/",
+    "dist/",
     "packages/*/src/**/*.ts",
     "packages/*/src/**/*.tsx",
     "packages/*/package.json",
@@ -56,11 +57,14 @@
     "dev:web-ui": "cd packages/web-ui && bun run dev",
     "build:web-ui": "cd packages/web-ui && bun run build",
     "build:binary": "bun run scripts/build.ts",
+    "build:binary:current": "bun run scripts/build.ts -- --target=auto",
+    "pack": "bun run build:binary:current && npm pack",
+    "runtime:install": "bun run scripts/install-multica-runtime.ts",
     "dev:server": "bun run packages/server/src/entry.ts",
     "serve": "bun run packages/server/src/entry.ts",
     "eval": "bun run packages/eval/src/index.ts",
     "events:migrate": "bun run scripts/events-migrate.ts",
-    "prepublishOnly": "bun run build:web-ui && bun run typecheck",
+    "prepublishOnly": "bun run typecheck",
     "publish": "bun run scripts/publish.ts"
   },
   "devDependencies": {

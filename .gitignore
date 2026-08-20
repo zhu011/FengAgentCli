@@ -41,3 +41,8 @@ data/
 
 # bun install 本地缓存（沙箱无网络缓存目录时使用）
 .bun-cache/
+
+# npm 本地打包/安装测试产物
+.npm-cache/
+.npm-test-prefix/
+*.tgz

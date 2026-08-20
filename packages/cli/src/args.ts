@@ -17,6 +17,8 @@ export interface ParsedArgs {
   serve: boolean;
   /** 是否启动 ACP 服务模式 */
   acp: boolean;
+  /** Multica 运行时注册子命令（runtime install / runtime uninstall） */
+  runtime?: "install" | "uninstall";
   /** 是否强制非交互模式（--print） */
   print: boolean;
   /** 额外的位置参数（非选项参数） */
@@ -80,6 +82,19 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "acp":
         result.acp = true;
         break;
+      case "runtime": {
+        const sub = argv[i + 1];
+        if (sub === "install" || sub === "uninstall") {
+          result.runtime = sub;
+          i++;
+        } else {
+          throw {
+            message: `Unknown runtime subcommand: ${sub ?? "(missing)"} (expect: install | uninstall)`,
+            arg,
+          } satisfies ArgParseError;
+        }
+        break;
+      }
       case "--print":
         result.print = true;
         break;
@@ -166,6 +181,7 @@ export function getHelpText(): string {
 用法: feng [选项] [提示文本]
       feng serve [选项]
       feng acp [选项]
+      feng runtime install|uninstall
 
 选项:
   -m, --model <id>       指定模型 ID
@@ -178,6 +194,8 @@ export function getHelpText(): string {
 子命令:
   serve                  启动 WebUI 服务模式
   acp                    启动 ACP 服务模式（Multica 运行时集成）
+  runtime install        注册为 Multica 本地运行时（写入 ~/.multica/runtimes/fengagent.json）
+  runtime uninstall      移除 Multica 本地运行时注册
 
 示例:
   feng "帮我读取 package.json"
@@ -185,6 +203,7 @@ export function getHelpText(): string {
   feng --session abc-123 "继续上次对话"
   echo "修复这个 bug" | feng
   feng serve --port 8080
+  feng runtime install
 
 交互命令 (TUI 模式):
   /help                  显示帮助

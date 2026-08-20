@@ -47,6 +47,22 @@ for (let i = 0; i < cliArgs.length; i++) {
   }
 }
 
+// --target=auto → 仅编译当前平台（npm pack / 快速构建用）
+const AUTO_TARGET: Record<string, string> = {
+  "win32-x64": "bun-windows-x64",
+  "linux-x64": "bun-linux-x64",
+  "darwin-arm64": "bun-darwin-arm64",
+};
+if (targetFilter === "auto") {
+  targetFilter = AUTO_TARGET[`${process.platform}-${process.arch}`];
+  if (!targetFilter) {
+    console.error(
+      `No auto target mapping for ${process.platform}-${process.arch}`,
+    );
+    process.exit(1);
+  }
+}
+
 const targets = targetFilter
   ? ALL_TARGETS.filter((t) => t.target === targetFilter)
   : ALL_TARGETS;
