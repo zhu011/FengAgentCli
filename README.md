@@ -88,13 +88,17 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 
 ## 📸 界面预览
 
-| TUI 欢迎页 | TUI 对话流 | WebUI 欢迎页 |
+| TUI 欢迎页 | TUI 对话流（填充气泡） | TUI 超长消息气泡 |
 |:---:|:---:|:---:|
-| ![](screenshots/r2-tui-welcome.png) | ![](screenshots/r2-tui-conversation.png) | ![](screenshots/r2-webui-welcome-dark.png) |
+| ![](screenshots/r3-tui-welcome.png) | ![](screenshots/r3-tui-conversation.png) | ![](screenshots/r3-tui-longtext.png) |
 
-| WebUI 对话（深空） | WebUI 对话（日光） | WebUI 欢迎页（赛博） |
+| WebUI 欢迎页（深空） | WebUI 对话（深空） | WebUI 对话（日光） |
 |:---:|:---:|:---:|
-| ![](screenshots/r2-webui-chat-dark.png) | ![](screenshots/r2-webui-chat-light.png) | ![](screenshots/r2-webui-welcome-cyber.png) |
+| ![](screenshots/r3-webui-welcome-dark.png) | ![](screenshots/r3-webui-chat-dark.png) | ![](screenshots/r3-webui-chat-light.png) |
+
+| 生成中指示器（计时 + Esc 中断） | 代码块复制按钮 | 侧边栏会话搜索 |
+|:---:|:---:|:---:|
+| ![](screenshots/r3-webui-generating-dark.png) | ![](screenshots/r3-webui-codeblock-copy.png) | ![](screenshots/r3-webui-search.png) |
 
 ## 💻 使用指南
 
@@ -109,8 +113,11 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 ### WebUI（浏览器对话）
 
 - 启动 `bun run serve` 后访问 `http://127.0.0.1:3000`
-- 三套主题：深空 / 日光 / 赛博（顶栏 ⚙ 设置下拉，显示当前主题名）
-- 会话标题双击重命名（侧边栏与顶栏均可）；发送消息后有「生成中」动画指示器
+- 三套主题：深空 / 日光 / 赛博（顶栏 ⚙ 设置下拉，显示当前主题名；Esc / 点击外部关闭）
+- 会话标题双击重命名（侧边栏与顶栏均可）；侧边栏顶部支持**会话搜索**；会话行 hover 显示重命名 / 删除
+- 发送消息后有「生成中」动画指示器（显示已用时长 + **按 Esc 中断**，Stop 按钮联动）
+- 欢迎页建议卡片点击**填入输入框**（确认后 Enter 发送），卡片 hover 微动画；空会话有轻量引导
+- 助手消息 Markdown 代码块带**复制按钮**（hover / 键盘 focus 可见）
 - 右侧面板：权限审批、消息检查器
 - 底部状态栏：输入 / 输出 / 缓存命中 / 命中率 / 合计 tokens
 

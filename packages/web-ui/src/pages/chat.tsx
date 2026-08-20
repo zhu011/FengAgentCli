@@ -70,8 +70,12 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
   // 顶栏会话标题行内编辑（双击进入）
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  // 欢迎页建议卡片 → 填入输入框（Round 3：DeepSeek 式「点卡片填框待编辑」）
+  const [suggestedPrompt, setSuggestedPrompt] = useState("");
+  const [composerKey, setComposerKey] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const settingsRef = useRef<HTMLDivElement | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // 自动选择默认模型
   useEffect(() => {
@@ -99,13 +103,38 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [showSettings]);
 
-  /** 无活跃会话时：创建会话并发送建议问题 */
-  const startWithPrompt = async (prompt: string) => {
+  // Round 3：设置下拉 Esc 关闭（关闭后焦点回到齿轮按钮）+ 打开时聚焦首项
+  useEffect(() => {
+    if (!showSettings) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowSettings(false);
+        settingsBtnRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showSettings]);
+
+  // Round 3：流式生成中「按 Esc 中断」— 全局 Esc（重命名输入框内的 Esc 不拦截）
+  useEffect(() => {
+    if (!session.isStreaming) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest(".session-card__rename-input, .chat-page__session-title-input")) return;
+      e.preventDefault();
+      void session.interrupt();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [session.isStreaming, session]);
+
+  /** Round 3：建议卡片 → 填入输入框待编辑后发送（DeepSeek 式交互） */
+  const fillPrompt = (prompt: string) => {
     if (session.creatingSession || session.isStreaming) return;
-    await session.createSession();
-    setTimeout(() => {
-      void session.sendMessage(prompt, selectedModel ?? undefined);
-    }, 100);
+    setSuggestedPrompt(prompt);
+    setComposerKey((k) => k + 1);
   };
 
   const commitTitleEdit = () => {
@@ -192,6 +221,7 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
           <div className="chat-page__settings" ref={settingsRef}>
             <button
               type="button"
+              ref={settingsBtnRef}
               className="chat-page__toggle-inspector chat-page__settings-btn"
               onClick={() => setShowSettings((v) => !v)}
               aria-label="Settings"
@@ -201,17 +231,19 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
               <Settings size={17} className={showSettings ? "chat-page__settings-icon--open" : ""} />
             </button>
             {showSettings && (
-              <div className="settings-menu">
+              <div className="settings-menu" role="menu" aria-label="设置">
                 <div className="settings-menu__group">
                   <div className="settings-menu__label">主题外观</div>
-                  {THEMES.map((t) => (
+                  {THEMES.map((t, i) => (
                     <button
                       key={t}
                       type="button"
+                      autoFocus={i === 0}
                       className={`settings-menu__item ${theme === t ? "settings-menu__item--active" : ""}`}
                       onClick={() => {
                         onSelectTheme(t);
                         setShowSettings(false);
+                        settingsBtnRef.current?.focus();
                       }}
                     >
                       <span className="settings-menu__icon">{THEME_ICONS[t]}</span>
@@ -251,7 +283,33 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
       {/* 消息列表 */}
       <main className="chat-page__messages">
         {session.activeSession ? (
-          <MessageList messages={session.activeMessages} isStreaming={session.isStreaming} />
+          session.activeMessages.length === 0 ? (
+            /* Round 3：空会话引导 — 新会话尚未发消息时给出轻量引导 */
+            <div className="chat-page__empty-guide">
+              <div className="empty-guide__icon" aria-hidden="true">⚡</div>
+              <p className="empty-guide__title">新会话已就绪</p>
+              <p className="empty-guide__desc">
+                在下方输入消息，或从建议问题开始 —— 试试这些：
+              </p>
+              <div className="empty-guide__chips">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.title}
+                    type="button"
+                    className="empty-guide__chip"
+                    onClick={() =>
+                      void session.sendMessage(s.prompt, selectedModel ?? undefined)
+                    }
+                  >
+                    <span aria-hidden="true">{s.icon}</span>
+                    {s.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <MessageList messages={session.activeMessages} isStreaming={session.isStreaming} />
+          )
         ) : (
           <div className="chat-page__no-session">
             <div className="welcome-hero">
@@ -266,7 +324,7 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
                     key={s.title}
                     type="button"
                     className="welcome-suggestion"
-                    onClick={() => void startWithPrompt(s.prompt)}
+                    onClick={() => fillPrompt(s.prompt)}
                   >
                     <span className="welcome-suggestion__icon" aria-hidden="true">
                       {s.icon}
@@ -278,6 +336,9 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
                   </button>
                 ))}
               </div>
+              <p className="welcome-hint">
+                💡 点击卡片将问题填入输入框，确认后按 Enter 发送
+              </p>
               <div className="welcome-features">
                 <span className="welcome-card__feature-tag">💬 智能对话</span>
                 <span className="welcome-card__feature-tag">🔧 工具调用</span>
@@ -308,8 +369,11 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
         ) : (
           <div className="chat-page__no-session-input">
             <MessageInput
+              key={composerKey}
               busy={session.creatingSession || session.isStreaming}
               placeholder="输入消息开始对话..."
+              initialValue={suggestedPrompt}
+              autoFocus={composerKey > 0}
               onSubmit={async (text) => {
                 // 无活跃会话时自动创建，然后发送消息
                 await session.createSession();

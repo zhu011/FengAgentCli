@@ -2240,3 +2240,233 @@ body {
 .composer__btn--stop:hover {
   box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
 }
+
+/* ══════════════════════════════════════════════
+   Round 3 精细打磨（代码块复制 / 会话搜索 / 欢迎卡 hover /
+   生成中 Esc 提示与计时 / 空会话引导 / 设置下拉可达性）
+   ══════════════════════════════════════════════ */
+
+/* ── 侧边栏会话搜索框 ── */
+.session-sidebar__search {
+  position: relative;
+  margin: 8px 12px 4px;
+}
+
+.session-sidebar__search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.session-sidebar__search-input {
+  width: 100%;
+  padding: 7px 28px 7px 30px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.session-sidebar__search-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.session-sidebar__search-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.session-sidebar__search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.session-sidebar__search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* 会话行 hover / 键盘 focus 时显示操作按钮（重命名 / 删除） */
+.session-card:hover .session-card__delete,
+.session-card:focus-within .session-card__delete,
+.session-card:hover .session-card__rename,
+.session-card:focus-within .session-card__rename {
+  opacity: 1;
+}
+
+/* ── 欢迎卡片 hover 微动画（scale + glow 增强）── */
+.welcome-suggestion {
+  transition: border-color 0.2s, box-shadow 0.25s, transform 0.2s ease, background 0.2s;
+  will-change: transform;
+}
+
+.welcome-suggestion:hover {
+  border-color: var(--border-focus);
+  background: var(--bg-hover);
+  box-shadow: 0 8px 28px var(--accent-light), 0 0 24px var(--accent-light);
+  transform: translateY(-3px) scale(1.02);
+}
+
+.welcome-suggestion:active {
+  transform: translateY(-1px) scale(0.99);
+  transition-duration: 0.08s;
+}
+
+.welcome-suggestion:hover .welcome-suggestion__icon {
+  animation: welcomeIconPop 0.35s ease-out;
+}
+
+@keyframes welcomeIconPop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.22) rotate(-6deg);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ── 欢迎页微提示（建议卡片 → 填入输入框）── */
+.welcome-hint {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* ── 生成中指示器增强：已用时长 + Esc 中断提示 ── */
+.generating-elapsed {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  padding-left: 2px;
+}
+
+.generating-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-color);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.generating-hint kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-color);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ── 空会话引导（新会话未发消息）── */
+.chat-page__empty-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 56px 16px;
+  max-width: 640px;
+  margin: 0 auto;
+  text-align: center;
+  animation: fadeInUp 0.4s ease-out;
+}
+
+.empty-guide__icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: var(--accent-gradient);
+  color: #ffffff;
+  font-size: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 24px var(--accent-light);
+}
+
+.empty-guide__title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.empty-guide__desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.empty-guide__chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.empty-guide__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s, background 0.2s;
+}
+
+.empty-guide__chip:hover {
+  border-color: var(--border-focus);
+  background: var(--bg-hover);
+  box-shadow: 0 0 16px var(--accent-light);
+  transform: translateY(-2px);
+}
+
+/* ── 代码块复制按钮：键盘 focus 时同样可见 ── */
+.markdown-pre:focus-within .markdown-code-block-header,
+.markdown-code-block-wrapper:focus-within .markdown-code-block-header {
+  opacity: 1;
+}
+
+.markdown-pre:focus {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* ── 设置下拉可达性：键盘 focus 可见 ── */
+.settings-menu__item:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+  background: var(--bg-hover);
+}

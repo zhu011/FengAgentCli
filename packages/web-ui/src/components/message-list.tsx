@@ -6,9 +6,10 @@
  * 保留工具调用卡片与流式加载指示器。
  * Round 2：消息流底部「生成中」动画指示器（豆包式彩色光点）——
  * 发送消息后、首条助手消息出现前的空窗期显示。
+ * Round 3：生成中指示器增强 — 已用时长 + 「按 Esc 中断」提示。
  */
 
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import type { DisplayMessage } from "../hooks/use-session.ts";
 import { MarkdownRenderer } from "./markdown-renderer.tsx";
 import { ToolCallCard } from "./tool-call-card.tsx";
@@ -16,6 +17,23 @@ import { ToolCallCard } from "./tool-call-card.tsx";
 interface MessageListProps {
   messages: DisplayMessage[];
   isStreaming: boolean;
+}
+
+/** Round 3：生成中已用秒数计时（指示器消失时归零） */
+function useElapsed(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active) {
+      setElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const timer = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return elapsed;
 }
 
 function MessageListImpl({ messages, isStreaming }: MessageListProps) {
@@ -30,6 +48,7 @@ function MessageListImpl({ messages, isStreaming }: MessageListProps) {
   // 生成中指示器：正在流式输出且没有任何处于 streaming 的助手消息
   const hasActiveStreaming = messages.some((m) => m.streaming);
   const showGenerating = isStreaming && !hasActiveStreaming;
+  const elapsed = useElapsed(showGenerating);
 
   return (
     <div className="message-list">
@@ -46,6 +65,14 @@ function MessageListImpl({ messages, isStreaming }: MessageListProps) {
               <span />
             </span>
             <span className="generating-indicator__text">正在生成…</span>
+            {elapsed > 0 && (
+              <span className="generating-elapsed" aria-hidden="true">
+                {elapsed}s
+              </span>
+            )}
+            <span className="generating-hint">
+              按 <kbd>Esc</kbd> 中断
+            </span>
           </div>
         </div>
       )}
