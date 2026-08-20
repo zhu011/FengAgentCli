@@ -478,7 +478,7 @@
 <!-- ==================== 首页 ==================== -->
 <section class="section" id="home">
   <div class="hero">
-    <div class="hero-badge">v0.1.0 · MIT License</div>
+    <div class="hero-badge">v0.2.0 · MIT License</div>
     <h1 class="hero-title">FengAgentCli</h1>
     <p class="hero-desc">开源本地 AI Agent CLI 工具 — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩与权限审批。</p>
     <div class="callout" style="margin: 18px 0 0;">
@@ -637,6 +637,12 @@ export GOOGLE_API_KEY=...</code></pre>
   <pre><code>bun run packages/cli/src/entry.ts --model claude-sonnet-4-20250514
 bun run packages/cli/src/entry.ts --session &lt;session-id&gt;</code></pre>
 
+  <h3 id="qs-global">全局安装（任意目录启动 TUI）</h3>
+  <p>安装后无需进入项目目录，任意位置直接运行 <code>fengagent</code> 即可进入 TUI 交互界面。</p>
+  <div class="code-label">bash — npm 全局安装</div>
+  <pre><code>npm install -g fengagent
+fengagent                  # 任意目录直接进入 TUI</code></pre>
+
   <h3 id="qs-webui">WebUI 模式</h3>
   <div class="code-label">bash — 启动服务</div>
   <pre><code>bun run serve
@@ -769,7 +775,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows</code></pre
   <p class="section-desc">深入了解 FengAgentCli 的核心能力。</p>
 
   <h3>对话系统</h3>
-  <p>支持多轮上下文对话，通过 SSE（Server-Sent Events）实现流式输出。CLI 模式使用 Ink TUI 渲染，WebUI 模式使用 React + Markdown 渲染。TUI 借鉴 dsh-TUI 的 Gentle Mist Blue 设计语言做了统一美化：标题卡片、消息列表、状态栏（上下文占用进度条 + 动态运行指示）、输入框、工具卡片、权限对话框视觉统一；AI 思考/运行时显示逐帧循环动态图标（<code>SpinnerGlyph</code> 星形/月亮/跑马灯帧序列 + 宠物 emoji 轮播）。</p>
+  <p>支持多轮上下文对话，通过 SSE（Server-Sent Events）实现流式输出。CLI 模式使用 Ink TUI 渲染，WebUI 模式使用 React + Markdown 渲染。TUI 借鉴 opencode / kimi-code / claude-code 的设计语言做了统一美化（保留 dsh-TUI 的雾蓝品牌色）：近黑分层背景 + 暖橙/语义色、代码块与行内代码<strong>语法高亮</strong>；标题卡片、消息列表、输入框、工具卡片、权限对话框视觉统一；长对话<strong>切片渲染</strong>（只渲染可视窗口，超屏不撑破布局），支持 <code>PgUp/PgDn</code>、鼠标滚轮、<code>Home</code> 回顶、<code>End</code> 回底自动恢复贴底；状态栏为独立一行<strong>分段 token 进度条</strong>（精确百分比：保留 1 位小数、极小值 <code>&lt;0.1%</code>、token 计数 &gt; 0 时至少 1 格、≥85% 转警告色）+ <code>model · tokens · session</code> 信息 + 动态运行指示；AI 思考/运行时显示逐帧循环动态图标（<code>SpinnerGlyph</code> 星形/月亮/跑马灯帧序列 + 宠物 emoji 轮播）。</p>
 
   <h3 id="feat-agent">多 Agent 协作</h3>
   <p>通过 <strong>Task 工具</strong>派遣子 Agent，支持独立 Session 和角色定义。在 <code>.fengagent/agents/*.md</code> 中创建 Agent 定义文件：</p>
@@ -803,6 +809,7 @@ max_turns: 20
       <tr><td><code>glob</code></td><td>文件模式匹配搜索</td></tr>
       <tr><td><code>grep</code></td><td>正则表达式内容搜索</td></tr>
       <tr><td><code>task</code></td><td>派遣子 Agent 执行任务</td></tr>
+      <tr><td><code>sandbox</code></td><td>实验沙箱（run/write/read/delete/list/copy-in/copy-out/status，隔离执行）</td></tr>
       <tr><td><code>memory</code></td><td>记忆读写（MEMORY.md + 向量检索）</td></tr>
       <tr><td><code>skill</code></td><td>调用已注册的 Skill 模板</td></tr>
     </tbody>

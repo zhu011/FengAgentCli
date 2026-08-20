@@ -224,7 +224,7 @@ export OPENAI_COMPATIBLE_MODEL=deepseek-chat
 bun run packages/cli/src/entry.ts
 ```
 
-预期输出：进入全屏 TUI 界面，顶部出现品牌标题卡片（FengAgentCli v0.1.0），下方是消息区、输入行和状态栏（模型 · tokens · 会话）。
+预期输出：进入全屏 TUI 界面，顶部出现品牌标题卡片（FengAgentCli v0.2.0），下方是消息区、输入行和状态栏（token 进度条 + 模型 · tokens · 会话）。
 
 直接输入文字回车即发送，例如：
 
