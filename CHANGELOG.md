@@ -4,6 +4,25 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [0.2.0] - 2026-08-20
+
+### 修复
+
+- **长对话布局** — 内容超屏撑破布局导致图标 / 后续问答 / token 百分比消失；改为**切片渲染**（只渲染可视窗口内的消息，边界按行裁剪），支持 `PgUp/PgDn`、鼠标滚轮、`Home` 回顶、`End` 回底并自动恢复贴底（`packages/cli/src/tui/chat-view.tsx`）
+- **对话卡死** — AGENTS.md（Multica 运行时指令）被注入系统提示，Agent 对简单问题也触发工具调用循环；CLI / ACP 路径默认 `loadAgentsMd: false` 禁用注入（`e268f8a` + `f448383` 回归测试）
+- **ACP 运行时报错** — `FENG_PROVIDER=openai-compatible` 时报 `OPENAI_COMPATIBLE_API_KEY is required`；ACP 路径改为与 TUI 一致的分层配置加载（默认值 → 全局 → 项目 → 分支 → 环境变量）并经 `buildEnvForLLM` 注入 LLM 环境变量（`255c408`）
+- **token 进度条** — 大上下文窗口下百分比被 `Math.round` 压成 0%；保留 1 位小数、极小值显示 `<0.1%`、token 计数 > 0 时进度条至少填充 1 格（`0b7ac95`）；token 计数修正为累加 `inputTokens + outputTokens`（`7b8d41c`）
+
+### 新增
+
+- **实验沙箱** — `Sandbox` 类 + 内置 `sandbox` 工具（run / write / read / delete / list / copy-in / copy-out / status），路径围栏、环境脱敏、超时强杀，`copy-out` 为唯一出口需权限审批（详见 `docs/SANDBOX.md`）
+- **TUI 主题优化** — 借鉴 opencode / kimi-code / claude-code 的新色板（近黑分层背景 + 暖橙/语义色，保留雾蓝品牌色）、代码语法高亮、状态栏重构（分段进度条独立一行 + 精确百分比）
+- **全局安装 + Multica 运行时检测** — `fengagent runtime install` / `uninstall` 注册 / 移除 `~/.multica/runtimes/fengagent.json`，全局安装后其他电脑的 Multica 桌面端可检测到 FengAgentCli 运行时
+
+### 重构（refactor/cordis-graph-architecture 分支）
+
+- **Cordis 插件化** — 模型 / 工具 / 策略 / 存储 / 上下文 / Loop / 图全部为可插拔 `ctx.*` 服务；**对话图**（/graph、/rollback 可溯源可回退）、**事件溯源**（append-only 事件日志、投影、双写对账、导出/导入/重建/跨机迁移），详见 `docs/ARCHITECTURE-CORDIS.md`（分支级数据根 `.fengagent-cordis/`，与 main 隔离）
+
 ## [0.1.0] - 2026-08-09
 
 ### 新增

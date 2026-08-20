@@ -28,6 +28,7 @@
 | 📜 | **事件溯源** | 会话事实以 append-only 事件日志为准（`events/{sessionId}.jsonl`），可导出/导入/重建/跨机迁移 |
 | 🤖 | **多 Agent** | Task 工具派遣子 Agent，独立 Session + 角色定义 |
 | 🔧 | **工具调用** | 文件读写、Bash、Glob/Grep、Web 抓取、记忆、Skill |
+| 🧪 | **实验沙箱** | 临时文件/临时代码在隔离沙箱执行（路径围栏 + 环境脱敏），`copy-out` 为唯一出口需审批 |
 | 🌐 | **WebUI** | React + Vite 暗色科技风，3 套主题切换 + 对话图可视化面板 |
 | 📦 | **上下文压缩** | 工具结果裁剪 + 结构化摘要 + 迭代更新 + 文件追踪 |
 | 🧠 | **记忆系统** | MEMORY.md + 分类记忆 + TF-IDF 向量检索 |
@@ -45,8 +46,9 @@
 - **Skills 系统** — 可复用 Prompt 模板，关键词触发
 - **会话持久化** — 事件日志为准 + SQLite 读模型，跨重启恢复，`/restore` 可重建
 - **/ 联想（命令补全）** — 输入 `/` 弹出补全列表（前缀过滤、↑↓ 选择、Tab/Enter 补全）
+- **长对话滚动** — 内容超屏时切片渲染，`PgUp/PgDn` / 鼠标滚轮翻阅历史，`Home` 回顶、`End` 回底
 - **KV Cache 统计** — WebUI 实时显示 📥 输入 / 📤 输出 / ⚡ 缓存命中 / 🎯 命中率 / 合计 tokens
-- **Multica ACP** — 原生支持 Multica 平台 Agent 运行时集成
+- **Multica ACP** — 原生支持 Multica 平台 Agent 运行时集成（`fengagent acp`：分层加载配置注入 LLM 环境变量，禁用 AGENTS.md 注入防对话卡死）
 - **编译二进制** — `bun build --compile` 生成独立可执行文件
 </details>
 
@@ -198,14 +200,18 @@ fengagent runtime uninstall    # 移除注册
 
 ### TUI 界面
 
-CLI 交互模式（Ink TUI）借鉴 dsh-TUI 的 Gentle Mist Blue 设计语言做了统一美化：
+CLI 交互模式（Ink TUI）借鉴 opencode / kimi-code / claude-code 的设计语言做了统一美化
+（近黑分层背景 + 暖橙/语义色强调，保留「雾蓝」品牌色 `#7DA1DE`）：
 
 - **标题卡片**：品牌雾蓝色调欢迎卡片 / 顶部标题条；
-- **消息列表**：用户 / 助手语义色标签、细点线分隔、品牌色代码块与行内代码；
-- **状态栏**：上下文占用进度条 + `model · tokens · session` 中点分隔信息 + 动态运行指示；
+- **消息列表**：用户 / 助手语义色标签、细点线分隔、品牌色代码块与行内代码、**代码语法高亮**（关键字/字符串/数字/函数/变量/运算符分色）；
+- **长对话滚动**：内容超屏时**切片渲染**（只渲染可视窗口内的消息，边界消息按行裁剪），`PgUp` / `PgDn` 翻阅历史、**鼠标滚轮**滚动、`Home` 回顶、`End` 回底并自动恢复贴底；
+- **状态栏**：上下文占用**分段进度条**独立一行（token > 0 时至少填充 1 格，百分比保留 1 位小数如 `0.2%` / `12.4%`，极小值显示 `<0.1%`，≥85% 转警告色）+ `model · tokens · session` 中点分隔信息 + 动态运行指示；
 - **动态图标**：AI「思考中 / 执行工具中」显示逐帧循环动画（星形/月亮/跑马灯帧序列，`SpinnerGlyph` + `useFrameTicker`），宠物 emoji 轮播；
 - **工具卡片**：语义状态图标（✓/✗/⏳）+ 状态色边框；
 - **权限对话框**：琥珀色警告框，`[y] 允许 [n] 拒绝 [Esc] 取消`。
+
+> 提示：CLI / ACP 路径默认**不注入 AGENTS.md** 到系统提示（`loadAgentsMd: false`），避免项目指令被 Agent 当作工具调用依据、形成循环导致对话卡死。
 
 ## 项目结构
 
@@ -272,6 +278,7 @@ bun run clean            # 清理构建产物
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建流程（含新包 cordis/graph/events） |
 | [模块接口](docs/MODULES.md) | 各包 API 接口说明（含 cordis/events/graph） |
 | [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件（Cordis 插件模型）/ Agent / Skill / Hook / MCP |
+| [实验沙箱](docs/SANDBOX.md) | `sandbox` 工具动作表、安全模型（路径围栏 / 环境脱敏 / 超时强杀 / 显式数据流通）、TypeScript 编程接口、设计取舍 |
 | [产品需求](docs/PRD.md) | 产品需求文档 |
 
 ## Docker
