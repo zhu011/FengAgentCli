@@ -32,3 +32,7 @@ lan-*.png
 
 # 文档站点 — 始终提交（不忽略）
 !docs/site/
+
+# TUI 截图原始帧（渲染中间产物，PNG 成品提交）
+
+screenshots/tui-raw/

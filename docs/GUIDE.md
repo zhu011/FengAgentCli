@@ -10,6 +10,37 @@
 
 ---
 
+## FengAgentCli 是什么？
+
+FengAgentCli 是一个**开源本地 AI Agent 对话平台**：在终端（TUI）或浏览器（WebUI）中与 AI 对话，
+支持工具调用、多 Agent 协作、上下文压缩、权限审批、记忆系统与实验沙箱。
+
+核心亮点：
+
+| 亮点 | 一句话说明 |
+|------|-----------|
+| 💬 双端对话 | 终端 TUI 与浏览器 WebUI 同享一套 Agent 能力 |
+| 🔧 工具调用 | 文件读写、Bash、搜索、记忆、Skill、MCP |
+| 🧠 记忆与压缩 | 长对话记忆 + 上下文自动压缩 |
+| 🧪 实验沙箱 | 临时代码在隔离沙箱执行，安全可控 |
+| 📊 Agent 测评 | `bun run eval` 输出工具成功率 / KV Cache 命中率报告 |
+
+**三分钟上手**：
+
+```bash
+git clone https://github.com/zhu011/FengAgentCli.git
+cd FengAgentCli
+bun install
+export FENG_PROVIDER=openai-compatible
+export OPENAI_COMPATIBLE_API_KEY=sk-xxx
+export OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+bun run packages/cli/src/entry.ts        # 进入 TUI，直接开始对话
+```
+
+> 💡 对话中可用 `/provider set openai-compatible` 直接配置，无需改环境变量。
+
+---
+
 ## 目录
 
 1. [名词速览](#1-名词速览)

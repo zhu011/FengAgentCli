@@ -1,6 +1,7 @@
 /**
- * @fengagent/web-ui — 消息输入框
+ * @fengagent/web-ui — 消息输入框（Composer）
  *
+ * 圆角卡片式输入区（参考 DeepSeek / 豆包 Composer）：
  * 多行输入，Enter 发送，Shift+Enter 换行。
  * 流式运行时显示 Stop 按钮。
  */
@@ -48,27 +49,29 @@ export function MessageInput({
     }
   }
 
+  const canSend = value.trim().length > 0 && !busy;
+
   return (
-    <div className="message-input">
+    <div className={`composer${busy ? " composer--busy" : ""}`}>
       <textarea
-        className="message-input__textarea"
+        className="composer__textarea"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onCompositionStart={() => setIsComposing(true)}
         onCompositionEnd={() => setIsComposing(false)}
-        placeholder={busy ? "Assistant is responding..." : placeholder}
+        placeholder={busy ? "FengAgent 正在回复..." : placeholder}
         rows={3}
         aria-label="Message input"
       />
-      <div className="message-input__footer">
-        <span className="message-input__hint">
-          {busy ? "Streaming..." : "Enter to send · Shift+Enter for new line"}
+      <div className="composer__footer">
+        <span className="composer__hint">
+          {busy ? "Streaming..." : "Enter 发送 · Shift+Enter 换行"}
         </span>
         {busy ? (
           <button
             type="button"
-            className="message-input__btn message-input__btn--stop"
+            className="composer__btn composer__btn--stop"
             onClick={onCancel}
           >
             <Square size={15} />
@@ -77,12 +80,13 @@ export function MessageInput({
         ) : (
           <button
             type="button"
-            className="message-input__btn"
+            className="composer__btn"
             onClick={submit}
-            disabled={value.trim().length === 0}
+            disabled={!canSend}
+            aria-label="Send message"
           >
             <CornerDownLeft size={16} />
-            <span>Send</span>
+            <span>发送</span>
           </button>
         )}
       </div>
