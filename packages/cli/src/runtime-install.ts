@@ -30,7 +30,7 @@ export interface RuntimeRegistration {
   description: string;
 }
 
-const VERSION = process.env.FENG_VERSION ?? "0.1.0";
+const VERSION = process.env.FENG_VERSION ?? "0.2.0";
 
 /** Multica 本地运行时注册目录（Windows/macOS/Linux 一致） */
 export function runtimeRegistrationsDir(): string {

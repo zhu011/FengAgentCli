@@ -279,8 +279,8 @@ bun run build:binary
 ### 打包与全局安装
 
 ```bash
-bun run pack        # 编译当前平台二进制 + npm pack，产物 fengagent-0.1.0.tgz
-npm install -g ./fengagent-0.1.0.tgz   # 全局安装，任意目录直接 `fengagent`
+bun run pack        # 编译当前平台二进制 + npm pack，产物 fengagent-0.2.0.tgz
+npm install -g ./fengagent-0.2.0.tgz   # 全局安装，任意目录直接 `fengagent`
 ```
 
 全局启动入口为 `bin/fengagent.js`（npm bin），优先执行 `dist/` 下当前平台预编译二进制，否则退回 bun 源码直跑。

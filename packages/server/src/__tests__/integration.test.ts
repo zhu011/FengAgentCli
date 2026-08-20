@@ -541,6 +541,75 @@ describe("集成测试：WebUI 模式（HTTP API + SSE）", () => {
     expect(getRes.status).toBe(404);
   });
 
+  test("PATCH /api/sessions/:id — 重命名会话", async () => {
+    const createRes = await app.fetch(
+      new Request("http://localhost/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "旧标题" }),
+      }),
+    );
+    const session = await createRes.json();
+    expect(session.title).toBe("旧标题");
+
+    // 重命名成功
+    const renameRes = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "  新标题  " }),
+      }),
+    );
+    expect(renameRes.status).toBe(200);
+    const renamed = await renameRes.json();
+    expect(renamed.title).toBe("新标题"); // 首尾空白被 trim
+
+    // 列表与详情同步新标题
+    const listRes = await app.fetch(
+      new Request("http://localhost/api/sessions"),
+    );
+    const list = await listRes.json();
+    const meta = list.find((s: { id: string }) => s.id === session.id);
+    expect(meta.title).toBe("新标题");
+
+    const detailRes = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}`),
+    );
+    const detail = await detailRes.json();
+    expect(detail.title).toBe("新标题");
+  });
+
+  test("PATCH /api/sessions/:id — 空标题/不存在会话返回错误", async () => {
+    const createRes = await app.fetch(
+      new Request("http://localhost/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    const session = await createRes.json();
+
+    // 空白标题 → 400
+    const badRes = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "   " }),
+      }),
+    );
+    expect(badRes.status).toBe(400);
+
+    // 不存在的会话 → 404
+    const missingRes = await app.fetch(
+      new Request("http://localhost/api/sessions/does-not-exist", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "x" }),
+      }),
+    );
+    expect(missingRes.status).toBe(404);
+  });
+
   test("POST /api/sessions/:id/interrupt — 中断不存在的运行返回 404", async () => {
     const createRes = await app.fetch(
       new Request("http://localhost/api/sessions", {

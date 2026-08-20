@@ -4,6 +4,29 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 界面设计优化 Round 2
+
+### 优化（WebUI）
+
+- **顶栏设置下拉** — 齿轮 ⚙ 菜单：三套主题（深空/日光/赛博）直接选择并显示主题名（替代 32px 单按钮循环切换），附带消息检查器 / 对话图面板开关（`packages/web-ui/src/pages/chat.tsx`）
+- **顶栏会话标题** — 显示当前会话标题，双击行内编辑重命名（Enter 保存 / Esc 取消）
+- **侧边栏会话双击重命名** — 会话卡片双击（或铅笔按钮）进入行内编辑，Enter / 失焦保存、Esc 取消（`packages/web-ui/src/components/session-sidebar.tsx`）
+- **欢迎卡片文案贴合 Agent 场景** — 「让 Agent 分析项目代码」「多 Agent 协作完成任务」「用沙箱试跑实验性代码」「写一个 CLI 工具」
+- **消息生成中动画指示器** — 发送消息后、首条助手消息出现前的空窗期，消息流底部显示豆包式彩色光点 +「正在生成…」（`packages/web-ui/src/components/message-list.tsx`）
+- **对话图面板三套主题自适应** — Graph Panel 颜色由硬编码 hex 改为 CSS 变量，深空/日光/赛博配色协调（refactor 分支，`packages/web-ui/src/components/graph-panel.tsx`）
+- **重命名 API** — `PATCH /api/sessions/:id`（Server + SessionManager + Agent + SessionStore，SQLite 持久化；refactor 分支经 DualWriteSessionStore 双写事件日志 `session/title`）
+
+### 优化（TUI）
+
+- **用户消息气泡增强** — 在圆角边框基础上补品牌色 dim 背景填充（`backgroundColor: theme.userBubbleBg`），与切片渲染行数估算精确对齐（回归测试通过）
+- **版本号统一 v0.2.0** — TUI 欢迎卡徽标 / 顶栏版本、WebUI 侧边栏底部、README tgz 文件名、在线文档站 hero 徽标与 CHANGELOG [0.2.0] 对齐
+
+### 文档
+
+- **README 全局安装显眼化** — 「⭐ 全局安装（一条命令启动 TUI）」：`npm install -g fengagent` → 任意目录 `fengagent` 直接进 TUI，附「无需克隆仓库」提示
+- **在线文档站** — WebUI 功能描述同步（设置下拉 / 双击重命名 / 生成中动画 / 三主题图面板），hero 徽标 v0.2.0
+- **截图画廊更新** — README / 文档站截图替换为 Round 2 新 UI 截图（`screenshots/r2-*.png`）
+
 ## [Unreleased] — 界面设计优化 Round 1
 
 ### 优化（WebUI）

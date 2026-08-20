@@ -201,6 +201,18 @@ export class Agent {
     return this.sessionStore.loadSession(sessionId);
   }
 
+  /**
+   * 重命名会话（持久化标题）。
+   *
+   * @param sessionId - 会话 ID
+   * @param title - 新标题
+   * @returns 是否成功（无会话存储或会话不存在时返回 false）
+   */
+  renameSession(sessionId: string, title: string): boolean {
+    if (!this.sessionStore) return false;
+    return this.sessionStore.renameSession(sessionId, title);
+  }
+
   /** 列出所有会话 */
   listSessions() {
     if (!this.sessionStore) return [];

@@ -203,6 +203,34 @@ export class SessionManager {
   }
 
   /**
+   * 重命名会话（同步内存缓存 + 持久化）。
+   *
+   * 更新内存缓存的会话标题与更新时间，并同步到 Agent 的
+   * SessionStore（若存在）。WebUI 侧边栏「双击重命名」入口。
+   *
+   * @param sessionId - 会话 ID
+   * @param title - 新标题（空白拒绝）
+   * @returns 更新后的会话，不存在返回 null
+   */
+  renameSession(sessionId: string, title: string): Session | null {
+    const trimmed = title.trim();
+    if (!trimmed) return null;
+    const session = this.sessions.get(sessionId) ?? this.getSession(sessionId);
+    if (!session) return null;
+
+    session.title = trimmed;
+    session.updatedAt = Date.now();
+    this.sessions.set(sessionId, session);
+
+    const agent = this.agents.get(sessionId);
+    if (agent && typeof agent.renameSession === "function") {
+      agent.renameSession(sessionId, trimmed);
+    }
+    log.info("renameSession", `sessionId=${sessionId}, title=${trimmed}`);
+    return session;
+  }
+
+  /**
    * 销毁会话（清理资源）。
    *
    * @param sessionId - 会话 ID

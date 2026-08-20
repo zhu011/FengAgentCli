@@ -1,6 +1,6 @@
 {
   "name": "fengagent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "开源本地 AI Agent CLI 工具 — 对话、工具调用、多Agent、WebUI",
   "type": "module",
   "license": "MIT",
@@ -87,6 +87,6 @@
     "launchHeader": "fengagent acp",
     "displayName": "FengAgentCli",
     "protocol": "acp",
-    "version": "0.1.0"
+    "version": "0.2.0"
   }
 }

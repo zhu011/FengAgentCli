@@ -251,7 +251,7 @@ describe("CLI 交付验证：帮助和版本", () => {
   });
 
   test("VERSION 为 0.1.0", () => {
-    expect(VERSION).toBe("0.1.0");
+    expect(VERSION).toBe("0.2.0");
   });
 });
 

@@ -43,7 +43,7 @@ function WelcomeCard(): React.ReactElement {
           <Box flexDirection="row" justifyContent="center" alignItems="center">
             <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
             <Text backgroundColor={theme.backgroundElement} color={theme.brandBright} bold>
-              {" v0.1.0 "}
+              {" v0.2.0 "}
             </Text>
           </Box>
           <Box flexDirection="row" justifyContent="center">
@@ -129,7 +129,7 @@ function Conversation(): React.ReactElement {
     <Box flexDirection="column" width={80}>
       <Box flexDirection="row" justifyContent="center" marginBottom={0}>
         <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
-        <Text color={theme.subtle}> · v0.1.0</Text>
+        <Text color={theme.subtle}> · v0.2.0</Text>
       </Box>
       <Box flexDirection="column" flexGrow={1} minHeight={0} width="100%" overflowY="hidden">
         <ChatView messages={messages} streamingText="" toolCalls={[]} isRunning={false} />

@@ -89,6 +89,19 @@ export class ApiClient {
     return (await res.json()) as Session;
   }
 
+  /** PATCH /api/sessions/:id — 重命名会话（侧边栏双击重命名 / 顶栏标题编辑） */
+  async renameSession(id: string, title: string): Promise<Session> {
+    const res = await fetch(`${this.baseUrl}/api/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to rename session");
+    }
+    return (await res.json()) as Session;
+  }
+
   /** DELETE /api/sessions/:id — 销毁会话 */
   async deleteSession(id: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}/api/sessions/${id}`, {

@@ -194,6 +194,24 @@ export class SessionStore {
     }));
   }
 
+  /**
+   * 重命名会话（仅更新标题与更新时间）。
+   *
+   * @param sessionId - 会话 ID
+   * @param title - 新标题（空白将被拒绝）
+   * @returns 是否成功更新（会话存在且标题非空）
+   */
+  renameSession(sessionId: string, title: string): boolean {
+    const trimmed = title.trim();
+    if (!trimmed) return false;
+    const res = this.db
+      .query(
+        "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(trimmed, Date.now(), sessionId);
+    return res.changes > 0;
+  }
+
   /** 删除会话及其所有消息 */
   deleteSession(sessionId: string): void {
     this.db.query("DELETE FROM messages WHERE session_id = ?").run(sessionId);

@@ -174,7 +174,7 @@ def draw_frame(name: str):
         ty = y + (CELL_H - th) // 2 - 2
         d.text((tx, ty), ch, font=font, fill=fg)
 
-    out = os.path.join(OUT_DIR, name.replace(".txt", ".png").replace("01-welcome", "r1-tui-welcome").replace("02-conversation", "r1-tui-conversation"))
+    out = os.path.join(OUT_DIR, name.replace(".txt", ".png").replace("01-welcome", "r2-tui-welcome").replace("02-conversation", "r2-tui-conversation"))
     img.save(out)
     print("rendered", out, img.size)
 

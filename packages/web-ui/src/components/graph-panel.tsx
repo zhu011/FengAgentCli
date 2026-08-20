@@ -3,6 +3,9 @@
  *
  * 渲染会话的对话图：用户/助手/工具/分支点节点、活跃路径高亮、
  * 被回退作废的旧分支（灰显保留）、助手节点上的「回退」按钮。
+ *
+ * Round 2：颜色全部改用 CSS 变量（--accent / --success / --danger /
+ * --text-* / --border-* 等），三套主题（深空/日光/赛博）自动适配。
  */
 
 import { useMemo, useState } from "react";
@@ -57,66 +60,42 @@ export function GraphPanel({ graph, busy, onRollback }: GraphPanelProps) {
     return (
       <div key={node.id}>
         <div
+          className={`graph-node ${active ? "graph-node--active" : ""} ${isHead ? "graph-node--head" : ""}`}
           style={{
             marginLeft: depth * 18,
-            padding: "6px 10px",
-            marginBottom: 4,
-            borderRadius: 8,
-            border: `1px solid ${active ? (isHead ? "#22c55e" : "#3b82f6") : "#334155"}`,
-            background: active ? (isHead ? "rgba(34,197,94,0.08)" : "rgba(59,130,246,0.06)") : "rgba(51,65,85,0.25)",
             opacity: rolledBack ? 0.55 : 1,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            flexWrap: "wrap",
           }}
         >
           <span style={{ fontSize: 14 }}>{NODE_ICON[node.type] ?? "•"}</span>
-          <span style={{ fontWeight: 600, fontSize: 12 }}>
+          <span className="graph-node__label">
             {NODE_LABEL[node.type] ?? node.type}
           </span>
-          <code style={{ fontSize: 11, color: "#94a3b8" }}>{node.id.slice(0, 12)}</code>
+          <code className="graph-node__id">{node.id.slice(0, 12)}</code>
           {node.meta.quality && node.meta.quality !== "unrated" && (
             <span
-              style={{
-                fontSize: 11,
-                padding: "1px 6px",
-                borderRadius: 999,
-                background: node.meta.quality === "poor" ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)",
-                color: node.meta.quality === "poor" ? "#f87171" : "#4ade80",
-              }}
+              className={`graph-node__quality ${
+                node.meta.quality === "poor" ? "graph-node__quality--poor" : ""
+              }`}
             >
               {node.meta.quality === "poor" ? "回答不佳" : "良好"}
             </span>
           )}
           {node.meta.qualityNote && (
-            <span style={{ fontSize: 11, color: "#cbd5e1" }} title={node.meta.qualityNote}>
+            <span className="graph-node__note" title={node.meta.qualityNote}>
               {node.meta.qualityNote.slice(0, 20)}
             </span>
           )}
           {rolledBack && (
-            <span style={{ fontSize: 11, color: "#64748b" }}>已作废（保留可溯源）</span>
+            <span className="graph-node__rolledback">已作废（保留可溯源）</span>
           )}
           {isHead && (
-            <span style={{ fontSize: 11, color: "#4ade80", fontWeight: 700 }}>← 当前</span>
+            <span className="graph-node__head">← 当前</span>
           )}
           {canRollback && (
             <button
               type="button"
+              className="graph-node__rollback"
               onClick={() => onRollback(node.id)}
-              style={{
-                marginLeft: "auto",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: 11,
-                padding: "2px 8px",
-                borderRadius: 6,
-                border: "1px solid #f59e0b",
-                background: "rgba(245,158,11,0.12)",
-                color: "#fbbf24",
-                cursor: "pointer",
-              }}
             >
               <RotateCcw size={11} />
               回退到父节点
@@ -132,7 +111,7 @@ export function GraphPanel({ graph, busy, onRollback }: GraphPanelProps) {
 
   return (
     <aside
-      className="chat-page__graph-panel"
+      className="chat-page__graph-panel graph-panel"
       style={{
         width: 340,
         display: "flex",
@@ -140,43 +119,29 @@ export function GraphPanel({ graph, busy, onRollback }: GraphPanelProps) {
         overflow: "hidden",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 14px",
-          borderBottom: "1px solid #1e293b",
-        }}
-      >
-        <span style={{ fontWeight: 700, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <GitBranch size={14} color="#38bdf8" />
+      <div className="graph-panel__header">
+        <span className="graph-panel__title">
+          <GitBranch size={14} className="graph-panel__title-icon" />
           对话图 · {graph.nodes.length} 节点
         </span>
         <button
           type="button"
+          className="graph-panel__collapse"
           onClick={() => setCollapsed((v) => !v)}
-          style={{
-            fontSize: 12,
-            background: "transparent",
-            border: "none",
-            color: "#94a3b8",
-            cursor: "pointer",
-          }}
         >
           {collapsed ? "展开" : "折叠"}
         </button>
       </div>
       {!collapsed && (
-        <div style={{ padding: 12, overflowY: "auto", flexGrow: 1 }}>
+        <div className="graph-panel__body">
           {roots.length === 0 ? (
-            <p style={{ fontSize: 12, color: "#64748b" }}>
+            <p className="graph-panel__empty">
               暂无图节点 — 发一条消息后自动生成（对话即节点）。
             </p>
           ) : (
             <>
               {roots.map((node) => renderNode(node, 0))}
-              <p style={{ fontSize: 11, color: "#64748b", marginTop: 10, lineHeight: 1.5 }}>
+              <p className="graph-panel__hint">
                 💡 点击助手节点「回退到父节点」：回到该提问处重答，旧分支作废但保留，可随时溯源。
               </p>
             </>

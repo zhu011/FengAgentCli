@@ -1,10 +1,10 @@
 /**
- * Round-1 设计验证：WebUI 截图脚本（raw CDP，不依赖 Playwright 连接器）
+ * Round-2 设计验证：WebUI 截图脚本（raw CDP，不依赖 Playwright 连接器）
  *
- * 1. 启动 mock OpenAI-compatible LLM（本地 SSE 流式应答）
+ * 1. 启动 mock OpenAI-compatible LLM（本地 SSE 流式应答，首帧延迟 900ms 以捕获「生成中」动画）
  * 2. 以该 mock 启动真实 FengAgent server（生产模式托管 web-ui dist）
  * 3. 手动拉起 Chromium（--remote-debugging-port），用 Bun WebSocket 直连 CDP：
- *    截图 欢迎页（深空）→ 对话流（深空）→ 对话流（日光）→ 欢迎页（赛博）
+ *    欢迎页（深空）→ 设置下拉 → 对话流（深空）→ 生成中指示器 → 对话流（日光）→ 欢迎页（赛博）
  *
  * 用法：bun scripts/shoot-webui.ts
  */
@@ -45,7 +45,7 @@ function sseChunk(delta: string, finish: string | null, usage?: unknown) {
   });
 }
 
-// ── 1. mock LLM ──
+// ── 1. mock LLM（首帧延迟 900ms，用于截「生成中」指示器）──
 const mockServer = Bun.serve({
   port: MOCK_PORT,
   async fetch(req) {
@@ -57,6 +57,7 @@ const mockServer = Bun.serve({
       });
     }
     if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
+      await Bun.sleep(900); // 首帧延迟：让「正在生成…」指示器可见
       const chunks: string[] = [];
       let acc = "";
       for (const ch of REPLY) {
@@ -255,10 +256,29 @@ async function main(): Promise<void> {
     console.log("[shoot] saved", name);
   }
 
+  /** 通过设置下拉切换主题（Round 2 交互） */
+  async function switchThemeViaMenu(themeName: string): Promise<void> {
+    await evaluate(`document.querySelector('.chat-page__settings-btn').click()`);
+    await sleep(300);
+    await evaluate(`(() => {
+      const items = [...document.querySelectorAll('.settings-menu__item')];
+      const target = items.find(el => el.textContent.includes(${JSON.stringify(themeName)}));
+      if (target) target.click();
+      return !!target;
+    })()`);
+    await sleep(500);
+  }
+
   // ── 欢迎页（深空）──
   await cdp.send("Page.navigate", { url: BASE_URL });
   await sleep(2500);
-  await shot("r1-webui-welcome-dark.png");
+  await shot("r2-webui-welcome-dark.png");
+
+  // ── 设置下拉菜单（深空，展示主题选择 + 面板开关）──
+  await evaluate(`document.querySelector('.chat-page__settings-btn').click()`);
+  await sleep(400);
+  await shot("r2-webui-settings-dark.png");
+  await evaluate(`document.querySelector('.chat-page__settings-btn').click()`); // 收起
 
   // ── 对话流（深空）：输入并发送 ──
   await evaluate(`(() => {
@@ -271,16 +291,19 @@ async function main(): Promise<void> {
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     return true;
   })()`);
+  // 首帧延迟 900ms：此刻应显示「正在生成…」指示器
+  await sleep(350);
+  await shot("r2-webui-generating-dark.png");
   await waitForSelector(".message-bubble--assistant .markdown-body");
   await sleep(2000);
-  await shot("r1-webui-chat-dark.png");
+  await shot("r2-webui-chat-dark.png");
 
-  // ── 对话流（日光）──
-  await evaluate(`document.querySelector('.chat-page__theme-btn').click()`);
-  await sleep(800);
-  await shot("r1-webui-chat-light.png");
+  // ── 对话流（日光）：经设置下拉切换 ──
+  await switchThemeViaMenu("日光");
+  await sleep(600);
+  await shot("r2-webui-chat-light.png");
 
-  // ── 欢迎页（赛博）：回欢迎页（新标签）──
+  // ── 欢迎页（赛博）：新标签 + localStorage ──
   const wsUrl2 = await newPageTab();
   const cdp2 = new CdpSession(wsUrl2);
   await cdp2.open();
@@ -292,7 +315,6 @@ async function main(): Promise<void> {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  // 先切主题为 cyber（localStorage 会被新 tab 共享 user-data-dir）
   const eval2 = async (expression: string) => {
     const res = (await cdp2.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })) as {
       result?: { value?: unknown };
@@ -304,8 +326,8 @@ async function main(): Promise<void> {
   await eval2(`localStorage.setItem('feng-theme','cyber'); location.reload(); true`);
   await sleep(2500);
   const res = (await cdp2.send("Page.captureScreenshot", { format: "png", fromSurface: true })) as { data: string };
-  writeFileSync(join(OUT_DIR, "r1-webui-welcome-cyber.png"), Buffer.from(res.data, "base64"));
-  console.log("[shoot] saved r1-webui-welcome-cyber.png");
+  writeFileSync(join(OUT_DIR, "r2-webui-welcome-cyber.png"), Buffer.from(res.data, "base64"));
+  console.log("[shoot] saved r2-webui-welcome-cyber.png");
 
   console.log("[shoot] all screenshots saved to screenshots/");
 }

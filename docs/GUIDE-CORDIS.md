@@ -127,15 +127,15 @@ git log --oneline -1
 
 ```bash
 # 方式一：npm 全局安装（需要已发布 npm 包或本地打包产物）
-bun run pack                       # 项目根目录：编译当前平台二进制 + 打出 fengagent-0.1.0.tgz
-npm install -g ./fengagent-0.1.0.tgz
+bun run pack                       # 项目根目录：编译当前平台二进制 + 打出 fengagent-0.2.0.tgz
+npm install -g ./fengagent-0.2.0.tgz
 
 # 方式二：bun link（本地开发，链接到本仓库）
 bun link && bun link fengagent
 
 # 安装后直接使用
 fengagent                          # 启动 TUI 交互界面
-fengagent --version                # FengAgentCli v0.1.0
+fengagent --version                # FengAgentCli v0.2.0
 ```
 
 启动器（`bin/fengagent.js`）优先执行 `dist/` 下当前平台的预编译二进制（无需 Bun/Node），
@@ -257,7 +257,7 @@ export OPENAI_COMPATIBLE_MODEL=deepseek-chat
 bun run packages/cli/src/entry.ts
 ```
 
-预期输出：进入全屏 TUI 界面，顶部出现品牌标题卡片（FengAgentCli v0.1.0），下方是消息区、输入行和状态栏（模型 · tokens · 会话）。
+预期输出：进入全屏 TUI 界面，顶部出现品牌标题卡片（FengAgentCli v0.2.0），下方是消息区、输入行和状态栏（模型 · tokens · 会话）。
 
 ![CLI 欢迎界面](site/screenshots/cli-01-welcome.png)
 

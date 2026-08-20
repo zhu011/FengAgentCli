@@ -357,7 +357,7 @@ export function App({
             <Box flexDirection="row" justifyContent="center" alignItems="center">
               <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
               <Text backgroundColor={theme.backgroundElement} color={theme.brandBright} bold>
-                {" v0.1.0 "}
+                {" v0.2.0 "}
               </Text>
             </Box>
             <Box flexDirection="row" justifyContent="center">
@@ -393,7 +393,7 @@ export function App({
       ) : (
         <Box flexDirection="row" justifyContent="center" marginBottom={0}>
           <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
-          <Text color={theme.subtle}> · v0.1.0</Text>
+          <Text color={theme.subtle}> · v0.2.0</Text>
         </Box>
       )}
 

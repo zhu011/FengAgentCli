@@ -58,11 +58,13 @@ bun run serve                         # WebUI：访问 http://127.0.0.1:3000
 
 > 💡 也可以用 `/provider` 命令在对话中直接配置，无需改环境变量、无需重启。
 
-### 全局安装（一条命令启动 TUI）
+### 全局安装（一条命令启动 TUI）⭐
+
+> **不想克隆仓库？** 全局安装后**任意目录**直接运行 `fengagent` 即可进入 TUI，无需进入项目目录。
 
 ```bash
 npm install -g fengagent   # 或 bun install -g fengagent
-npm install -g ./fengagent-0.1.0.tgz   # 本地打包安装：先运行 bun run pack 生成 tgz
+npm install -g ./fengagent-0.2.0.tgz   # 本地打包安装：先运行 bun run pack 生成 tgz
 fengagent                  # 任意目录直接进入 TUI
 fengagent acp              # ACP 服务（Multica 运行时）
 ```
@@ -76,13 +78,13 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 
 ## 📸 界面预览
 
-| TUI 欢迎页 | TUI 对话流 | WebUI 欢迎页 |
+| TUI 欢迎页 | TUI 对话流 | WebUI 欢迎页（深空） |
 |:---:|:---:|:---:|
-| ![](screenshots/r1-tui-welcome.png) | ![](screenshots/r1-tui-conversation.png) | ![](screenshots/r1-webui-welcome-dark.png) |
+| ![](screenshots/r2-tui-welcome.png) | ![](screenshots/r2-tui-conversation.png) | ![](screenshots/r2-webui-welcome-dark.png) |
 
 | WebUI 对话（深空） | WebUI 对话（日光） | WebUI 欢迎页（赛博） |
 |:---:|:---:|:---:|
-| ![](screenshots/r1-webui-chat-dark.png) | ![](screenshots/r1-webui-chat-light.png) | ![](screenshots/r1-webui-welcome-cyber.png) |
+| ![](screenshots/r2-webui-chat-dark.png) | ![](screenshots/r2-webui-chat-light.png) | ![](screenshots/r2-webui-welcome-cyber.png) |
 
 ## 💻 使用指南
 
@@ -97,8 +99,9 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 ### WebUI（浏览器对话）
 
 - 启动 `bun run serve` 后访问 `http://127.0.0.1:3000`
-- 三套主题：深空 / 日光 / 赛博（右上角一键切换）
-- 右侧面板：权限审批、消息检查器、对话图（分支可视化 / 回退）
+- 三套主题：深空 / 日光 / 赛博（顶栏 ⚙ 设置下拉，显示当前主题名）
+- 会话标题双击重命名（侧边栏与顶栏均可）；发送消息后有「生成中」动画指示器
+- 右侧面板：权限审批、消息检查器、对话图（分支可视化 / 回退，三套主题自适应）
 - 底部状态栏：输入 / 输出 / 缓存命中 / 命中率 / 合计 tokens
 
 ### 配置

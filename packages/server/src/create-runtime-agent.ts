@@ -446,6 +446,18 @@ export class RuntimeAgent extends AgentClass {
     return this.runtime.ctx.storage.listSessions();
   }
 
+  /** 重命名会话 — 经 ctx.storage 双写（事件日志追加 session/title，旧存储同步） */
+  override renameSession(sessionId: string, title: string): boolean {
+    const trimmed = title.trim();
+    if (!trimmed) return false;
+    const loaded = this.runtime.ctx.storage.loadSession(sessionId);
+    if (!loaded) return false;
+    loaded.title = trimmed;
+    loaded.updatedAt = Date.now();
+    this.runtime.ctx.storage.saveSession(loaded);
+    return true;
+  }
+
   /** 发送用户消息并运行 Agent Loop（经 ctx.loop，对话沉淀为图节点） */
   override async *prompt(
     text: string,
