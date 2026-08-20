@@ -62,6 +62,7 @@ bun run serve                         # WebUI：访问 http://127.0.0.1:3000
 
 ```bash
 npm install -g fengagent   # 或 bun install -g fengagent
+npm install -g ./fengagent-0.1.0.tgz   # 本地打包安装：先运行 bun run pack 生成 tgz
 fengagent                  # 任意目录直接进入 TUI
 fengagent acp              # ACP 服务（Multica 运行时）
 ```
