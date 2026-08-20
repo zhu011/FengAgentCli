@@ -102,6 +102,61 @@ bash scripts/demo.sh             # Linux/macOS
 powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 ```
 
+### 全局安装（`npm install -g` / `bun install -g`）
+
+安装后任意目录直接执行 `fengagent` 即可启动 TUI：
+
+```bash
+# 方式一：npm 全局安装（已发布 npm 包 / 本地打包产物）
+npm install -g fengagent
+npm install -g ./fengagent-0.1.0.tgz        # 本地打包产物（bun run pack）
+
+# 方式二：bun 全局安装
+bun install -g fengagent
+
+# 方式三：bun link（本地开发，链接到本仓库）
+bun link && bun link fengagent
+
+# 安装后直接使用
+fengagent                     # 启动 TUI 交互界面
+fengagent --version           # 0.1.0
+fengagent "帮我读 package.json"   # 参数/管道模式
+fengagent acp                 # 启动 ACP 服务（Multica 运行时）
+```
+
+- 启动器（`bin/fengagent.js`）优先执行 `dist/` 下当前平台的**预编译二进制**（`bun run build:binary` 生成，无需 Bun/Node 运行时），否则退回 `bun run packages/cli/src/entry.ts` 源码直跑。
+- 打包发布：`bun run pack`（自动编译当前平台二进制 → `npm pack`），产物 `fengagent-0.1.0.tgz`。
+
+### 注册为 Multica 运行时（其他电脑也可被检测）
+
+Multica 桌面端通过 `~/.multica/runtimes/*.json` 发现本机自定义运行时。全局安装后执行：
+
+```bash
+fengagent runtime install      # 写入 ~/.multica/runtimes/fengagent.json
+fengagent runtime uninstall    # 移除注册
+```
+
+注册内容（自动生成）：
+
+```json
+{
+  "provider": "fengagent",
+  "displayName": "FengAgentCli",
+  "launchHeader": "fengagent acp",
+  "protocol": "acp",
+  "command": "fengagent",
+  "args": ["acp"],
+  "version": "0.1.0",
+  "capabilities": ["text", "tools", "streaming", "multi-agent", "mcp"],
+  "workdir": "可选：检测到项目 .fengagent/config.json 时自动写入"
+}
+```
+
+- `command` 自动解析：优先 PATH 上的全局 `fengagent`；否则回退当前可执行文件绝对路径（编译二进制 / node 启动器 / bun 源码）。
+- 运行时的 API Key 配置：Multica 启动运行时时若当前工作目录没有 `.fengagent/config.json`，请通过
+  Multica 运行时环境变量（`OPENAI_COMPATIBLE_API_KEY` / `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_MODEL`）或
+  本机全局配置 `~/.fengagent/config.json` 提供（配置分层见 [docs/CONFIGURATION.md](docs/CONFIGURATION.md)）。
+
 ### 配置 Provider（`/provider` 命令）
 
 在 CLI 交互模式中可用 `/provider` 命令查看或切换 LLM Provider（Anthropic / OpenAI / OpenAI-Compatible / Google），配置写入**分支级** `.fengagent-cordis/config.json`，**无需改环境变量、无需重启**即可生效：
