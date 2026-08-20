@@ -187,7 +187,7 @@ export async function main(argv: string[]): Promise<void> {
 
   // acp 子命令 — 启动 ACP 服务（Multica 运行时集成）
   if (parsed.acp) {
-    const { loadConfigFromEnv } = await import("@fengagent/core");
+    const { loadConfig } = await import("@fengagent/core");
     const { Agent } = await import("@fengagent/agent");
     const { createClientFromEnv } = await import("@fengagent/llm");
     const {
@@ -200,8 +200,27 @@ export async function main(argv: string[]): Promise<void> {
     const { createContextManager } = await import("@fengagent/context");
     const { startAcpServer } = await import("@fengagent/server");
 
-    const config = loadConfigFromEnv();
-    const { client: llmClient } = createClientFromEnv();
+    // 与 serve 路径一致：分层加载配置（默认值 → 全局 → 项目 → 分支 → 环境变量），
+    // 再把配置文件中的 API Key / BaseURL / Model 注入为 LLM 环境变量。
+    // 修复：此前用 loadConfigFromEnv() + createClientFromEnv() 只读环境变量，
+    // 未读配置文件，导致 FENG_PROVIDER=openai-compatible 时
+    // “OPENAI_COMPATIBLE_API_KEY is required” 运行时报错。
+    const config = await loadConfig();
+    const envForLLM: Record<string, string | undefined> = { ...process.env };
+    function injectConfigEnv(key: string, configVal: string | undefined) {
+      if (configVal !== undefined && configVal !== "" && !envForLLM[key]) {
+        envForLLM[key] = configVal;
+      }
+    }
+    injectConfigEnv("FENG_PROVIDER", config.provider);
+    injectConfigEnv("FENG_MODEL", config.model);
+    injectConfigEnv("ANTHROPIC_API_KEY", config.anthropicApiKey);
+    injectConfigEnv("OPENAI_API_KEY", config.openaiApiKey);
+    injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
+    injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
+    injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
+
+    const { client: llmClient } = createClientFromEnv(envForLLM);
     const workdir = process.cwd();
 
     const hookRegistry = createHookRegistry();
