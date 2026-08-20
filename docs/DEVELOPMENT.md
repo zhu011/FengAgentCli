@@ -284,6 +284,9 @@ npm install -g ./fengagent-0.1.0.tgz   # 全局安装，任意目录直接 `feng
 ```
 
 全局启动入口为 `bin/fengagent.js`（npm bin），优先执行 `dist/` 下当前平台预编译二进制，否则退回 bun 源码直跑。
+
+**安装后启动 TUI**：直接运行 `fengagent` 即进入终端交互界面——TUI 是默认模式（无 `tui` 子命令，仅 `serve` / `acp` / `runtime install|uninstall` 为子命令）。stdin 非 TTY（如 `echo "…" | fengagent`）或加 `--print` 时自动走非交互 print 模式。
+
 `fengagent runtime install` / `uninstall` 注册 / 移除 Multica 本地运行时（`~/.multica/runtimes/fengagent.json`）。
 
 ### Docker 部署
