@@ -47,6 +47,21 @@ function extractTextFromNode(node: ReactNode): string {
   return "";
 }
 
+/** 复制兜底：非安全上下文（无 navigator.clipboard）时用 execCommand */
+function fallbackCopy(text: string): void {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
 /** 代码块组件 — 带语言标签 + 复制按钮 */
 function CodeBlock({ children, ...preProps }: ComponentPropsWithoutRef<"pre">) {
   const [copied, setCopied] = useState(false);
@@ -61,20 +76,34 @@ function CodeBlock({ children, ...preProps }: ComponentPropsWithoutRef<"pre">) {
   const codeText = extractTextFromNode(codeChildProps?.children);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(codeText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(codeText).catch(() => fallbackCopy(codeText));
+      } else {
+        fallbackCopy(codeText);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      fallbackCopy(codeText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (
     <div className="markdown-code-block-wrapper">
       <div className="markdown-code-block-header">
         <span className="markdown-code-block-lang">{language}</span>
-        <button className="markdown-code-block-copy" onClick={handleCopy}>
+        <button
+          className="markdown-code-block-copy"
+          onClick={handleCopy}
+          aria-live="polite"
+        >
           {copied ? "✓ Copied" : "Copy"}
         </button>
       </div>
-      <pre className="markdown-pre" {...preProps}>
+      <pre className="markdown-pre" tabIndex={0} {...preProps}>
         {children}
       </pre>
     </div>

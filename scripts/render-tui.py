@@ -1,8 +1,10 @@
-"""Round-1 TUI 截图渲染：ANSI 彩色帧 → PNG（PIL）。
+"""Round-3 TUI 截图渲染：ANSI 彩色帧 → PNG（PIL）。
 
 用法: python scripts/render-tui.py
 读取 screenshots/tui-raw/*.txt（ink-testing-library 输出的 ANSI 帧），
-渲染为 screenshots/r1-tui-*.png。
+渲染为 screenshots/r3-tui-*.png。
+支持 24-bit 前景/背景色（48;2;r;g;b），等价于 Linux/macOS 等
+truecolor 终端的渲染效果（Round 3 非 Windows 终端填充气泡验证）。
 """
 
 import os
@@ -174,7 +176,10 @@ def draw_frame(name: str):
         ty = y + (CELL_H - th) // 2 - 2
         d.text((tx, ty), ch, font=font, fill=fg)
 
-    out = os.path.join(OUT_DIR, name.replace(".txt", ".png").replace("01-welcome", "r2-tui-welcome").replace("02-conversation", "r2-tui-conversation"))
+    out = os.path.join(OUT_DIR, name.replace(".txt", ".png")
+                       .replace("01-welcome", "r3-tui-welcome")
+                       .replace("02-conversation", "r3-tui-conversation")
+                       .replace("03-longtext", "r3-tui-longtext"))
     img.save(out)
     print("rendered", out, img.size)
 

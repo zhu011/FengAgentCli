@@ -1,8 +1,9 @@
 /**
- * Round-1 设计验证：TUI 帧捕获脚本（放在 cli 包内以解析 ink/react 依赖）
+ * Round-3 设计验证：TUI 帧捕获脚本（放在 cli 包内以解析 ink/react 依赖）
  *
  * 用 ink-testing-library 渲染真实 TUI 组件（欢迎卡片 + 对话流 + 状态栏），
  * 输出带 ANSI 颜色的原始帧文本，再由 scripts/render-tui.py 渲染为 PNG。
+ * Round 3 新增：超长用户消息帧（验证填充气泡多行换行后的背景边界与右对齐）。
  *
  * 用法：bun packages/cli/src/scripts/shoot-tui.tsx
  */
@@ -152,3 +153,61 @@ function Conversation(): React.ReactElement {
 const conv = render(<Conversation />);
 await sleep(50);
 save("02-conversation.txt", conv.lastFrame() ?? "");
+
+// ── Round 3：超长用户消息 — 验证填充气泡多行换行的背景/右对齐边界 ──
+const LONG_TEXT =
+  "这个需求涉及多个模块，麻烦详细说明一下：首先是核心的 LLM 调用层，需要支持 OpenAI / Anthropic / Bedrock / Google 四家 provider 的流式输出与重试；" +
+  "其次是工具系统，要支持文件读写、Bash 执行、MCP 协议和权限审批；然后是上下文管理，长对话超过阈值后要自动压缩历史消息；" +
+  "最后是 Agent 运行时，需要实现主 Agent 派生子 Agent 并行处理子任务的机制，并把所有事件持久化到 SQLite，方便后续做对话图可视化和回退。";
+
+function LongTextConversation(): React.ReactElement {
+  const longMessages: Message[] = [
+    {
+      id: "lt1",
+      role: "user",
+      content: [{ type: "text", text: LONG_TEXT }],
+      createdAt: Date.now(),
+    },
+    {
+      id: "lt2",
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text:
+            "好的，我来逐层说明。先看 **LLM 调用层**：每个 provider 都实现统一的 `LLMClient` 接口，流式输出走 SSE，重试策略为指数退避。\n\n" +
+            "```ts\ninterface LLMClient {\n  stream(messages: Message[]): AsyncIterable<Delta>\n}\n```\n\n" +
+            "**工具系统**通过 `ToolRegistry` 注册，权限审批由 Hook 拦截。更多细节可以查看文档。",
+        },
+      ],
+      createdAt: Date.now(),
+    },
+  ];
+
+  return (
+    <Box flexDirection="column" width={80}>
+      <Box flexDirection="row" justifyContent="center" marginBottom={0}>
+        <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
+        <Text color={theme.subtle}> · v0.2.0</Text>
+      </Box>
+      <Box flexDirection="column" flexGrow={1} minHeight={0} width="100%" overflowY="hidden">
+        <ChatView messages={longMessages} streamingText="" toolCalls={[]} isRunning={false} />
+      </Box>
+      <Box>
+        <Text color={theme.prompt} bold>{"❯ "}</Text>
+        <Text><Text color={theme.brand}>█</Text></Text>
+      </Box>
+      <StatusBar
+        model="deepseek-chat"
+        tokenCount={12843}
+        status="idle"
+        sessionId="abc12345"
+        contextWindow={200000}
+      />
+    </Box>
+  );
+}
+
+const longConv = render(<LongTextConversation />);
+await sleep(50);
+save("03-longtext.txt", longConv.lastFrame() ?? "");

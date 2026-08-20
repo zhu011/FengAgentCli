@@ -12,6 +12,10 @@ import { CornerDownLeft, Square } from "lucide-react";
 interface MessageInputProps {
   busy: boolean;
   placeholder?: string;
+  /** Round 3：建议卡片填入的初始文本（配合 key 重挂载生效） */
+  initialValue?: string;
+  /** Round 3：挂载后自动聚焦输入框 */
+  autoFocus?: boolean;
   onSubmit: (text: string) => void;
   onCancel: () => void;
 }
@@ -19,10 +23,12 @@ interface MessageInputProps {
 export function MessageInput({
   busy,
   placeholder = "Type a message...",
+  initialValue = "",
+  autoFocus = false,
   onSubmit,
   onCancel,
 }: MessageInputProps) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(initialValue);
   const [isComposing, setIsComposing] = useState(false);
 
   function submit() {
@@ -56,6 +62,7 @@ export function MessageInput({
       <textarea
         className="composer__textarea"
         value={value}
+        autoFocus={autoFocus}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onCompositionStart={() => setIsComposing(true)}

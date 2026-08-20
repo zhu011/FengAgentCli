@@ -274,6 +274,36 @@
       transform: translateY(-2px);
       box-shadow: 0 4px 20px var(--accent-glow);
     }
+
+    /* ==================== Screenshots（界面预览） ==================== */
+    .shot {
+      width: 100%;
+      max-width: 900px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: block;
+      margin: 12px auto;
+      box-shadow: 0 4px 24px var(--accent-glow);
+    }
+    .shot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+      margin: 16px 0;
+    }
+    .shot-grid figure {
+      margin: 0;
+      text-align: center;
+    }
+    .shot-grid .shot {
+      max-width: 100%;
+      margin: 0;
+    }
+    .shot-grid figcaption {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
     .feature-card .fc-icon {
       font-size: 1.6rem;
       margin-bottom: 10px;
@@ -439,6 +469,9 @@
     <div class="nav-sub-item" data-target="qs-cli">CLI 模式</div>
     <div class="nav-sub-item" data-target="qs-webui">WebUI 模式</div>
     <div class="nav-sub-item" data-target="qs-dev">开发模式</div>
+
+    <div class="nav-item" data-target="screenshots"><span class="nav-icon">🖼️</span> 界面预览</div>
+    <div class="nav-sub-item" data-target="screenshots">WebUI / TUI 截图</div>
 
     <div class="nav-item" data-target="guide"><span class="nav-icon">📖</span> 新手手册（cordis）</div>
     <div class="nav-sub-item" data-target="guide">保姆级上手路径</div>
@@ -610,6 +643,34 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows</code></pre
   <pre><code>bun run dev
 # 后端 Server:  http://127.0.0.1:3000
 # 前端 WebUI:   http://localhost:5180（Vite dev，自动代理 /api 到后端）</code></pre>
+</section>
+
+<!-- ==================== 界面预览（Round 3 实拍） ==================== -->
+<section class="section" id="screenshots">
+  <h2 class="section-title"><span class="sec-icon">🖼️</span>界面预览</h2>
+  <p class="section-desc">Round 3 实拍：WebUI（深空 / 日光 / 赛博三套主题）与 TUI（终端对话）界面。</p>
+
+  <h3>WebUI 欢迎页（深空）与建议卡片</h3>
+  <p><img class="shot" src="screenshots/r3-webui-welcome-dark.png" alt="WebUI 欢迎页（深空）" loading="lazy"></p>
+  <div class="shot-grid">
+    <figure><img class="shot" src="screenshots/r3-webui-chat-dark.png" alt="WebUI 对话流（深空）" loading="lazy"><figcaption>对话流（深空）</figcaption></figure>
+    <figure><img class="shot" src="screenshots/r3-webui-chat-light.png" alt="WebUI 对话流（日光）" loading="lazy"><figcaption>对话流（日光）</figcaption></figure>
+  </div>
+  <div class="shot-grid">
+    <figure><img class="shot" src="screenshots/r3-webui-generating-dark.png" alt="生成中指示器（已用时长 + 按 Esc 中断）" loading="lazy"><figcaption>生成中指示器（计时 + Esc 中断）</figcaption></figure>
+    <figure><img class="shot" src="screenshots/r3-webui-codeblock-copy.png" alt="代码块复制按钮" loading="lazy"><figcaption>代码块复制按钮</figcaption></figure>
+  </div>
+  <div class="shot-grid">
+    <figure><img class="shot" src="screenshots/r3-webui-search.png" alt="侧边栏会话搜索" loading="lazy"><figcaption>侧边栏会话搜索</figcaption></figure>
+    <figure><img class="shot" src="screenshots/r3-webui-empty-guide.png" alt="空会话引导" loading="lazy"><figcaption>空会话引导</figcaption></figure>
+  </div>
+
+  <h3>TUI 终端界面</h3>
+  <div class="shot-grid">
+    <figure><img class="shot" src="screenshots/r3-tui-welcome.png" alt="TUI 欢迎卡" loading="lazy"><figcaption>TUI 欢迎卡</figcaption></figure>
+    <figure><img class="shot" src="screenshots/r3-tui-conversation.png" alt="TUI 对话流（用户填充气泡）" loading="lazy"><figcaption>TUI 对话流（填充气泡）</figcaption></figure>
+  </div>
+  <figure><img class="shot" src="screenshots/r3-tui-longtext.png" alt="TUI 超长消息填充气泡" loading="lazy"><figcaption>TUI 超长消息（多行填充气泡 + 右对齐边界）</figcaption></figure>
 </section>
 
 <!-- ==================== 新手手册（cordis 分支保姆级） ==================== -->

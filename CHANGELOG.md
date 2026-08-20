@@ -4,6 +4,27 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 界面设计优化 Round 3（最终轮·精细打磨）
+
+### 优化（WebUI）
+
+- **代码块复制按钮增强** — Markdown 代码块 hover / 键盘 focus 显示「Copy / ✓ Copied」，无 `navigator.clipboard` 时自动回退 `execCommand` 复制（`packages/web-ui/src/components/markdown-renderer.tsx`）
+- **侧边栏会话搜索框** — 顶部搜索框按标题实时过滤（无匹配时提示「无匹配会话」，可一键清空）；会话行 hover / focus 显示重命名与删除按钮（`packages/web-ui/src/components/session-sidebar.tsx`）
+- **欢迎卡片 hover 微动画** — 建议卡片 hover 上浮 + scale + 品牌 glow，图标微弹（`packages/web-ui/src/index.css`）
+- **建议卡片点击交互** — 点击卡片将问题**填入输入框**待编辑后发送（DeepSeek 式），附微提示「点击卡片将问题填入输入框，确认后按 Enter 发送」
+- **生成中指示器增强** — 增加**已用时长**（1s 起计）+ **「按 Esc 中断」**提示；全局 Esc 可中断流式生成（重命名输入框内的 Esc 不拦截），与 Stop 按钮联动（`packages/web-ui/src/pages/chat.tsx`、`message-list.tsx`）
+- **空会话引导** — 新会话未发消息时显示轻量引导（图标 + 建议问题 chips 一键发送）
+- **设置下拉可达性** — Esc 关闭（焦点回齿轮按钮）、点击外部关闭、打开自动聚焦首项、focus-visible 轮廓
+
+### 优化（TUI）
+
+- **填充气泡非 Windows 终端验证** — 确认 Ink 在 FORCE_COLOR 下输出 24-bit 背景序列（`\x1b[48;2;r;g;b`），Linux/macOS/mintty/Windows Terminal 等 truecolor 终端按背景填充渲染；新增**超长消息帧**验证多行换行后的背景边界与右对齐（`packages/cli/src/scripts/shoot-tui.tsx`、`scripts/render-tui.py`）
+
+### 文档
+
+- **在线文档站新增「界面预览」** — `docs/site/index.html` 新增截图画廊（WebUI 欢迎页 / 对话流 / 生成中指示器 / 代码块复制 / 会话搜索 / 空会话引导 / TUI 欢迎 / 对话流 / 超长消息），截图全部同步为 Round 3 实拍
+- **README 截图画廊与使用指南** — 更新为 R3 截图，WebUI 使用指南补充搜索 / Esc 中断 / 复制按钮 / 空会话引导说明
+
 ## [Unreleased] — 界面设计优化 Round 2
 
 ### 优化（WebUI）

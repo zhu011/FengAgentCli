@@ -1,10 +1,11 @@
 /**
- * Round-2 设计验证：WebUI 截图脚本（raw CDP，不依赖 Playwright 连接器）
+ * Round-3 设计验证：WebUI 截图脚本（raw CDP，不依赖 Playwright 连接器）
  *
- * 1. 启动 mock OpenAI-compatible LLM（本地 SSE 流式应答，首帧延迟 900ms 以捕获「生成中」动画）
+ * 1. 启动 mock OpenAI-compatible LLM（本地 SSE 流式应答，首帧延迟 2200ms 以捕获「生成中」动画 + 已用时长 + Esc 提示）
  * 2. 以该 mock 启动真实 FengAgent server（生产模式托管 web-ui dist）
  * 3. 手动拉起 Chromium（--remote-debugging-port），用 Bun WebSocket 直连 CDP：
- *    欢迎页（深空）→ 设置下拉 → 对话流（深空）→ 生成中指示器 → 对话流（日光）→ 欢迎页（赛博）
+ *    欢迎页（深空）→ 设置下拉 → 空会话引导 → 会话搜索 → 生成中指示器 → 代码块复制 →
+ *    对话流（深空）→ 对话流（日光）→ 欢迎页（赛博）
  *
  * 用法：bun scripts/shoot-webui.ts
  */
@@ -45,7 +46,7 @@ function sseChunk(delta: string, finish: string | null, usage?: unknown) {
   });
 }
 
-// ── 1. mock LLM（首帧延迟 900ms，用于截「生成中」指示器）──
+// ── 1. mock LLM（首帧延迟 2200ms：截「生成中」指示器 + 已用时长 + Esc 提示）──
 const mockServer = Bun.serve({
   port: MOCK_PORT,
   async fetch(req) {
@@ -57,7 +58,7 @@ const mockServer = Bun.serve({
       });
     }
     if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
-      await Bun.sleep(900); // 首帧延迟：让「正在生成…」指示器可见
+      await Bun.sleep(2200); // 首帧延迟：让「正在生成…」指示器 + 计时 + Esc 提示可见
       const chunks: string[] = [];
       let acc = "";
       for (const ch of REPLY) {
@@ -269,16 +270,47 @@ async function main(): Promise<void> {
     await sleep(500);
   }
 
+  /** 通过 API 创建带标题的会话（用于空会话引导 / 搜索截图） */
+  async function createSessionViaApi(title: string): Promise<void> {
+    const res = await fetch(`${BASE_URL}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new Error(`create session failed: ${res.status}`);
+  }
+
   // ── 欢迎页（深空）──
   await cdp.send("Page.navigate", { url: BASE_URL });
   await sleep(2500);
-  await shot("r2-webui-welcome-dark.png");
+  await shot("r3-webui-welcome-dark.png");
 
   // ── 设置下拉菜单（深空，展示主题选择 + 面板开关）──
   await evaluate(`document.querySelector('.chat-page__settings-btn').click()`);
   await sleep(400);
-  await shot("r2-webui-settings-dark.png");
+  await shot("r3-webui-settings-dark.png");
   await evaluate(`document.querySelector('.chat-page__settings-btn').click()`); // 收起
+
+  // ── 创建 3 个带标题的会话 → 刷新 → 空会话引导 ──
+  await createSessionViaApi("多 Agent 协作开发");
+  await createSessionViaApi("WebUI 主题设计讨论");
+  await createSessionViaApi("沙箱实验记录");
+  await cdp.send("Page.navigate", { url: BASE_URL });
+  await sleep(2500);
+  await shot("r3-webui-empty-guide.png");
+
+  // ── 会话搜索框：输入关键词过滤 ──
+  await evaluate(`(() => {
+    const el = document.querySelector('.session-sidebar__search-input');
+    if (!el) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(el, '多 Agent');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(500);
+  await shot("r3-webui-search.png");
+  await evaluate(`document.querySelector('.session-sidebar__search-clear')?.click()`); // 清空搜索
 
   // ── 对话流（深空）：输入并发送 ──
   await evaluate(`(() => {
@@ -291,17 +323,30 @@ async function main(): Promise<void> {
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     return true;
   })()`);
-  // 首帧延迟 900ms：此刻应显示「正在生成…」指示器
-  await sleep(350);
-  await shot("r2-webui-generating-dark.png");
+  // 首帧延迟 2200ms：此刻应显示「正在生成…」+ 已用时长 + 「按 Esc 中断」
+  await sleep(1500);
+  await shot("r3-webui-generating-dark.png");
   await waitForSelector(".message-bubble--assistant .markdown-body");
   await sleep(2000);
-  await shot("r2-webui-chat-dark.png");
+
+  // ── 代码块复制按钮：悬停代码块使其可见 ──
+  await evaluate(`(() => {
+    const pre = document.querySelector('.markdown-pre');
+    if (!pre) return false;
+    const r = pre.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    pre.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y }));
+    return true;
+  })()`);
+  await sleep(600);
+  await shot("r3-webui-codeblock-copy.png");
+  await shot("r3-webui-chat-dark.png");
 
   // ── 对话流（日光）：经设置下拉切换 ──
   await switchThemeViaMenu("日光");
   await sleep(600);
-  await shot("r2-webui-chat-light.png");
+  await shot("r3-webui-chat-light.png");
 
   // ── 欢迎页（赛博）：新标签 + localStorage ──
   const wsUrl2 = await newPageTab();
@@ -326,8 +371,8 @@ async function main(): Promise<void> {
   await eval2(`localStorage.setItem('feng-theme','cyber'); location.reload(); true`);
   await sleep(2500);
   const res = (await cdp2.send("Page.captureScreenshot", { format: "png", fromSurface: true })) as { data: string };
-  writeFileSync(join(OUT_DIR, "r2-webui-welcome-cyber.png"), Buffer.from(res.data, "base64"));
-  console.log("[shoot] saved r2-webui-welcome-cyber.png");
+  writeFileSync(join(OUT_DIR, "r3-webui-welcome-cyber.png"), Buffer.from(res.data, "base64"));
+  console.log("[shoot] saved r3-webui-welcome-cyber.png");
 
   console.log("[shoot] all screenshots saved to screenshots/");
 }
