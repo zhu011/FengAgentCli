@@ -1,14 +1,28 @@
 #!/bin/sh
-## FengAgentCli CLI 启动脚本（npm bin 入口）
-## 通过 bun（首选）或 node 运行 CLI 入口
+## FengAgentCli CLI 启动脚本（Unix 直接执行用；npm bin 入口为 bin/fengagent.js）
+## 启动策略：优先 dist/ 预编译二进制，否则退回 bun 源码直跑。
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-ENTRY="$SCRIPT_DIR/../packages/cli/src/entry.ts"
+ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+
+# 平台对应二进制
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) BIN="$ROOT_DIR/dist/fengagent-linux-x64" ;;
+  Darwin-arm64) BIN="$ROOT_DIR/dist/fengagent-darwin-arm64" ;;
+  Darwin-x86_64) BIN="$ROOT_DIR/dist/fengagent-darwin-arm64" ;;
+  *) BIN="" ;;
+esac
+
+if [ -n "$BIN" ] && [ -x "$BIN" ]; then
+  exec "$BIN" "$@"
+fi
+
+ENTRY="$ROOT_DIR/packages/cli/src/entry.ts"
 
 if command -v bun >/dev/null 2>&1; then
   exec bun run "$ENTRY" "$@"
 else
-  echo "错误：运行 fengagent 需要 Bun 运行时。" >&2
+  echo "错误：运行 fengagent 需要预编译二进制或 Bun 运行时。" >&2
   echo "安装 Bun: https://bun.sh/" >&2
   exit 1
 fi
