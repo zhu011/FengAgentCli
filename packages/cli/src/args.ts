@@ -202,4 +202,4 @@ export function getHelpText(): string {
 }
 
 /** 版本号（编译时可通过 --define process.env.FENG_VERSION 注入） */
-export const VERSION = process.env.FENG_VERSION ?? "0.1.0";
+export const VERSION = process.env.FENG_VERSION ?? "0.2.0";

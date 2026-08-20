@@ -4,6 +4,8 @@
  * 设计：助手消息带头像（品牌渐变圆标）+ 全文展示；
  * 用户消息右侧圆角气泡。参考 DeepSeek / 豆包对话流排版。
  * 保留工具调用卡片与流式加载指示器。
+ * Round 2：消息流底部「生成中」动画指示器（豆包式彩色光点）——
+ * 发送消息后、首条助手消息出现前的空窗期显示。
  */
 
 import { memo } from "react";
@@ -13,9 +15,10 @@ import { ToolCallCard } from "./tool-call-card.tsx";
 
 interface MessageListProps {
   messages: DisplayMessage[];
+  isStreaming: boolean;
 }
 
-function MessageListImpl({ messages }: MessageListProps) {
+function MessageListImpl({ messages, isStreaming }: MessageListProps) {
   if (messages.length === 0) {
     return (
       <div className="message-list__empty">
@@ -24,11 +27,28 @@ function MessageListImpl({ messages }: MessageListProps) {
     );
   }
 
+  // 生成中指示器：正在流式输出且没有任何处于 streaming 的助手消息
+  const hasActiveStreaming = messages.some((m) => m.streaming);
+  const showGenerating = isStreaming && !hasActiveStreaming;
+
   return (
     <div className="message-list">
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
+      {showGenerating && (
+        <div className="message-row message-row--assistant">
+          <div className="message-avatar" aria-hidden="true">⚡</div>
+          <div className="generating-indicator" role="status" aria-label="正在生成">
+            <span className="generating-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="generating-indicator__text">正在生成…</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

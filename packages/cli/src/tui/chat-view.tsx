@@ -308,19 +308,23 @@ function MessageItem({
 
   let labelPart: React.ReactNode = null;
   const contentParts: React.ReactNode[] = [];
+  // 用户消息文本块（手动填充气泡用；用户消息通常为纯文本）
+  const userTextParts: string[] = [];
 
-  // 角色标签行
+  // 角色标签行（用户标签：品牌色填充 chip）
   if (isRowVisible(1)) {
     labelPart = (
       <Box key="label" flexDirection="row" justifyContent={isUser ? "flex-end" : "flex-start"}>
-        <Text color={roleColor} bold>
-          {isUser ? "▸ " : ""}{roleLabel}{isUser ? "" : ":"}
-        </Text>
+        {isUser ? (
+          <Text backgroundColor={roleColor} color={theme.background} bold> 你 </Text>
+        ) : (
+          <Text color={roleColor} bold>{roleLabel}:</Text>
+        )}
       </Box>
     );
   }
 
-  // 用户消息气泡：上下边框行（渲染由 Box borderStyle 完成，这里只做行号记账）
+  // 用户消息气泡：上下边框行（手动绘制气泡记账；行数 = 边框 2 行，与估算一致）
   if (isUser) {
     isRowVisible(1);
   }
@@ -331,7 +335,11 @@ function MessageItem({
       case "text": {
         const sliced = visibleTextRows(block.text, contentWidth);
         if (sliced !== "") {
-          contentParts.push(<Box key={`b${i}`} flexDirection="column"><MarkdownText text={sliced} /></Box>);
+          if (isUser) {
+            userTextParts.push(sliced);
+          } else {
+            contentParts.push(<Box key={`b${i}`} flexDirection="column"><MarkdownText text={sliced} /></Box>);
+          }
         }
         break;
       }
@@ -380,22 +388,24 @@ function MessageItem({
     isRowVisible(1);
   }
 
-  if (labelPart === null && contentParts.length === 0) return null;
+  if (labelPart === null && contentParts.length === 0 && userTextParts.length === 0) return null;
 
   return (
     <Box flexDirection="column" width="100%" marginY={0}>
       {labelPart}
       {isUser ? (
-        /* 用户消息：右对齐圆角气泡（Round 1 设计语言） */
+        /* 用户消息：右对齐「填充气泡」（Round 2 增强）。
+           注意：Ink 的 Box 不支持 backgroundColor，这里用 Text 整块背景 +
+           手动绘制边框字符 + 按内容宽度补齐空格，实现真正的背景填充气泡；
+           行数 = 上边框 1 + 内容换行行数 + 下边框 1，与 estimateMessageHeight 一致。 */
         <Box flexDirection="row" justifyContent="flex-end" width="100%">
-          <Box
-            flexDirection="column"
-            borderStyle="round"
-            borderColor={theme.userBubbleBorder}
-            paddingX={1}
-          >
-            {contentParts}
-          </Box>
+          {userTextParts.length > 0 ? (
+            <UserBubbleText text={userTextParts.join("\n")} width={contentWidth} />
+          ) : (
+            <Box flexDirection="column" borderStyle="round" borderColor={theme.userBubbleBorder} paddingX={1}>
+              {contentParts}
+            </Box>
+          )}
         </Box>
       ) : (
         <Box flexDirection="column" width="100%">
@@ -404,6 +414,59 @@ function MessageItem({
       )}
     </Box>
   );
+}
+
+/**
+ * 用户消息「填充气泡」— Text 整块背景 + 手绘圆角边框 + 宽度补齐。
+ *
+ * 结构（行数与估算一致）：
+ *   ╭──────╮   ← 上边框 1 行
+ *   │ text │   ← 内容（按 contentWidth 换行）
+ *   ╰──────╯   ← 下边框 1 行
+ * 每行内容按显示宽度补齐到 contentWidth，背景色铺满整个气泡区域。
+ */
+function UserBubbleText({ text, width }: { text: string; width: number }): React.ReactElement {
+  const inner = Math.max(1, width);
+  const lines = wrapToWidth(text, inner);
+  const top = `╭${"─".repeat(inner + 2)}╮`;
+  const bottom = `╰${"─".repeat(inner + 2)}╯`;
+  const body = lines.map((line) => `│ ${padToWidth(line, inner)} │`);
+  return (
+    <Text backgroundColor={theme.userBubbleBg} color={theme.text}>
+      {[top, ...body, bottom].join("\n")}
+    </Text>
+  );
+}
+
+/** 按显示宽度贪心换行（与 wrappedLineCount 的行数算法一致） */
+function wrapToWidth(text: string, width: number): string[] {
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line === "") {
+      out.push("");
+      continue;
+    }
+    let cur = "";
+    let w = 0;
+    for (const ch of line) {
+      const cw = charDisplayWidth(ch);
+      if (w + cw > width && cur !== "") {
+        out.push(cur);
+        cur = "";
+        w = 0;
+      }
+      cur += ch;
+      w += cw;
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+/** 按显示宽度补空格到指定宽度（让 Text 背景铺满整行） */
+function padToWidth(text: string, width: number): string {
+  const w = displayWidthOf(text);
+  return text + " ".repeat(Math.max(0, width - w));
 }
 
 /**

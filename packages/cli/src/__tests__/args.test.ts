@@ -127,6 +127,6 @@ describe("getHelpText", () => {
 
 describe("VERSION", () => {
   test("版本号格式正确", () => {
-    expect(VERSION).toBe("0.1.0");
+    expect(VERSION).toBe("0.2.0");
   });
 });

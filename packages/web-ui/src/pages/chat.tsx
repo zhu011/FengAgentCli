@@ -2,13 +2,20 @@
  * @fengagent/web-ui — 聊天页面
  *
  * 设计语言参考 DeepSeek / 豆包 / 通义千问：
- * - 顶栏：品牌字标 + 模型选择 + 面板开关 + 主题切换
- * - 欢迎态：居中 Hero + 建议卡片（点击直接发起对话）
+ * - 顶栏：品牌字标 + 会话标题（双击重命名）+ 模型选择 + 设置下拉（主题 / 面板）
+ * - 欢迎态：居中 Hero + 建议卡片（点击直接发起对话，贴合 Agent 场景）
  * - 对话流：居中窄栏（max-width 768px），助手带头像、用户右对齐气泡
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Loader2, PanelRightClose, PanelRightOpen } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Loader2,
+  PanelRightClose,
+  PanelRightOpen,
+  Settings,
+} from "lucide-react";
 import type { ApiClient } from "../api/client.ts";
 import type { PermissionRequest } from "../api/types.ts";
 import { formatValue } from "../lib/format.ts";
@@ -17,48 +24,54 @@ import type { UseSessionResult, TokenStats } from "../hooks/use-session.ts";
 import { MessageInput } from "../components/message-input.tsx";
 import { MessageList } from "../components/message-list.tsx";
 import { ModelSelector } from "../components/model-selector.tsx";
-import { THEME_ICONS, THEME_NAMES, type Theme } from "../lib/theme.ts";
+import { THEME_ICONS, THEME_NAMES, THEMES, type Theme } from "../lib/theme.ts";
 
 interface ChatPageProps {
   client: ApiClient;
   session: UseSessionResult;
   theme: Theme;
-  onCycleTheme: () => void;
+  onSelectTheme: (theme: Theme) => void;
+  onRenameSession: (id: string, title: string) => void;
 }
 
-/** 欢迎页建议卡片（点击即发起对话） */
+/** 欢迎页建议卡片（点击即发起对话）— Round 2 文案贴合 Agent 场景 */
 const SUGGESTIONS = [
   {
-    icon: "🛠️",
+    icon: "🔍",
+    title: "让 Agent 分析项目代码",
+    desc: "上传仓库路径，读懂架构与关键模块",
+    prompt: "请帮我分析当前项目的代码结构：梳理主要模块、核心入口、依赖关系，并指出值得关注的设计点。",
+  },
+  {
+    icon: "🤝",
+    title: "多 Agent 协作完成任务",
+    desc: "主 Agent 派遣子 Agent 并行处理子任务",
+    prompt: "请演示多 Agent 协作：把一个「调研并总结 3 个开源 TUI 框架」的任务拆解成子任务，派子 Agent 分工执行后汇总结果。",
+  },
+  {
+    icon: "🧪",
+    title: "用沙箱试跑实验性代码",
+    desc: "临时脚本在隔离沙箱执行，安全可控",
+    prompt: "请用沙箱工具帮我写并运行一个 Python 脚本，生成一份 2024 年 1-6 月的模拟销售数据并输出统计摘要。",
+  },
+  {
+    icon: "⚡",
     title: "写一个 CLI 工具",
-    desc: "从零搭建一个 Node.js 命令行程序",
+    desc: "从零搭建 Node.js 命令行程序",
     prompt: "请帮我设计并实现一个简单的 Node.js CLI 工具：支持参数解析、子命令和彩色输出。",
-  },
-  {
-    icon: "💡",
-    title: "解释这段代码",
-    desc: "粘贴代码，理解它的逻辑与作用",
-    prompt: "请解释下面这段代码的逻辑：",
-  },
-  {
-    icon: "🧠",
-    title: "头脑风暴",
-    desc: "一起构思产品功能与方案",
-    prompt: "我们来做一次头脑风暴：请针对「个人知识库工具」给出 5 个有趣的产品功能点子。",
-  },
-  {
-    icon: "📝",
-    title: "总结文章要点",
-    desc: "长文本 → 结构化摘要",
-    prompt: "请把下面这段内容总结为带要点的结构化摘要：",
   },
 ];
 
-export function ChatPage({ client, session, theme, onCycleTheme }: ChatPageProps) {
+export function ChatPage({ client, session, theme, onSelectTheme, onRenameSession }: ChatPageProps) {
   const models = useModels(client);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [showInspector, setShowInspector] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  // 顶栏会话标题行内编辑（双击进入）
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const settingsRef = useRef<HTMLDivElement | null>(null);
 
   // 自动选择默认模型
   useEffect(() => {
@@ -74,6 +87,18 @@ export function ChatPage({ client, session, theme, onCycleTheme }: ChatPageProps
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messageCount]);
 
+  // 点击外部关闭设置菜单
+  useEffect(() => {
+    if (!showSettings) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setShowSettings(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [showSettings]);
+
   /** 无活跃会话时：创建会话并发送建议问题 */
   const startWithPrompt = async (prompt: string) => {
     if (session.creatingSession || session.isStreaming) return;
@@ -83,15 +108,45 @@ export function ChatPage({ client, session, theme, onCycleTheme }: ChatPageProps
     }, 100);
   };
 
+  const commitTitleEdit = () => {
+    const id = session.activeSession?.id;
+    if (id) onRenameSession(id, titleDraft);
+    setEditingTitle(false);
+  };
+
   return (
     <div className="chat-page">
       {/* 顶部状态栏 */}
       <header className="chat-page__header">
         <div className="chat-page__header-left">
           <span className="chat-page__brand-mark" aria-hidden="true">⚡</span>
-          <h2 className="chat-page__session-title">
-            {session.activeSession?.title ?? "FengAgentCli"}
-          </h2>
+          {editingTitle && session.activeSession ? (
+            <input
+              autoFocus
+              type="text"
+              className="chat-page__session-title-input"
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitTitleEdit();
+                if (e.key === "Escape") setEditingTitle(false);
+              }}
+              onBlur={commitTitleEdit}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          ) : (
+            <h2
+              className="chat-page__session-title"
+              title={session.activeSession ? "双击重命名会话" : "FengAgentCli"}
+              onDoubleClick={() => {
+                if (!session.activeSession) return;
+                setTitleDraft(session.activeSession.title);
+                setEditingTitle(true);
+              }}
+            >
+              {session.activeSession?.title ?? "FengAgentCli"}
+            </h2>
+          )}
           {session.isStreaming && (
             <span className="chat-page__status chat-page__status--running">
               Running
@@ -133,15 +188,55 @@ export function ChatPage({ client, session, theme, onCycleTheme }: ChatPageProps
               <PanelRightOpen size={18} />
             )}
           </button>
-          <button
-            type="button"
-            className="chat-page__toggle-inspector chat-page__theme-btn"
-            onClick={onCycleTheme}
-            aria-label="Toggle theme"
-            title={`主题：${THEME_NAMES[theme]}（点击切换）`}
-          >
-            <span className="chat-page__theme-icon">{THEME_ICONS[theme]}</span>
-          </button>
+          {/* 设置下拉：主题选择 + 面板开关（Round 2） */}
+          <div className="chat-page__settings" ref={settingsRef}>
+            <button
+              type="button"
+              className="chat-page__toggle-inspector chat-page__settings-btn"
+              onClick={() => setShowSettings((v) => !v)}
+              aria-label="Settings"
+              aria-expanded={showSettings}
+              title={`设置 · 主题：${THEME_NAMES[theme]}`}
+            >
+              <Settings size={17} className={showSettings ? "chat-page__settings-icon--open" : ""} />
+            </button>
+            {showSettings && (
+              <div className="settings-menu">
+                <div className="settings-menu__group">
+                  <div className="settings-menu__label">主题外观</div>
+                  {THEMES.map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className={`settings-menu__item ${theme === t ? "settings-menu__item--active" : ""}`}
+                      onClick={() => {
+                        onSelectTheme(t);
+                        setShowSettings(false);
+                      }}
+                    >
+                      <span className="settings-menu__icon">{THEME_ICONS[t]}</span>
+                      <span className="settings-menu__text">{THEME_NAMES[t]}</span>
+                      {theme === t && <Check size={14} className="settings-menu__check" />}
+                    </button>
+                  ))}
+                </div>
+                <div className="settings-menu__divider" />
+                <div className="settings-menu__group">
+                  <div className="settings-menu__label">面板</div>
+                  <button
+                    type="button"
+                    className="settings-menu__item"
+                    onClick={() => setShowInspector((v) => !v)}
+                  >
+                    <span className="settings-menu__text">消息检查器</span>
+                    <span className={`settings-menu__toggle ${showInspector ? "settings-menu__toggle--on" : ""}`}>
+                      {showInspector ? "开" : "关"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -156,14 +251,14 @@ export function ChatPage({ client, session, theme, onCycleTheme }: ChatPageProps
       {/* 消息列表 */}
       <main className="chat-page__messages">
         {session.activeSession ? (
-          <MessageList messages={session.activeMessages} />
+          <MessageList messages={session.activeMessages} isStreaming={session.isStreaming} />
         ) : (
           <div className="chat-page__no-session">
             <div className="welcome-hero">
               <div className="welcome-hero__icon" aria-hidden="true">⚡</div>
               <h2 className="welcome-hero__title">FengAgentCli</h2>
               <p className="welcome-hero__subtitle">
-                开源本地 AI Agent 对话平台 · 对话 / 工具调用 / 多 Agent / MCP
+                开源本地 AI Agent 对话平台 · 对话 / 工具调用 / 多 Agent / MCP / 沙箱
               </p>
               <div className="welcome-suggestions">
                 {SUGGESTIONS.map((s) => (
@@ -187,6 +282,7 @@ export function ChatPage({ client, session, theme, onCycleTheme }: ChatPageProps
                 <span className="welcome-card__feature-tag">💬 智能对话</span>
                 <span className="welcome-card__feature-tag">🔧 工具调用</span>
                 <span className="welcome-card__feature-tag">🤖 多 Agent</span>
+                <span className="welcome-card__feature-tag">🧪 沙箱</span>
                 <span className="welcome-card__feature-tag">🧠 记忆系统</span>
               </div>
             </div>

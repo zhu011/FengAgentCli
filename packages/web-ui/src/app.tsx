@@ -39,10 +39,8 @@ function App() {
     localStorage.setItem("feng-theme", theme);
   }, [theme]);
 
-  const cycleTheme = useCallback(() => {
-    setTheme((prev) =>
-      prev === "dark" ? "light" : prev === "light" ? "cyber" : "dark",
-    );
+  const selectTheme = useCallback((t: Theme) => {
+    setTheme(t);
   }, []);
 
   return (
@@ -54,13 +52,15 @@ function App() {
         onCreateSession={() => void session.createSession()}
         onSelectSession={(id) => void session.selectSession(id)}
         onDeleteSession={(id) => void session.deleteSession(id)}
+        onRenameSession={(id, title) => void session.renameSession(id, title)}
       />
       <div className="app-shell__main">
         <ChatPage
           client={client}
           session={session}
           theme={theme}
-          onCycleTheme={cycleTheme}
+          onSelectTheme={selectTheme}
+          onRenameSession={(id, title) => void session.renameSession(id, title)}
         />
       </div>
     </div>

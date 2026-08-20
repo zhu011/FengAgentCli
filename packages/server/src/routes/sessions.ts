@@ -45,6 +45,23 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     return c.json(session);
   });
 
+  // PATCH /:id — 重命名会话（WebUI 侧边栏双击重命名 / 顶栏标题编辑）
+  app.patch("/:id", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    if (!title) {
+      return c.json({ error: "title is required" }, 400);
+    }
+    const session = sessionManager.renameSession(id, title);
+    if (!session) {
+      log.warn("renameSession", `session not found id=${id}`);
+      return c.json({ error: `Session "${id}" not found` }, 404);
+    }
+    log.info("renameSession", `sessionId=${id}, title=${title}`);
+    return c.json(session);
+  });
+
   // POST /:id/messages — 发送消息（返回 SSE 流）
   app.post("/:id/messages", (c) => {
     const id = c.req.param("id");

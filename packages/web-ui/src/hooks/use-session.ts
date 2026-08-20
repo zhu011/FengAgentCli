@@ -56,6 +56,7 @@ export interface UseSessionResult {
   createSession: (title?: string) => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
+  renameSession: (id: string, title: string) => Promise<void>;
   sendMessage: (text: string, model?: string) => Promise<void>;
   interrupt: () => Promise<void>;
   respondPermission: (
@@ -179,6 +180,28 @@ export function useSession(client: ApiClient): UseSessionResult {
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to delete session");
+      }
+    },
+    [client],
+  );
+
+  // 重命名会话：同步更新列表与活跃会话标题（侧边栏双击 / 顶栏编辑）
+  const renameSession = useCallback(
+    async (id: string, title: string) => {
+      const trimmed = title.trim();
+      if (!trimmed) return;
+      try {
+        const updated = await client.renameSession(id, trimmed);
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === id ? { ...s, title: updated.title, updatedAt: updated.updatedAt } : s,
+          ),
+        );
+        setActiveSession((prev) =>
+          prev && prev.id === id ? { ...prev, title: updated.title, updatedAt: updated.updatedAt } : prev,
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to rename session");
       }
     },
     [client],
@@ -493,6 +516,7 @@ export function useSession(client: ApiClient): UseSessionResult {
     createSession,
     selectSession,
     deleteSession,
+    renameSession,
     sendMessage,
     interrupt,
     respondPermission,
