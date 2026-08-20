@@ -1,12 +1,20 @@
 /**
  * @fengagent/web-ui — 聊天页面
  *
- * 组合消息列表、输入框、模型选择器、状态栏。
- * 接受外部传入的 session 状态（由 App 层统一管理）。
+ * 设计语言参考 DeepSeek / 豆包 / 通义千问：
+ * - 顶栏：品牌字标 + 模型选择 + 面板开关 + 主题切换
+ * - 欢迎态：居中 Hero + 建议卡片（点击直接发起对话）
+ * - 对话流：居中窄栏（max-width 768px），助手带头像、用户右对齐气泡
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, GitBranch, Loader2, PanelRightClose, PanelRightOpen } from "lucide-react";
+import {
+  AlertCircle,
+  GitBranch,
+  Loader2,
+  PanelRightClose,
+  PanelRightOpen,
+} from "lucide-react";
 import type { ApiClient } from "../api/client.ts";
 import type { PermissionRequest } from "../api/types.ts";
 import { formatValue } from "../lib/format.ts";
@@ -16,13 +24,44 @@ import { MessageInput } from "../components/message-input.tsx";
 import { MessageList } from "../components/message-list.tsx";
 import { ModelSelector } from "../components/model-selector.tsx";
 import { GraphPanel } from "../components/graph-panel.tsx";
+import { THEME_ICONS, THEME_NAMES, type Theme } from "../lib/theme.ts";
 
 interface ChatPageProps {
   client: ApiClient;
   session: UseSessionResult;
+  theme: Theme;
+  onCycleTheme: () => void;
 }
 
-export function ChatPage({ client, session }: ChatPageProps) {
+/** 欢迎页建议卡片（点击即发起对话） */
+const SUGGESTIONS = [
+  {
+    icon: "🛠️",
+    title: "写一个 CLI 工具",
+    desc: "从零搭建一个 Node.js 命令行程序",
+    prompt: "请帮我设计并实现一个简单的 Node.js CLI 工具：支持参数解析、子命令和彩色输出。",
+  },
+  {
+    icon: "💡",
+    title: "解释这段代码",
+    desc: "粘贴代码，理解它的逻辑与作用",
+    prompt: "请解释下面这段代码的逻辑：",
+  },
+  {
+    icon: "🧠",
+    title: "头脑风暴",
+    desc: "一起构思产品功能与方案",
+    prompt: "我们来做一次头脑风暴：请针对「个人知识库工具」给出 5 个有趣的产品功能点子。",
+  },
+  {
+    icon: "📝",
+    title: "总结文章要点",
+    desc: "长文本 → 结构化摘要",
+    prompt: "请把下面这段内容总结为带要点的结构化摘要：",
+  },
+];
+
+export function ChatPage({ client, session, theme, onCycleTheme }: ChatPageProps) {
   const models = useModels(client);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [showInspector, setShowInspector] = useState(false);
@@ -43,13 +82,23 @@ export function ChatPage({ client, session }: ChatPageProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messageCount]);
 
+  /** 无活跃会话时：创建会话并发送建议问题 */
+  const startWithPrompt = async (prompt: string) => {
+    if (session.creatingSession || session.isStreaming) return;
+    await session.createSession();
+    setTimeout(() => {
+      void session.sendMessage(prompt, selectedModel ?? undefined);
+    }, 100);
+  };
+
   return (
     <div className="chat-page">
       {/* 顶部状态栏 */}
       <header className="chat-page__header">
         <div className="chat-page__header-left">
+          <span className="chat-page__brand-mark" aria-hidden="true">⚡</span>
           <h2 className="chat-page__session-title">
-            {session.activeSession?.title ?? "No session"}
+            {session.activeSession?.title ?? "FengAgentCli"}
           </h2>
           {session.isStreaming && (
             <span className="chat-page__status chat-page__status--running">
@@ -84,6 +133,7 @@ export function ChatPage({ client, session }: ChatPageProps) {
             className="chat-page__toggle-inspector"
             onClick={() => setShowInspector((v) => !v)}
             aria-label={showInspector ? "Hide inspector" : "Show inspector"}
+            title="检查器（权限 / 消息）"
           >
             {showInspector ? (
               <PanelRightClose size={18} />
@@ -105,6 +155,15 @@ export function ChatPage({ client, session }: ChatPageProps) {
               <GitBranch size={18} color={showGraph ? "#38bdf8" : undefined} />
             </button>
           )}
+          <button
+            type="button"
+            className="chat-page__toggle-inspector chat-page__theme-btn"
+            onClick={onCycleTheme}
+            aria-label="Toggle theme"
+            title={`主题：${THEME_NAMES[theme]}（点击切换）`}
+          >
+            <span className="chat-page__theme-icon">{THEME_ICONS[theme]}</span>
+          </button>
         </div>
       </header>
 
@@ -122,18 +181,37 @@ export function ChatPage({ client, session }: ChatPageProps) {
           <MessageList messages={session.activeMessages} />
         ) : (
           <div className="chat-page__no-session">
-            <div className="welcome-card">
-              <span className="welcome-card__icon">⚡</span>
-              <h2 className="welcome-card__title">FENGAGENTCLI</h2>
-              <div className="welcome-card__features">
-                <span className="welcome-card__feature-tag">对话</span>
-                <span className="welcome-card__feature-tag">工具调用</span>
-                <span className="welcome-card__feature-tag">多Agent</span>
-                <span className="welcome-card__feature-tag">WebUI</span>
-                <span className="welcome-card__feature-tag">MCP</span>
-                <span className="welcome-card__feature-tag">记忆系统</span>
+            <div className="welcome-hero">
+              <div className="welcome-hero__icon" aria-hidden="true">⚡</div>
+              <h2 className="welcome-hero__title">FengAgentCli</h2>
+              <p className="welcome-hero__subtitle">
+                开源本地 AI Agent 对话平台 · 对话 / 工具调用 / 多 Agent / MCP
+              </p>
+              <div className="welcome-suggestions">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.title}
+                    type="button"
+                    className="welcome-suggestion"
+                    onClick={() => void startWithPrompt(s.prompt)}
+                  >
+                    <span className="welcome-suggestion__icon" aria-hidden="true">
+                      {s.icon}
+                    </span>
+                    <span className="welcome-suggestion__body">
+                      <span className="welcome-suggestion__title">{s.title}</span>
+                      <span className="welcome-suggestion__desc">{s.desc}</span>
+                    </span>
+                  </button>
+                ))}
               </div>
-              <p className="welcome-card__hint">📝 输入消息开始对话</p>
+              <div className="welcome-features">
+                <span className="welcome-card__feature-tag">💬 智能对话</span>
+                <span className="welcome-card__feature-tag">🔧 工具调用</span>
+                <span className="welcome-card__feature-tag">🤖 多 Agent</span>
+                <span className="welcome-card__feature-tag">🧩 插件化</span>
+                <span className="welcome-card__feature-tag">🧠 记忆系统</span>
+              </div>
             </div>
           </div>
         )}
@@ -150,7 +228,7 @@ export function ChatPage({ client, session }: ChatPageProps) {
         {session.activeSession ? (
           <MessageInput
             busy={session.isStreaming}
-            placeholder="Ask FengAgent anything..."
+            placeholder="问 FengAgent 任何问题..."
             onSubmit={(text) => void session.sendMessage(text, selectedModel ?? undefined)}
             onCancel={() => void session.interrupt()}
           />

@@ -2,8 +2,9 @@
  * @fengagent/web-ui — 应用入口
  *
  * 组合 SessionSidebar + ChatPage，
- * 管理全局状态（API 客户端、会话状态）。
- * Dark Tech Luxury 主题 — 暗色专用。
+ * 管理全局状态（API 客户端、会话状态、主题）。
+ * 设计语言参考主流大模型对话产品（DeepSeek / 豆包 / 通义千问）：
+ * 居中对话流 + 建议卡片 + 圆角 Composer + 日期分组会话侧栏。
  */
 
 import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
@@ -12,15 +13,8 @@ import { createApiClient } from "./api/client.ts";
 import { ChatPage } from "./pages/chat.tsx";
 import { SessionSidebar } from "./components/session-sidebar.tsx";
 import { useSession } from "./hooks/use-session.ts";
+import { type Theme } from "./lib/theme.ts";
 import "./index.css";
-
-type Theme = "dark" | "light" | "cyber";
-
-const THEME_ICONS: Record<Theme, string> = {
-  dark: "🌙",
-  light: "☀️",
-  cyber: "🌈",
-};
 
 function App() {
   const client = useMemo(() => createApiClient(), []);
@@ -62,15 +56,13 @@ function App() {
         onDeleteSession={(id) => void session.deleteSession(id)}
       />
       <div className="app-shell__main">
-        <ChatPage client={client} session={session} />
+        <ChatPage
+          client={client}
+          session={session}
+          theme={theme}
+          onCycleTheme={cycleTheme}
+        />
       </div>
-      <button
-        className="theme-toggle"
-        onClick={cycleTheme}
-        aria-label="Toggle theme"
-      >
-        {THEME_ICONS[theme]}
-      </button>
     </div>
   );
 }

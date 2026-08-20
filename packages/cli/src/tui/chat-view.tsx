@@ -155,9 +155,11 @@ function estimateToolCardHeight(
 
 /** 估算单条消息的渲染行数（与 MessageItem 实际渲染结构一致） */
 function estimateMessageHeight(message: Message, columns: number): number {
-  const contentWidth =
-    message.role === "user" ? Math.max(1, columns - 8) : columns;
+  const isUser = message.role === "user";
+  // 用户消息：右对齐圆角气泡（边框 2 + paddingX 1*2 = 4 列）
+  const contentWidth = isUser ? Math.max(1, columns - 4) : columns;
   let h = 1; // 角色标签行
+  if (isUser) h += 2; // 气泡上下边框
   for (const block of message.content) {
     switch (block.type) {
       case "text":
@@ -284,7 +286,8 @@ function MessageItem({
   const isUser = message.role === "user";
   const roleLabel = isUser ? "你" : "FengAgentCli";
   const roleColor = isUser ? theme.user : theme.assistant;
-  const contentWidth = isUser ? Math.max(1, columns - 8) : columns;
+  // 用户消息为右对齐圆角气泡：内宽 = 列宽 - 气泡边框/padding(4)
+  const contentWidth = isUser ? Math.max(1, columns - 4) : columns;
 
   let row = 0; // 当前已遍历的消息内行号
   const windowEnd = skipRows + maxRows;
@@ -315,6 +318,11 @@ function MessageItem({
         </Text>
       </Box>
     );
+  }
+
+  // 用户消息气泡：上下边框行（渲染由 Box borderStyle 完成，这里只做行号记账）
+  if (isUser) {
+    isRowVisible(1);
   }
 
   // 内容块
@@ -367,19 +375,33 @@ function MessageItem({
     );
   }
 
+  // 用户消息气泡：下边框行记账
+  if (isUser) {
+    isRowVisible(1);
+  }
+
   if (labelPart === null && contentParts.length === 0) return null;
 
   return (
     <Box flexDirection="column" width="100%" marginY={0}>
-      <Box flexDirection="row" width="100%" justifyContent={isUser ? "flex-end" : "flex-start"}>
-        <Box flexDirection="column" width="100%">
-          {labelPart}
-          {/* 用户消息内容缩进（与原布局一致） */}
-          <Box flexDirection="column" paddingLeft={isUser ? 8 : 0} width="100%">
+      {labelPart}
+      {isUser ? (
+        /* 用户消息：右对齐圆角气泡（Round 1 设计语言） */
+        <Box flexDirection="row" justifyContent="flex-end" width="100%">
+          <Box
+            flexDirection="column"
+            borderStyle="round"
+            borderColor={theme.userBubbleBorder}
+            paddingX={1}
+          >
             {contentParts}
           </Box>
         </Box>
-      </Box>
+      ) : (
+        <Box flexDirection="column" width="100%">
+          {contentParts}
+        </Box>
+      )}
     </Box>
   );
 }

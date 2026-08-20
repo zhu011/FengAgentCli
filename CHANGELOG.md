@@ -4,6 +4,27 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 界面设计优化 Round 1
+
+### 优化（WebUI）
+
+- **欢迎页重构** — 参考 DeepSeek / 豆包 / 通义千问：居中 Hero（渐变图标 + 标题 + 副标题）+ 4 张建议卡片（点击即发起对话）+ 特性标签；去掉旧版居中欢迎卡
+- **对话流重排** — 居中窄栏（768px），助手消息带头像（品牌渐变圆标），用户消息右对齐圆角气泡；系统消息置灰卡片
+- **Composer 输入区** — 圆角卡片容器（focus 光环），发送按钮渐变胶囊，Stop 按钮红色
+- **侧边栏** — 品牌 Logo + 名称 + 副标题，会话按「今天 / 昨天 / 近 7 天 / 更早」日期分组，底部版本信息栏；主题切换移入顶栏
+- **顶栏** — 品牌字标 + 模型选择 + 检查器 / 对话图开关 + 主题切换
+
+### 优化（TUI）
+
+- **用户消息气泡** — 右对齐圆角边框气泡（`theme.userBubbleBg/Border`），与长对话切片渲染行数精确对齐（回归测试通过）
+- **欢迎卡片** — 加宽 + 版本徽标（`v0.1.0` 反白 chip）+ 副标题行 + 命令提示补充 `/provider`
+
+### 文档 / 主页
+
+- **README 重构** — 突出项目介绍 / 快速开始 / 使用指南，移除「借鉴 opencode 等」参考描述与 bug 修复叙事，新增截图画廊
+- **GUIDE-CORDIS** — 顶部新增「FengAgentCli 是什么」+「三分钟上手」
+- **截图脚本** — `scripts/shoot-webui.ts`（mock LLM + 真实 server + CDP 截图）、`packages/cli/src/scripts/shoot-tui.tsx` + `scripts/render-tui.py`（ANSI 帧渲染 PNG），供后续轮次复用
+
 ## [0.2.0] - 2026-08-20
 
 ### 修复

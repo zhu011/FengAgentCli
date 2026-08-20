@@ -349,48 +349,44 @@ export function App({
           <Box
             flexDirection="column"
             borderStyle="round"
-            borderColor={theme.borderActive}
-            paddingX={2}
+            borderColor={theme.border}
+            paddingX={3}
             paddingY={1}
-            width={52}
+            width={56}
           >
-            <Box flexDirection="row" justifyContent="center">
-              <Text bold color={theme.brand}>
-                ⚡ FENGAGENTCLI
+            <Box flexDirection="row" justifyContent="center" alignItems="center">
+              <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
+              <Text backgroundColor={theme.backgroundElement} color={theme.brandBright} bold>
+                {" v0.1.0 "}
               </Text>
-              <Text dimColor>  v0.1.0</Text>
             </Box>
             <Box flexDirection="row" justifyContent="center">
-              <Text color={theme.borderActive}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
-            </Box>
-            <Text> </Text>
-            <Box flexDirection="row" justifyContent="center">
-              <Text bold color={theme.text}>开源本地 AI Agent 编程工具</Text>
+              <Text color={theme.text}>开源本地 AI Agent 编程工具</Text>
             </Box>
             <Box flexDirection="row" justifyContent="center">
-              <Text color={theme.dim}>CLI · TUI · Web · Multi-Agent</Text>
+              <Text color={theme.dim}>CLI · TUI · Web · Multi-Agent · MCP</Text>
             </Box>
             <Text> </Text>
             <Box flexDirection="row" justifyContent="center">
-              <Box width={16}><Text color={theme.brand}>🗣  对话</Text></Box>
-              <Box width={16}><Text color={theme.brand}>🔧  工具</Text></Box>
-              <Box width={16}><Text color={theme.brand}>🤖  多Agent</Text></Box>
+              <Box width={18}><Text color={theme.brand}>🗣  对话</Text></Box>
+              <Box width={18}><Text color={theme.brand}>🔧  工具</Text></Box>
+              <Box width={18}><Text color={theme.brand}>🤖  多Agent</Text></Box>
             </Box>
             <Box flexDirection="row" justifyContent="center">
-              <Box width={16}><Text color={theme.brand}>🧠  记忆</Text></Box>
-              <Box width={16}><Text color={theme.brand}>⚡  MCP</Text></Box>
-              <Box width={16}><Text color={theme.brand}>🎨  WebUI</Text></Box>
+              <Box width={18}><Text color={theme.brand}>🧠  记忆</Text></Box>
+              <Box width={18}><Text color={theme.brand}>⚡  MCP</Text></Box>
+              <Box width={18}><Text color={theme.brand}>🎨  WebUI</Text></Box>
             </Box>
             <Text> </Text>
             <Box flexDirection="row" justifyContent="center">
-              <Text color={theme.borderActive}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
+              <Text color={theme.border}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</Text>
             </Box>
             <Text> </Text>
             <Box flexDirection="row" justifyContent="center">
               <Text color={theme.text}>📝  输入问题开始对话</Text>
             </Box>
             <Box flexDirection="row" justifyContent="center">
-              <Text color={theme.dim}>❓  /help 查看帮助 · /model 切换模型</Text>
+              <Text color={theme.dim}>❓  /help 查看帮助 · /model 切换模型 · /provider 配置</Text>
             </Box>
           </Box>
         </Box>

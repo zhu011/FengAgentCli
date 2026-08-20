@@ -34,6 +34,10 @@ export const theme = {
   backgroundPanel: "#12121A",
   /** 元素背景（输入框内联代码等，opencode darkStep3） */
   backgroundElement: "#191922",
+  /** 用户消息气泡背景（Round 1 设计：右对齐浅色气泡） */
+  userBubbleBg: "#1B2230",
+  /** 用户消息气泡边框 */
+  userBubbleBorder: "#2E3A52",
   /** 边框蓝灰 */
   border: "#2E2E3D",
   /** 激活边框 */
