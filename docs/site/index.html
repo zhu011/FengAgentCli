@@ -589,6 +589,13 @@ export GOOGLE_API_KEY=...</code></pre>
   <pre><code>bun run packages/cli/src/entry.ts --model claude-sonnet-4-20250514
 bun run packages/cli/src/entry.ts --session &lt;session-id&gt;</code></pre>
 
+  <h3 id="qs-global">全局安装（任意目录启动 TUI）</h3>
+  <p>安装后无需进入项目目录，任意位置直接运行 <code>fengagent</code> 即可进入 TUI 交互界面。</p>
+  <div class="code-label">bash — npm 全局安装</div>
+  <pre><code>npm install -g fengagent
+fengagent                  # 任意目录直接进入 TUI</code></pre>
+  <p>本地打包安装：<code>bun run pack</code> 后 <code>npm install -g ./fengagent-0.1.0.tgz</code>；<code>fengagent runtime install</code> 可注册为 Multica 本地运行时。</p>
+
   <h3 id="qs-webui">WebUI 模式</h3>
   <div class="code-label">bash — 启动服务</div>
   <pre><code>bun run serve
@@ -795,7 +802,7 @@ bun run scripts/events-migrate.ts rebuild [--prune]         # 以事件为准重
   <p class="section-desc">深入了解 FengAgentCli 的核心能力。</p>
 
   <h3>对话系统</h3>
-  <p>支持多轮上下文对话，通过 SSE（Server-Sent Events）实现流式输出。CLI 模式使用 Ink TUI 渲染，WebUI 模式使用 React + Markdown 渲染。TUI 借鉴 dsh-TUI 的 Gentle Mist Blue 设计语言做了统一美化：标题卡片、消息列表、状态栏（上下文占用进度条 + 动态运行指示）、输入框、工具卡片、权限对话框视觉统一；AI 思考/运行时显示逐帧循环动态图标（<code>SpinnerGlyph</code> 星形/月亮/跑马灯帧序列 + 宠物 emoji 轮播）。</p>
+  <p>支持多轮上下文对话，通过 SSE（Server-Sent Events）实现流式输出。CLI 模式使用 Ink TUI 渲染，WebUI 模式使用 React + Markdown 渲染。TUI 采用近黑分层背景 + 暖橙/语义色设计语言：标题卡片、消息列表、输入框、工具卡片、权限对话框视觉统一；长对话切片渲染支持 <code>PgUp/PgDn</code>、鼠标滚轮、<code>Home</code> 回顶、<code>End</code> 回底；状态栏为独立一行分段 token 进度条（精确百分比：1 位小数、极小值 <code>&lt;0.1%</code>、≥85% 警告色）+ 模型/会话信息；AI 思考/运行时显示逐帧循环动态图标（<code>SpinnerGlyph</code> 星形/月亮/跑马灯帧序列 + 宠物 emoji 轮播）。</p>
 
   <h3 id="feat-agent">多 Agent 协作</h3>
   <p>通过 <strong>Task 工具</strong>派遣子 Agent，支持独立 Session 和角色定义。在 <code>.fengagent/agents/*.md</code> 中创建 Agent 定义文件：</p>
