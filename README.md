@@ -32,6 +32,7 @@
 - **权限系统** — 工具执行前交互式审批（CLI 弹框 / WebUI SSE 推送）
 - **插件系统** — 第三方插件加载，注册工具 / Provider / Hook / 命令
 - **Skills 系统** — 可复用 Prompt 模板，关键词触发
+- **实验沙箱** — 隔离执行环境（`sandbox` 工具），实验性文件/命令不落宿主，`copy-out` 唯一出口需审批
 - **会话持久化** — SQLite 主存储 + JSONL 可见副本，跨重启恢复
 - **Multica ACP** — 原生支持 Multica 平台 Agent 运行时集成
 - **编译二进制** — `bun build --compile` 生成独立可执行文件
@@ -130,11 +131,12 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # Windows
 
 ### TUI 界面
 
-CLI 交互模式（Ink TUI）借鉴 dsh-TUI 的 Gentle Mist Blue 设计语言做了统一美化：
+CLI 交互模式（Ink TUI）借鉴 opencode / kimi-code / claude-code 的设计语言做了统一美化（保留 dsh-TUI 的雾蓝品牌色）：
 
+- **主题色板**：近黑分层背景 + 暖橙/语义色，代码块与行内代码**语法高亮**；
 - **标题卡片**：品牌雾蓝色调欢迎卡片 / 顶部标题条；
-- **消息列表**：用户 / 助手语义色标签、细点线分隔、品牌色代码块与行内代码；
-- **状态栏**：上下文占用进度条 + `model · tokens · session` 中点分隔信息 + 动态运行指示；
+- **消息列表**：用户 / 助手语义色标签、细点线分隔；长对话**切片渲染**（只渲染可视窗口内的消息，超屏不再撑破布局），支持 `PgUp/PgDn`、鼠标滚轮、`Home` 回顶、`End` 回底并自动恢复贴底；
+- **状态栏**：独立一行**分段 token 进度条** + 精确百分比（保留 1 位小数、极小值显示 `<0.1%`、token 计数 > 0 时至少填充 1 格、≥85% 转警告色）+ `model · tokens · session` 中点分隔信息 + 动态运行指示；
 - **动态图标**：AI「思考中 / 执行工具中」显示逐帧循环动画（星形/月亮/跑马灯帧序列，`SpinnerGlyph` + `useFrameTicker`），宠物 emoji 轮播；
 - **工具卡片**：语义状态图标（✓/✗/⏳）+ 状态色边框；
 - **权限对话框**：琥珀色警告框，`[y] 允许 [n] 拒绝 [Esc] 取消`。
