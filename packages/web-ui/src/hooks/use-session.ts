@@ -36,6 +36,8 @@ export interface DisplayMessage {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
+  /** 思考过程内容（流式增量累积；历史消息从 thinking 块提取） */
+  thinking: string;
   toolCalls: ToolCallInfo[];
   streaming: boolean;
   createdAt: number;
@@ -275,6 +277,7 @@ export function useSession(client: ApiClient): UseSessionResult {
         id: genId(),
         role: "user",
         text,
+        thinking: "",
         toolCalls: [],
         streaming: false,
         createdAt: Date.now(),
@@ -283,6 +286,7 @@ export function useSession(client: ApiClient): UseSessionResult {
 
       // 流式状态（闭包内追踪）
       const streamingText = new Map<string, string>();
+      const streamingThinking = new Map<string, string>();
       const messageToolCalls = new Map<string, ToolCallInfo[]>();
       let currentMessageId: string | null = null;
 
@@ -302,6 +306,7 @@ export function useSession(client: ApiClient): UseSessionResult {
                       id: event.messageId,
                       role: event.role,
                       text: "",
+                      thinking: "",
                       toolCalls: [],
                       streaming: true,
                       createdAt: Date.now(),
@@ -318,6 +323,20 @@ export function useSession(client: ApiClient): UseSessionResult {
                 setDisplayMessages((prev) =>
                   prev.map((m) =>
                     m.id === id ? { ...m, text: accumulated } : m,
+                  ),
+                );
+                break;
+              }
+
+              case "thinking-delta": {
+                // 思考过程内容 — 流式累积，前端可实时展示（展开/折叠）
+                const id = event.messageId;
+                const accumulated =
+                  (streamingThinking.get(id) ?? "") + event.text;
+                streamingThinking.set(id, accumulated);
+                setDisplayMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === id ? { ...m, thinking: accumulated } : m,
                   ),
                 );
                 break;
@@ -380,6 +399,7 @@ export function useSession(client: ApiClient): UseSessionResult {
                   ),
                 );
                 streamingText.delete(event.messageId);
+                streamingThinking.delete(event.messageId);
                 currentMessageId = null;
                 break;
               }
@@ -400,6 +420,7 @@ export function useSession(client: ApiClient): UseSessionResult {
                     ),
                   );
                   streamingText.delete(currentMessageId);
+                  streamingThinking.delete(currentMessageId);
                   currentMessageId = null;
                 }
                 // 安全清理：标记所有消息为非流式
@@ -531,11 +552,14 @@ export function useSession(client: ApiClient): UseSessionResult {
 function sessionToDisplayMessages(session: Session): DisplayMessage[] {
   return session.messages.map((msg) => {
     let text = "";
+    let thinking = "";
     const toolCalls: ToolCallInfo[] = [];
 
     for (const block of msg.content) {
       if (block.type === "text") {
         text += block.text;
+      } else if (block.type === "thinking") {
+        thinking += block.text;
       } else if (block.type === "tool-use") {
         toolCalls.push({
           toolUseId: block.id,
@@ -563,6 +587,7 @@ function sessionToDisplayMessages(session: Session): DisplayMessage[] {
       id: msg.id,
       role: msg.role,
       text,
+      thinking,
       toolCalls,
       streaming: false,
       createdAt: msg.createdAt,

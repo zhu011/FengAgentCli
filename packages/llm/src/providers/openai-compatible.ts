@@ -80,6 +80,11 @@ export function createOpenAICompatibleClient(
                 const choice = parsed.choices?.[0];
                 const delta = choice?.delta;
 
+                if (delta?.reasoning_content) {
+                  // DeepSeek reasoner 等模型的思考内容（delta.reasoning_content）
+                  yield { type: "thinking-delta", text: delta.reasoning_content };
+                }
+
                 if (delta?.content) {
                   yield { type: "text-delta", text: delta.content };
                 }
@@ -178,6 +183,10 @@ export function createOpenAICompatibleClient(
       const usage = json.usage as Record<string, number> | undefined;
 
       const blocks: ContentBlock[] = [];
+      if (msg?.reasoning_content && typeof msg.reasoning_content === "string") {
+        // DeepSeek reasoner 非流式响应的思考内容 → thinking 块
+        blocks.push({ type: "thinking", text: msg.reasoning_content });
+      }
       if (msg?.content && typeof msg.content === "string") {
         blocks.push({ type: "text", text: msg.content });
       }

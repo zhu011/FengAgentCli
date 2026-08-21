@@ -100,6 +100,10 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 |:---:|:---:|:---:|
 | ![](screenshots/r3-webui-generating-dark.png) | ![](screenshots/r3-webui-codeblock-copy.png) | ![](screenshots/r3-webui-search.png) |
 
+| 思考过程流式显示（展开） | 思考面板（折叠） | TUI 思考流式输出 |
+|:---:|:---:|:---:|
+| ![](screenshots/r4-webui-thinking-streaming.png) | ![](screenshots/r4-webui-thinking-collapsed.png) | ![](screenshots/r4-tui-thinking-streaming.png) |
+
 ## 💻 使用指南
 
 ### TUI（终端对话）
@@ -107,6 +111,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 - **对话**：直接输入问题，`Enter` 发送；`/` 弹出命令补全
 - **常用命令**：`/help` 帮助 · `/model` 切换模型 · `/provider` 配置服务商 · `/compact` 压缩上下文 · `/clear` 清屏
 - **长对话**：`PgUp/PgDn` 或鼠标滚轮翻阅历史，`Home` 回顶、`End` 回底
+- **思考可视化**：推理模型（DeepSeek reasoner / Anthropic thinking）的思考过程**实时流式显示**（`💭` 缩进斜体），不再只有动画宠物空转
 - **状态栏**：上下文占用进度条（含百分比与 token 计数）+ 模型 / 会话信息
 - **设计语言**：近黑分层背景 + 语义色强调 + 品牌雾蓝，代码块语法高亮
 
@@ -116,6 +121,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 - 三套主题：深空 / 日光 / 赛博（顶栏 ⚙ 设置下拉，显示当前主题名；Esc / 点击外部关闭）
 - 会话标题双击重命名（侧边栏与顶栏均可）；侧边栏顶部支持**会话搜索**；会话行 hover 显示重命名 / 删除
 - 发送消息后有「生成中」动画指示器（显示已用时长 + **按 Esc 中断**，Stop 按钮联动）
+- **思考过程可视化**：推理模型的思考内容经 `thinking-delta` SSE 实时推送，以「💭 深度思考」面板流式展示，**点击展开 / 折叠**（流式期间自动展开，折叠后仍显示字数摘要）；历史消息的思考块同样可见
 - 欢迎页建议卡片点击**填入输入框**（确认后 Enter 发送），卡片 hover 微动画；空会话有轻量引导
 - 助手消息 Markdown 代码块带**复制按钮**（hover / 键盘 focus 可见）
 - 右侧面板：权限审批、消息检查器

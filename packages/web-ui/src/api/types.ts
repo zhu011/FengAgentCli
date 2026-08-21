@@ -16,6 +16,11 @@ export interface TextBlock {
   text: string;
 }
 
+export interface ThinkingBlock {
+  type: "thinking";
+  text: string;
+}
+
 export interface ToolUseBlock {
   type: "tool-use";
   id: string;
@@ -30,7 +35,7 @@ export interface ToolResultBlock {
   isError?: boolean;
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+export type ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock;
 
 export interface Message {
   id: string;
@@ -80,6 +85,7 @@ export type AgentEvent =
   | { type: "session-start"; session: Session }
   | { type: "message-start"; messageId: string; role: Role }
   | { type: "text-delta"; messageId: string; text: string }
+  | { type: "thinking-delta"; messageId: string; text: string }
   | {
       type: "tool-call-start";
       toolUseId: string;

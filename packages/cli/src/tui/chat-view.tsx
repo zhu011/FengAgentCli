@@ -30,6 +30,8 @@ export interface ChatViewProps {
   messages: Message[];
   /** 当前正在流式输出的文本 */
   streamingText: string;
+  /** 当前流式输出的思考过程内容（thinking-delta 累积） */
+  streamingThinking?: string;
   /** 当前轮次的工具调用 */
   toolCalls: ToolCallInfo[];
   /** 是否正在运行 */
@@ -182,18 +184,22 @@ function estimateMessageHeight(message: Message, columns: number): number {
   return Math.max(2, h);
 }
 
-/** 估算流式输出区（助手标签 + 文本 + 工具卡片）的渲染行数 */
+/** 估算流式输出区（助手标签 + 思考 + 文本 + 工具卡片）的渲染行数 */
 function estimateStreamingHeight(
   streamingText: string,
+  streamingThinking: string,
   toolCalls: ToolCallInfo[],
   isRunning: boolean,
   columns: number,
 ): number {
-  if (!isRunning && streamingText === "" && toolCalls.length === 0) return 0;
+  if (!isRunning && streamingText === "" && streamingThinking === "" && toolCalls.length === 0) return 0;
   let h = 1; // "FengAgentCli:" 标签
+  if (streamingThinking !== "") {
+    h += wrappedLineCount(streamingThinking, columns);
+  }
   if (streamingText !== "") {
     h += estimateTextRows(streamingText, columns);
-  } else {
+  } else if (isRunning && streamingThinking === "") {
     h += 1; // ThinkingPet
   }
   for (const tc of toolCalls) {
@@ -784,12 +790,14 @@ const BOTTOM_CUT_SAFETY = 1;
 /** 流式输出区切片渲染（按行裁剪） */
 function StreamingSection({
   streamingText,
+  streamingThinking,
   toolCalls,
   isRunning,
   skipRows = 0,
   maxRows = Infinity,
 }: {
   streamingText: string;
+  streamingThinking: string;
   toolCalls: ToolCallInfo[];
   isRunning: boolean;
   skipRows?: number;
@@ -817,12 +825,24 @@ function StreamingSection({
   }
   row += 1;
 
+  // 流式思考过程内容（真实思考文本实时展示，替代无内容的动画宠物）
+  if (streamingThinking !== "") {
+    const sliced = visibleText(streamingThinking, columns);
+    if (sliced !== "") {
+      parts.push(
+        <Box key="thinking" flexDirection="column">
+          <Text color={theme.dim} italic>💭 {sliced}</Text>
+        </Box>,
+      );
+    }
+  }
+
   if (streamingText !== "") {
     const sliced = visibleText(streamingText, columns);
     if (sliced !== "") {
       parts.push(<Box key="text" flexDirection="column"><MarkdownText text={sliced} /></Box>);
     }
-  } else if (isRunning && row <= windowEnd && row > skipRows) {
+  } else if (isRunning && streamingThinking === "" && row <= windowEnd && row > skipRows) {
     parts.push(<ThinkingPet key="pet" />);
     row += 1;
   }
@@ -852,6 +872,7 @@ function StreamingSection({
 export function ChatView({
   messages,
   streamingText,
+  streamingThinking = "",
   toolCalls,
   isRunning,
 }: ChatViewProps): React.ReactElement {
@@ -891,6 +912,7 @@ export function ChatView({
   );
   const streamingHeight = estimateStreamingHeight(
     streamingText,
+    streamingThinking,
     toolCalls,
     isRunning,
     columns,
@@ -1046,6 +1068,7 @@ export function ChatView({
           <StreamingSection
             key="streaming"
             streamingText={streamingText}
+            streamingThinking={streamingThinking}
             toolCalls={toolCalls}
             isRunning={isRunning}
             skipRows={skipRows}

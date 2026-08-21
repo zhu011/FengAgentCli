@@ -7,9 +7,10 @@
  * Round 2：消息流底部「生成中」动画指示器（豆包式彩色光点）——
  * 发送消息后、首条助手消息出现前的空窗期显示。
  * Round 3：生成中指示器增强 — 已用时长 + 「按 Esc 中断」提示。
+ * Round 4：思考过程可视化 — 思考内容流式显示 + 点击展开/折叠。
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { DisplayMessage } from "../hooks/use-session.ts";
 import { MarkdownRenderer } from "./markdown-renderer.tsx";
 import { ToolCallCard } from "./tool-call-card.tsx";
@@ -125,7 +126,23 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
             <p className="message-bubble__text">{message.text}</p>
           ) : message.text.length > 0 ? (
             <>
+              {message.thinking.length > 0 && (
+                <ThinkingPanel
+                  text={message.thinking}
+                  streaming={message.streaming}
+                />
+              )}
               <MarkdownRenderer text={message.text} />
+              {message.streaming && (
+                <span className="typing-cursor" aria-hidden="true">▍</span>
+              )}
+            </>
+          ) : message.thinking.length > 0 ? (
+            <>
+              <ThinkingPanel
+                text={message.thinking}
+                streaming={message.streaming}
+              />
               {message.streaming && (
                 <span className="typing-cursor" aria-hidden="true">▍</span>
               )}
@@ -150,6 +167,75 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 思考过程面板（Round 4）— 流式显示思考内容，支持点击展开/折叠。
+ *
+ * 交互：
+ * - 思考内容流式到达时自动展开一次，之后交还用户控制；
+ * - 点击标题栏在展开 / 折叠间切换（折叠后仍可见「深度思考 · N 字」摘要）；
+ * - 折叠 / 展开带平滑过渡动画（max-height + opacity）。
+ */
+function ThinkingPanel({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(true);
+  const hasAutoOpened = useRef(false);
+
+  // 流式期间思考内容首次出现时自动展开一次（之后交还用户控制）
+  useEffect(() => {
+    if (streaming && text.length > 0 && !hasAutoOpened.current) {
+      hasAutoOpened.current = true;
+      setCollapsed(false);
+    }
+  }, [streaming, text]);
+
+  const toggle = () => setCollapsed((c) => !c);
+
+  return (
+    <div
+      className={`thinking-panel ${collapsed ? "thinking-panel--collapsed" : "thinking-panel--expanded"}`}
+    >
+      <button
+        type="button"
+        className="thinking-panel__header"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        title={collapsed ? "展开思考过程" : "折叠思考过程"}
+      >
+        <span className="thinking-panel__icon" aria-hidden="true">💭</span>
+        <span className="thinking-panel__label">深度思考</span>
+        <span className="thinking-panel__meta">
+          {text.length} 字
+          {streaming && (
+            <span className="thinking-panel__streaming" aria-hidden="true">
+              <span className="streaming-dots">
+                <span />
+                <span />
+                <span />
+              </span>
+            </span>
+          )}
+        </span>
+        <span
+          className="thinking-panel__chevron"
+          aria-hidden="true"
+        >
+          ▾
+        </span>
+      </button>
+      {!collapsed && (
+        <div className="thinking-panel__body" role="region">
+          {text}
+        </div>
+      )}
     </div>
   );
 }
