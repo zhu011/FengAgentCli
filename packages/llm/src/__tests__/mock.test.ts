@@ -538,6 +538,74 @@ describe("OpenAI-Compatible Provider (mocked fetch)", () => {
     expect((finish as { reason: string }).reason).toBe("tool_use");
   });
 
+  test("stream parses reasoning_content (DeepSeek reasoner) as thinking-delta", async () => {
+    const sseData = [
+      'data: {"choices":[{"delta":{"reasoning_content":"先分析需求"},"index":0}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"再设计实现"},"index":0}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"最终答案"},"index":0}]}\n\n',
+      'data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":8}}\n\n',
+      "data: [DONE]\n\n",
+    ].join("");
+
+    globalThis.fetch = mock(() =>
+      Promise.resolve(createSSEResponse([sseData])),
+    ) as unknown as typeof fetch;
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "test-key",
+      baseURL: "http://localhost:8080/v1",
+    });
+    const events = await collectEvents(
+      client.stream({ ...baseRequest, model: "deepseek-reasoner" }),
+    );
+
+    const thinking = events.filter((e) => e.type === "thinking-delta");
+    expect(thinking).toHaveLength(2);
+    expect((thinking[0] as { text: string }).text).toBe("先分析需求");
+    expect((thinking[1] as { text: string }).text).toBe("再设计实现");
+
+    const textDeltas = events.filter((e) => e.type === "text-delta");
+    expect(textDeltas).toHaveLength(1);
+    expect((textDeltas[0] as { text: string }).text).toBe("最终答案");
+  });
+
+  test("generate keeps reasoning_content as thinking block", async () => {
+    const responseData = {
+      id: "chatcmpl_reasoner",
+      model: "deepseek-reasoner",
+      choices: [
+        {
+          message: {
+            reasoning_content: "深度思考过程",
+            content: "正式回答",
+          },
+          finish_reason: "stop",
+          index: 0,
+        },
+      ],
+      usage: { prompt_tokens: 20, completion_tokens: 10 },
+    };
+
+    globalThis.fetch = mock(() =>
+      Promise.resolve(createJSONResponse(responseData)),
+    ) as unknown as typeof fetch;
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "test-key",
+      baseURL: "http://localhost:8080/v1",
+    });
+    const response = await client.generate({
+      ...baseRequest,
+      model: "deepseek-reasoner",
+    });
+
+    const thinking = response.content.find((b) => b.type === "thinking");
+    expect(thinking).toBeDefined();
+    expect((thinking as { text: string }).text).toBe("深度思考过程");
+    const text = response.content.find((b) => b.type === "text");
+    expect((text as { text: string }).text).toBe("正式回答");
+  });
+
   test("generate returns LLMResponse", async () => {
     const responseData = {
       id: "chatcmpl_compat",

@@ -992,6 +992,126 @@ body {
 }
 
 /* ──────────────────────────────────────────────
+   思考过程面板（Round 4）— 流式展示 + 点击展开/折叠
+   ────────────────────────────────────────────── */
+.thinking-panel {
+  margin: 2px 0 10px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-2);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.thinking-panel:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.thinking-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color 0.15s ease;
+}
+
+.thinking-panel__header:hover {
+  color: var(--text-primary);
+}
+
+.thinking-panel__header:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.thinking-panel__icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.thinking-panel__label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.thinking-panel__meta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-panel__streaming {
+  display: inline-flex;
+  align-items: center;
+}
+
+.thinking-panel__streaming .streaming-dots span {
+  width: 5px;
+  height: 5px;
+}
+
+.thinking-panel__chevron {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  transform: rotate(0deg);
+  transition: transform 0.2s ease;
+}
+
+.thinking-panel--expanded .thinking-panel__chevron {
+  transform: rotate(180deg);
+}
+
+.thinking-panel__body {
+  padding: 4px 14px 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+  animation: thinking-body-in 0.18s ease-out;
+}
+
+.thinking-panel__body::-webkit-scrollbar {
+  width: 4px;
+}
+.thinking-panel__body::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 2px;
+}
+
+@keyframes thinking-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ──────────────────────────────────────────────
    Streaming Dots — 紫色 3 点动画
    ────────────────────────────────────────────── */
 .streaming-dots {
@@ -2469,4 +2589,215 @@ body {
   outline: 2px solid var(--border-focus);
   outline-offset: -2px;
   background: var(--bg-hover);
+}
+
+/* ══════════════════════════════════════════════════
+   Round 4 — 去 AI 味 + 动态互动（轻量微动效）
+   原则：克制、有反馈、不打扰；prefers-reduced-motion 下全部禁用。
+   ══════════════════════════════════════════════════ */
+
+/* 主题切换平滑过渡：关键表面颜色跟随主题渐变，避免生硬跳变 */
+.chat-page,
+.session-sidebar,
+.message-bubble,
+.message-bubble--user,
+.message-bubble--assistant,
+.message-bubble--system,
+.composer,
+.chat-page__header,
+.settings-menu,
+.thinking-panel,
+.token-stats-bar,
+.chat-page__empty-guide,
+.welcome-hero,
+.tool-call-card,
+.empty-guide__chip,
+.chat-page__toggle-inspector,
+.chat-page__session-title,
+.session-card {
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    color 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+/* 顶栏工具按钮：hover 上浮 + 微放大，点击回弹 */
+.chat-page__toggle-inspector {
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s,
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.chat-page__toggle-inspector:hover {
+  transform: translateY(-1px) scale(1.05);
+  box-shadow: 0 2px 10px var(--accent-light);
+}
+.chat-page__toggle-inspector:active {
+  transform: translateY(0) scale(0.95);
+  transition-duration: 0.08s;
+}
+.chat-page__settings-icon--open {
+  animation: settingsSpin 0.3s ease-out;
+}
+@keyframes settingsSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(90deg);
+  }
+}
+
+/* 侧边栏新会话按钮：hover 渐变光晕 */
+.session-sidebar__new-btn:hover:not(:disabled) {
+  box-shadow: 0 2px 14px var(--accent-light);
+  transform: translateY(-1px);
+}
+
+/* 会话卡片：hover 轻微左移 + 高亮边框（有反馈的导航感） */
+.session-card {
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background-color 0.18s ease;
+}
+.session-card:hover {
+  transform: translateX(2px);
+}
+
+/* 助手头像：流式生成时柔光脉冲（消息级 streaming 指示） */
+.message-row--assistant:has(.message-bubble__streaming) .message-avatar,
+.message-row--assistant:has(.message-bubble__placeholder) .message-avatar,
+.message-row--assistant:has(.thinking-panel__streaming) .message-avatar {
+  animation: avatarPulse 1.6s ease-in-out infinite;
+}
+@keyframes avatarPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 10px var(--accent-light);
+  }
+  50% {
+    box-shadow: 0 0 22px var(--accent-light), 0 0 8px var(--accent-2);
+  }
+}
+
+/* 助手消息气泡：hover 边框柔光（不改变布局的轻反馈） */
+.message-bubble--assistant:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 2px 18px var(--accent-light);
+}
+
+/* 工具调用卡片：hover 轻微上浮 */
+.tool-call-card {
+  transition:
+    transform 0.18s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.tool-call-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  box-shadow: 0 4px 16px var(--accent-light);
+}
+
+/* Composer 发送按钮：渐变位移 + 光晕（发送前的期待感） */
+.composer__btn:not(:disabled) {
+  background-size: 150% 150%;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    background-position 0.4s ease,
+    opacity 0.2s ease;
+}
+.composer__btn:not(:disabled):hover {
+  background-position: 100% 50%;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px var(--accent-light);
+}
+.composer__btn:not(:disabled):active {
+  transform: translateY(0) scale(0.94);
+  transition-duration: 0.08s;
+}
+
+/* 生成中指示器：光点缓动更柔和（去机械感） */
+.generating-indicator {
+  animation: indicatorBreath 2.4s ease-in-out infinite;
+}
+@keyframes indicatorBreath {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.82;
+  }
+}
+
+/* 欢迎态：Hero 图标缓动悬浮 + 特性标签入场错峰 */
+.welcome-hero__icon {
+  animation: heroFloat 3.6s ease-in-out infinite;
+}
+@keyframes heroFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+.welcome-card__feature-tag {
+  animation: tagIn 0.4s ease-out both;
+}
+.welcome-card__feature-tag:nth-child(2) {
+  animation-delay: 0.05s;
+}
+.welcome-card__feature-tag:nth-child(3) {
+  animation-delay: 0.1s;
+}
+.welcome-card__feature-tag:nth-child(4) {
+  animation-delay: 0.15s;
+}
+.welcome-card__feature-tag:nth-child(5) {
+  animation-delay: 0.2s;
+}
+@keyframes tagIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 流式打字光标：平滑闪烁（替代硬切） */
+.typing-cursor {
+  animation: cursorBlinkSoft 1.1s steps(2, start) infinite;
+}
+@keyframes cursorBlinkSoft {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 无障碍：用户偏好减少动效时，全部动画/过渡降级为瞬时 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

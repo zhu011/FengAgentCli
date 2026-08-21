@@ -48,6 +48,8 @@ type RuntimeAgentLike = {
 interface UiState {
   status: "idle" | "running" | "error" | "compacting";
   streamingText: string;
+  /** 流式思考过程内容（thinking-delta 累积，实时展示） */
+  streamingThinking: string;
   toolCalls: ToolCallInfo[];
   tokenCount: number;
   inputTokens: number;
@@ -89,6 +91,7 @@ export function App({
   const [ui, setUi] = useState<UiState>({
     status: "idle",
     streamingText: "",
+    streamingThinking: "",
     toolCalls: [],
     tokenCount: session.tokenCount,
     inputTokens: 0,
@@ -426,13 +429,14 @@ export function App({
         <ChatView
           messages={messages}
           streamingText={ui.streamingText}
+          streamingThinking={ui.streamingThinking}
           toolCalls={ui.toolCalls}
           isRunning={ui.status === "running"}
         />
       </Box>
 
-      {/* 思考动画宠物 — AI 运行中且无流式文本时显示 */}
-      {ui.status === "running" && ui.streamingText === "" && !pendingRequest && (
+      {/* 思考动画宠物 — AI 运行中、无流式文本且无思考内容时显示 */}
+      {ui.status === "running" && ui.streamingText === "" && ui.streamingThinking === "" && !pendingRequest && (
         <Box paddingX={1} marginBottom={0}>
           <ThinkingPet text={ui.toolCalls.length > 0 ? "执行工具中" : "思考中"} />
         </Box>
@@ -494,6 +498,7 @@ function handleAgentEvent(
       setUi((prev) => ({
         ...prev,
         streamingText: "",
+        streamingThinking: "",
       }));
       break;
 
@@ -501,6 +506,14 @@ function handleAgentEvent(
       setUi((prev) => ({
         ...prev,
         streamingText: prev.streamingText + event.text,
+      }));
+      break;
+
+    case "thinking-delta":
+      // 思考过程内容流式累积 — ChatView 实时展示（💭 缩进文本）
+      setUi((prev) => ({
+        ...prev,
+        streamingThinking: prev.streamingThinking + event.text,
       }));
       break;
 
@@ -534,6 +547,7 @@ function handleAgentEvent(
       setUi((prev) => ({
         ...prev,
         streamingText: "",
+        streamingThinking: "",
       }));
       break;
 

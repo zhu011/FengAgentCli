@@ -211,3 +211,106 @@ function LongTextConversation(): React.ReactElement {
 const longConv = render(<LongTextConversation />);
 await sleep(50);
 save("03-longtext.txt", longConv.lastFrame() ?? "");
+
+// ── Round 4：思考过程可视化 — 流式思考（streamingThinking，正文未开始）──
+const THINKING_TEXT =
+  "用户想让我介绍 FengAgentCli。先梳理核心能力：本地 AI Agent，TUI 与 WebUI 双界面，" +
+  "支持工具调用、多 Agent 协作、上下文压缩、记忆系统。回答突出特性并给出快速上手命令。";
+
+function ThinkingStreaming(): React.ReactElement {
+  const history: Message[] = [
+    {
+      id: "t0",
+      role: "user",
+      content: [{ type: "text", text: "你好，介绍一下你自己" }],
+      createdAt: Date.now(),
+    },
+  ];
+  return (
+    <Box flexDirection="column" width={80}>
+      <Box flexDirection="row" justifyContent="center" marginBottom={0}>
+        <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
+        <Text color={theme.subtle}> · v0.2.0</Text>
+      </Box>
+      <Box flexDirection="column" flexGrow={1} minHeight={0} width="100%" overflowY="hidden">
+        <ChatView
+          messages={history}
+          streamingText=""
+          streamingThinking={THINKING_TEXT}
+          toolCalls={[]}
+          isRunning={true}
+        />
+      </Box>
+      <Box>
+        <Text color={theme.prompt} bold>{"❯ "}</Text>
+        <Text><Text color={theme.brand}>█</Text></Text>
+      </Box>
+      <StatusBar
+        model="deepseek-reasoner"
+        tokenCount={12843}
+        status="running"
+        sessionId="abc12345"
+        contextWindow={200000}
+      />
+    </Box>
+  );
+}
+
+const thinkingConv = render(<ThinkingStreaming />);
+await sleep(50);
+save("04-thinking-streaming.txt", thinkingConv.lastFrame() ?? "");
+
+// ── Round 4：思考过程可视化 — 完成态（消息内 thinking 块 + 正文）──
+function ThinkingComplete(): React.ReactElement {
+  const doneMessages: Message[] = [
+    {
+      id: "tc0",
+      role: "user",
+      content: [{ type: "text", text: "你好，介绍一下你自己" }],
+      createdAt: Date.now(),
+    },
+    {
+      id: "tc1",
+      role: "assistant",
+      content: [
+        { type: "thinking", text: "先梳理核心能力，再给出快速上手命令。" },
+        {
+          type: "text",
+          text:
+            "你好！我是 **FengAgentCli**，一个开源本地 AI Agent 对话平台。\n\n" +
+            "- 💬 多轮智能对话（SSE 流式输出）\n" +
+            "- 🔧 工具调用（文件 / Bash / 搜索 / MCP）\n\n" +
+            "```bash\nfengagent        # 启动终端 TUI\n```",
+        },
+      ],
+      createdAt: Date.now(),
+    },
+  ];
+
+  return (
+    <Box flexDirection="column" width={80}>
+      <Box flexDirection="row" justifyContent="center" marginBottom={0}>
+        <Text bold color={theme.brand}>⚡ FENGAGENTCLI</Text>
+        <Text color={theme.subtle}> · v0.2.0</Text>
+      </Box>
+      <Box flexDirection="column" flexGrow={1} minHeight={0} width="100%" overflowY="hidden">
+        <ChatView messages={doneMessages} streamingText="" toolCalls={[]} isRunning={false} />
+      </Box>
+      <Box>
+        <Text color={theme.prompt} bold>{"❯ "}</Text>
+        <Text><Text color={theme.brand}>█</Text></Text>
+      </Box>
+      <StatusBar
+        model="deepseek-reasoner"
+        tokenCount={12843}
+        status="idle"
+        sessionId="abc12345"
+        contextWindow={200000}
+      />
+    </Box>
+  );
+}
+
+const completeConv = render(<ThinkingComplete />);
+await sleep(50);
+save("05-thinking-complete.txt", completeConv.lastFrame() ?? "");

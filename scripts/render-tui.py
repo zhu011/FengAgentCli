@@ -179,7 +179,9 @@ def draw_frame(name: str):
     out = os.path.join(OUT_DIR, name.replace(".txt", ".png")
                        .replace("01-welcome", "r3-tui-welcome")
                        .replace("02-conversation", "r3-tui-conversation")
-                       .replace("03-longtext", "r3-tui-longtext"))
+                       .replace("03-longtext", "r3-tui-longtext")
+                       .replace("04-thinking-streaming", "r4-tui-thinking-streaming")
+                       .replace("05-thinking-complete", "r4-tui-thinking-complete"))
     img.save(out)
     print("rendered", out, img.size)
 

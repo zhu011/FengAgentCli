@@ -147,6 +147,12 @@ function mapContentToBlocks(
   const blocks: ContentBlock[] = [];
   const msg = choice.message;
 
+  // DeepSeek reasoner 非流式响应的思考内容（不在官方 SDK 类型中）
+  const reasoning = (msg as { reasoning_content?: string }).reasoning_content;
+  if (reasoning) {
+    blocks.push({ type: "thinking", text: reasoning });
+  }
+
   if (msg.content) {
     blocks.push({ type: "text", text: msg.content });
   }
@@ -207,6 +213,13 @@ export function createOpenAIClient(options: OpenAIClientOptions): LLMClient {
         for await (const chunk of stream) {
           const choice = chunk.choices?.[0];
           const delta = choice?.delta;
+
+          // DeepSeek reasoner 等模型的思考内容（reasoning_content，不在官方 SDK 类型中）
+          const reasoning = (delta as { reasoning_content?: string } | undefined)
+            ?.reasoning_content;
+          if (reasoning) {
+            yield { type: "thinking-delta", text: reasoning };
+          }
 
           if (delta?.content) {
             yield { type: "text-delta", text: delta.content };

@@ -22,6 +22,7 @@ export type AgentEvent =
   | { type: "session-start"; session: Session }
   | { type: "message-start"; messageId: string; role: Role }
   | { type: "text-delta"; messageId: string; text: string }
+  | { type: "thinking-delta"; messageId: string; text: string }
   | {
       type: "tool-call-start";
       toolUseId: string;

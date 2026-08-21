@@ -4,6 +4,29 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 界面体验优化 Round 4（思考可视化 + 去 AI 味动效）
+
+### 新功能（思考过程可视化）
+
+- **思考内容流式展示（WebUI）** — 思考过程以「💭 深度思考」面板**实时流式显示**，支持点击**展开 / 折叠**（流式期间自动展开一次，之后交还用户控制；折叠后仍显示「N 字」摘要与流式指示），替代原先只有「思考中…」占位、无任何内容的空转状态（`packages/web-ui/src/components/message-list.tsx`、`index.css`）
+- **思考内容流式展示（TUI）** — `thinking-delta` 事件实时累积为流式思考文本（💭 缩进斜体），有思考内容时不再只显示动画宠物；历史消息的 thinking 块照常渲染（`packages/cli/src/tui/app.tsx`、`chat-view.tsx`）
+- **思考链路打通（核心）** — 三层修复让思考 token 完整流回前端：
+  1. `openai-compatible` / `openai` provider 解析 `delta.reasoning_content`（DeepSeek reasoner 风格）→ `thinking-delta` 事件（此前被丢弃）；`generate()` 非流式响应保留 `reasoning_content` 为 thinking 块
+  2. `AgentEvent` 新增 `thinking-delta` 类型（`packages/core/src/event.ts`），`llmEventToAgentEvents` 转发思考增量（此前静默丢弃，`packages/agent/src/streaming.ts`）
+  3. WebUI `use-session` 累积思考增量到消息 `thinking` 字段，会话重载时从 thinking 块提取（此前历史思考内容完全不显示）
+- **排查结论（沙箱链路）** — 沙箱（`@fengagent/tools` 的 Sandbox）是「隔离执行实验性代码」的工具，**不在** SSE 流式链路上，未丢失思考 token；「一直停在深度思考」的根因是上述应用层丢弃 `reasoning_content` / `thinking-delta`，已修复
+
+### 优化（去 AI 味 + 动态互动）
+
+- **WebUI 轻量动态互动** — 主题切换平滑过渡、顶栏按钮 hover 上浮/点击回弹、齿轮图标旋转、侧边栏会话卡 hover 轻移、助手头像流式脉冲、消息气泡/工具卡 hover 柔光、Composer 发送按钮渐变位移、欢迎 Hero 图标缓动悬浮、特性标签错峰入场、流式光标柔和闪烁；全部动效遵循 `prefers-reduced-motion` 降级（`packages/web-ui/src/index.css`）
+- **文档站动态互动 + 侧栏高亮修复** — ① 修复小节点击不高亮的 bug：点击立即高亮（不再依赖 scroll spy）、scroll spy 覆盖全部小节标题（h3）、小节高亮时父级分组同步高亮、修正「安装」等 data-target 指向；② 轻量动效：Hero 上浮入场、导航悬停轻移 + 图标微弹、代码块/表格 hover 细边框高亮、链接下划线滑入（`docs/site/index.html`）
+
+### 测试
+
+- 新增 `streaming.test.ts`（agent）：thinking-delta 实时转发 + 增量累积不丢流
+- 新增 `mock.test.ts` 用例：openai-compatible 解析 `reasoning_content`（流式 + 非流式）
+- 全量 794 pass / 1 fail（既有沙箱 bash 工具环境性失败，与 R1–R3 相同）
+
 ## [Unreleased] — 界面设计优化 Round 3（最终轮·精细打磨）
 
 ### 优化（WebUI）

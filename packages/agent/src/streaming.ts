@@ -14,7 +14,7 @@ import { toAgentError } from "@fengagent/core";
  * 将单个 LLMEvent 转换为 0 或多个 AgentEvent。
  *
  * - text-delta → text-delta（附带 messageId）
- * - thinking-delta → 当前版本不转发（AgentEvent 未定义 thinking-delta）
+ * - thinking-delta → thinking-delta（附带 messageId；思考过程实时转发，前端可流式展示）
  * - tool-call → tool-call-start
  * - usage → usage
  * - finish → 不转发（由 loop 发出 turn-end）
@@ -34,8 +34,7 @@ export function llmEventToAgentEvents(
       return [{ type: "text-delta", messageId, text: event.text }];
 
     case "thinking-delta":
-      // AgentEvent 当前未定义 thinking-delta 事件
-      return [];
+      return [{ type: "thinking-delta", messageId, text: event.text }];
 
     case "tool-call":
       return [
