@@ -139,6 +139,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建、打包 |
 | [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent / Skill |
 | [实验沙箱](docs/SANDBOX.md) | 沙箱安全模型与编程接口 |
+| [评测与自优化](docs/EVALUATION.md) | 可观测性接入、评测模块使用手册、自优化流程 |
 | [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档 |
 
 ## 🧱 项目结构
