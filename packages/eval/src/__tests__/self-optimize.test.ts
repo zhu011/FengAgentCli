@@ -287,6 +287,25 @@ describe("diagnose 自优化诊断", () => {
     expect(tool!.evidence.some((e) => e.includes("s1"))).toBe(true);
   });
 
+  test("per-message judge 结果（judgeMessage 产出）可直接被 diagnose 消费 → 工具误用归因", () => {
+    // per-message 粒度：同一会话内多条消息各自评判，结构与 JudgeResult 一致
+    const result = buildResult({
+      judgeResults: [
+        { sessionId: "s1", completionScore: 30, correctnessScore: 30, conclusion: "tool_misused", note: "选错工具（message m1）" },
+        { sessionId: "s1", completionScore: 40, correctnessScore: 40, conclusion: "tool_misused", note: "参数错误（message m2）" },
+        { sessionId: "s1", completionScore: 20, correctnessScore: 20, conclusion: "failed", note: "中途失败（message m3）" },
+        { sessionId: "s1", completionScore: 90, correctnessScore: 95, conclusion: "completed", note: "正常（message m4）" },
+        { sessionId: "s1", completionScore: 95, correctnessScore: 96, conclusion: "completed", note: "正常（message m5）" },
+      ],
+    });
+
+    const suggestions = diagnose(result);
+    const tool = suggestions.find((s) => s.type === "tool-description" && s.title.includes("LLM-judge"));
+    expect(tool).toBeDefined();
+    expect(tool!.title).toContain("工具误用占 67%");
+    expect(tool!.evidence.some((e) => e.includes("m1"))).toBe(true);
+  });
+
   test("judge 判定 unsafe → 零容忍触发（不受 minSamples 限制）", () => {
     const result = buildResult({
       judgeResults: [
