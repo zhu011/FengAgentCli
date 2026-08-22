@@ -246,8 +246,12 @@ describe("buildCallChains", () => {
     const sess1 = chains.find((c) => c.sessionId === "sess-1");
     expect(sess1).toBeDefined();
     expect(sess1!.steps.map((s) => s.kind)).toEqual(["user", "llm", "user", "llm"]);
+    expect(sess1!.llmCallCount).toBe(2);
     expect(sess1!.toolCallCount).toBe(1);
     expect(sess1!.errorCount).toBe(0);
+    expect(sess1!.totalDurationMs).toBe(4000);
+    expect(sess1!.totalInputTokens).toBe(1100);
+    expect(sess1!.totalOutputTokens).toBe(300);
 
     const llm0 = sess1!.steps[1]!;
     expect(llm0.llm?.durationMs).toBe(3000);
@@ -396,7 +400,16 @@ describe("GET /api/observability", () => {
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      sessions: Array<{ sessionId: string; steps: Array<{ kind: string; messageId?: string }> }>;
+      sessions: Array<{
+        sessionId: string;
+        steps: Array<{ kind: string; messageId?: string }>;
+        llmCallCount: number;
+        toolCallCount: number;
+        totalInputTokens: number;
+        totalOutputTokens: number;
+        totalDurationMs: number;
+        errorCount: number;
+      }>;
       focus: { messageId: string; role: string; resolvedMessageIds: string[] } | null;
     };
     expect(body.sessions).toHaveLength(1);
@@ -404,6 +417,35 @@ describe("GET /api/observability", () => {
     expect(body.sessions[0]!.steps.map((s) => s.kind)).toEqual(["user", "llm"]);
     expect(body.sessions[0]!.steps[1]!.messageId).toBe("msg-2");
     expect(body.focus).toEqual({ messageId: "msg-2", role: "assistant", resolvedMessageIds: ["msg-2"] });
+    // 会话级指标重算为该轮对话指标（而非整会话 2 次 LLM 调用 / 1100+300 tokens）
+    expect(body.sessions[0]!.llmCallCount).toBe(1);
+    expect(body.sessions[0]!.toolCallCount).toBe(0);
+    expect(body.sessions[0]!.totalInputTokens).toBe(600);
+    expect(body.sessions[0]!.totalOutputTokens).toBe(200);
+    expect(body.sessions[0]!.totalDurationMs).toBe(1000);
+    expect(body.sessions[0]!.errorCount).toBe(0);
+  });
+
+  test("traces/:date/callchain?sessionId&messageId 工具轮次指标按该轮重算", async () => {
+    const res = await app.request(
+      `/api/observability/traces/${FIXTURE_DATE}/callchain?sessionId=sess-1&messageId=msg-1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      sessions: Array<{
+        llmCallCount: number;
+        toolCallCount: number;
+        totalInputTokens: number;
+        totalOutputTokens: number;
+        totalDurationMs: number;
+      }>;
+    };
+    // msg-1 轮：1 次 LLM 调用 + 1 次工具调用 + 500/100 tokens
+    expect(body.sessions[0]!.llmCallCount).toBe(1);
+    expect(body.sessions[0]!.toolCallCount).toBe(1);
+    expect(body.sessions[0]!.totalInputTokens).toBe(500);
+    expect(body.sessions[0]!.totalOutputTokens).toBe(100);
+    expect(body.sessions[0]!.totalDurationMs).toBe(3000);
   });
 
   test("traces/:date/callchain?sessionId&messageId 对不存在的消息返回空步骤", async () => {

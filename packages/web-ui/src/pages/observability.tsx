@@ -23,6 +23,7 @@ import {
   Database,
   FlaskConical,
   Loader2,
+  MessageSquare,
   RefreshCw,
   Wrench,
   Zap,
@@ -208,6 +209,54 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
     return { modelDuration, modelTokens, toolUsage, finishReasons };
   }, [analysis]);
 
+  /** per-message 聚焦的会话（服务端已把会话级指标重算为该轮对话指标） */
+  const focusedSession =
+    focusMessageId && focusedChain && focusedChain.sessions.length > 0
+      ? focusedChain.sessions[0]!
+      : null;
+
+  /** 单条对话级别的图表数据（从聚焦会话的步骤推导） */
+  const messageChartData = useMemo(() => {
+    if (!focusedSession) return null;
+    const llmSteps = focusedSession.steps.filter(
+      (s): s is typeof s & { llm: NonNullable<typeof s.llm> } => s.kind === "llm" && Boolean(s.llm),
+    );
+    const modelDuration = llmSteps.map((s) => ({
+      label: `LLM #${s.llm.index}`,
+      value: s.llm.durationMs ?? 0,
+      display: formatDuration(s.llm.durationMs ?? 0),
+    }));
+    const modelTokens = llmSteps.map((s) => ({
+      label: `LLM #${s.llm.index}`,
+      value: (s.llm.inputTokens ?? 0) + (s.llm.outputTokens ?? 0),
+      display: formatTokens((s.llm.inputTokens ?? 0) + (s.llm.outputTokens ?? 0)),
+    }));
+    const toolUsage: Record<string, number> = {};
+    const finishReasons: Record<string, number> = {};
+    for (const s of llmSteps) {
+      for (const t of s.tools) toolUsage[t.name] = (toolUsage[t.name] ?? 0) + 1;
+      const fr = s.llm.finishReason ?? "unknown";
+      finishReasons[fr] = (finishReasons[fr] ?? 0) + 1;
+    }
+    return {
+      modelDuration,
+      modelTokens,
+      toolUsage: Object.entries(toolUsage).map(([label, value]) => ({ label, value })),
+      finishReasons: Object.entries(finishReasons).map(([label, value]) => ({
+        label,
+        value,
+        color:
+          label === "end_turn"
+            ? "var(--success)"
+            : label === "error"
+              ? "var(--danger)"
+              : label === "tool_use"
+                ? "var(--accent)"
+                : "var(--warning)",
+      })),
+    };
+  }, [focusedSession]);
+
   const refresh = () => {
     void loadTraces();
     if (selectedDate) void loadDate(selectedDate);
@@ -293,16 +342,32 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
             )}
           </div>
           <div className="obs-banner__actions">
-            {focusMessageId && (
+            <div className="obs-banner__toggle" role="group" aria-label="指标范围切换">
               <button
                 type="button"
-                className="obs-banner__btn"
-                onClick={clearFocus}
-                title="查看该会话完整调用链"
+                className={`obs-banner__toggle-btn ${focusMessageId ? "obs-banner__toggle-btn--active" : ""}`}
+                onClick={() => {
+                  if (!focusMessageId) {
+                    // 从会话总览切到单条对话指标：自动选中第一条助手消息
+                    const first =
+                      messagePicker?.find((m) => m.role === "assistant" && m.messageId) ??
+                      messagePicker?.[0];
+                    if (first?.messageId) pickMessage(first.messageId);
+                  }
+                }}
+                title="仅展示该条对话的调用指标（工具调用 / token / 耗时）"
               >
-                <Activity size={13} /> 完整调用链
+                <MessageSquare size={13} /> 单条对话指标
               </button>
-            )}
+              <button
+                type="button"
+                className={`obs-banner__toggle-btn ${!focusMessageId ? "obs-banner__toggle-btn--active" : ""}`}
+                onClick={clearFocus}
+                title="展示该会话全部对话的总览指标"
+              >
+                <Activity size={13} /> 会话总览
+              </button>
+            </div>
             <button
               type="button"
               className="obs-banner__btn"
@@ -339,47 +404,85 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
 
       {selectedDate && (analysis || loading) && (
         <div className="obs-page__content">
-          {/* 汇总指标卡 */}
-          {analysis && (
+          {/* 汇总指标卡：聚焦单条消息时展示该轮对话指标，否则展示会话/当日总览 */}
+          {(analysis || focusedSession) && (
             <section className="obs-page__cards">
-              <MetricCard
-                label="LLM 调用"
-                value={String(analysis.totalLlmCalls)}
-                hint={`${analysis.sessionCount} 个会话`}
-                icon={<Bot size={18} />}
-              />
-              <MetricCard
-                label="平均耗时"
-                value={formatDuration(analysis.avgDurationMs)}
-                hint={`总耗时 ${formatDuration(analysis.totalDurationMs)}`}
-                icon={<Clock size={18} />}
-              />
-              <MetricCard
-                label="Token 用量"
-                value={formatTokens(analysis.totalInputTokens + analysis.totalOutputTokens)}
-                hint={`输入 ${formatTokens(analysis.totalInputTokens)} / 输出 ${formatTokens(analysis.totalOutputTokens)}`}
-                icon={<Zap size={18} />}
-              />
-              <MetricCard
-                label="工具调用"
-                value={`${analysis.toolCallCount} 次`}
-                hint={`调用率 ${analysis.toolCallRate}%`}
-                icon={<Wrench size={18} />}
-              />
-              <MetricCard
-                label="错误率"
-                value={`${analysis.errorRate}%`}
-                hint={`${analysis.errorCount} 次错误`}
-                icon={<AlertTriangle size={18} />}
-                tone={analysis.errorRate > 20 ? "bad" : analysis.errorRate > 0 ? "warn" : "good"}
-              />
-              <MetricCard
-                label="KV 缓存命中率"
-                value={`${analysis.cacheHitRate}%`}
-                hint={`读取 ${formatTokens(analysis.totalCacheReadTokens)} tokens`}
-                icon={<Database size={18} />}
-                tone={analysis.cacheHitRate >= 20 ? "good" : "warn"}
-              />
+              {focusedSession ? (
+                <>
+                  <MetricCard
+                    label="LLM 调用"
+                    value={String(focusedSession.llmCallCount)}
+                    hint={focusedSession.model || "该轮对话"}
+                    icon={<Bot size={18} />}
+                  />
+                  <MetricCard
+                    label="工具调用"
+                    value={`${focusedSession.toolCallCount} 次`}
+                    hint={focusedSession.toolCallCount > 0 ? "该轮对话" : "该轮无工具调用"}
+                    icon={<Wrench size={18} />}
+                  />
+                  <MetricCard
+                    label="Token 用量"
+                    value={formatTokens(focusedSession.totalInputTokens + focusedSession.totalOutputTokens)}
+                    hint={`输入 ${formatTokens(focusedSession.totalInputTokens)} / 输出 ${formatTokens(focusedSession.totalOutputTokens)}`}
+                    icon={<Zap size={18} />}
+                  />
+                  <MetricCard
+                    label="耗时"
+                    value={formatDuration(focusedSession.totalDurationMs)}
+                    hint="该轮 LLM 调用合计"
+                    icon={<Clock size={18} />}
+                  />
+                  <MetricCard
+                    label="错误"
+                    value={`${focusedSession.errorCount} 次`}
+                    hint={focusedSession.errorCount > 0 ? "该轮存在错误" : "该轮无错误"}
+                    icon={<AlertTriangle size={18} />}
+                    tone={focusedSession.errorCount > 0 ? "bad" : "good"}
+                  />
+                </>
+              ) : analysis ? (
+                <>
+                  <MetricCard
+                    label="LLM 调用"
+                    value={String(analysis.totalLlmCalls)}
+                    hint={`${analysis.sessionCount} 个会话`}
+                    icon={<Bot size={18} />}
+                  />
+                  <MetricCard
+                    label="平均耗时"
+                    value={formatDuration(analysis.avgDurationMs)}
+                    hint={`总耗时 ${formatDuration(analysis.totalDurationMs)}`}
+                    icon={<Clock size={18} />}
+                  />
+                  <MetricCard
+                    label="Token 用量"
+                    value={formatTokens(analysis.totalInputTokens + analysis.totalOutputTokens)}
+                    hint={`输入 ${formatTokens(analysis.totalInputTokens)} / 输出 ${formatTokens(analysis.totalOutputTokens)}`}
+                    icon={<Zap size={18} />}
+                  />
+                  <MetricCard
+                    label="工具调用"
+                    value={`${analysis.toolCallCount} 次`}
+                    hint={`调用率 ${analysis.toolCallRate}%`}
+                    icon={<Wrench size={18} />}
+                  />
+                  <MetricCard
+                    label="错误率"
+                    value={`${analysis.errorRate}%`}
+                    hint={`${analysis.errorCount} 次错误`}
+                    icon={<AlertTriangle size={18} />}
+                    tone={analysis.errorRate > 20 ? "bad" : analysis.errorRate > 0 ? "warn" : "good"}
+                  />
+                  <MetricCard
+                    label="KV 缓存命中率"
+                    value={`${analysis.cacheHitRate}%`}
+                    hint={`读取 ${formatTokens(analysis.totalCacheReadTokens)} tokens`}
+                    icon={<Database size={18} />}
+                    tone={analysis.cacheHitRate >= 20 ? "good" : "warn"}
+                  />
+                </>
+              ) : null}
             </section>
           )}
 
@@ -397,7 +500,7 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
               className={`obs-page__tab ${tab === "metrics" ? "obs-page__tab--active" : ""}`}
               onClick={() => setTab("metrics")}
             >
-              <Cpu size={14} /> 指标总览
+              <Cpu size={14} /> {focusedSession ? "本消息指标" : "指标总览"}
             </button>
           </div>
 
@@ -457,7 +560,71 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
             </section>
           ) : (
             <section className="obs-page__section">
-              {chartData && (
+              {focusedSession && messageChartData ? (
+                /* 单条对话指标：该轮对话的图表（非会话总览） */
+                <div className="obs-page__charts">
+                  <div className="obs-page__chart-card">
+                    <h3 className="obs-page__chart-title">各 LLM 调用耗时</h3>
+                    <BarChart data={messageChartData.modelDuration} color="var(--accent)" unit="" />
+                  </div>
+                  <div className="obs-page__chart-card">
+                    <h3 className="obs-page__chart-title">各 LLM 调用 Token（输入+输出）</h3>
+                    <BarChart data={messageChartData.modelTokens} color="var(--accent-2)" />
+                  </div>
+                  <div className="obs-page__chart-card">
+                    <h3 className="obs-page__chart-title">工具使用分布</h3>
+                    {messageChartData.toolUsage.length > 0 ? (
+                      <DonutChart
+                        data={messageChartData.toolUsage}
+                        centerLabel="工具调用"
+                        centerValue={String(focusedSession.toolCallCount)}
+                      />
+                    ) : (
+                      <p className="obs-page__chart-empty">该轮对话无工具调用</p>
+                    )}
+                  </div>
+                  <div className="obs-page__chart-card">
+                    <h3 className="obs-page__chart-title">完成原因分布</h3>
+                    <DonutChart
+                      data={messageChartData.finishReasons}
+                      centerLabel="LLM 调用"
+                      centerValue={String(focusedSession.llmCallCount)}
+                    />
+                  </div>
+                  {/* 该轮对话指标摘要表 */}
+                  <div className="obs-page__chart-card obs-page__chart-card--wide">
+                    <h3 className="obs-page__chart-title">该轮对话指标</h3>
+                    <div className="obs-page__table-wrap">
+                      <table className="obs-page__table">
+                        <thead>
+                          <tr>
+                            <th>模型</th>
+                            <th>LLM 调用</th>
+                            <th>工具调用</th>
+                            <th>错误</th>
+                            <th>耗时</th>
+                            <th>Token</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="obs-page__table-model">{focusedSession.model || "—"}</td>
+                            <td>{focusedSession.llmCallCount}</td>
+                            <td>{focusedSession.toolCallCount}</td>
+                            <td className={focusedSession.errorCount > 0 ? "obs-page__cell--bad" : ""}>
+                              {focusedSession.errorCount}
+                            </td>
+                            <td>{formatDuration(focusedSession.totalDurationMs)}</td>
+                            <td>
+                              {formatTokens(focusedSession.totalInputTokens + focusedSession.totalOutputTokens)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              ) : chartData ? (
                 <div className="obs-page__charts">
                   <div className="obs-page__chart-card">
                     <h3 className="obs-page__chart-title">模型平均耗时</h3>
@@ -524,7 +691,7 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
                     </div>
                   </div>
                 </div>
-              )}
+              ) : null}
             </section>
           )}
         </div>

@@ -10,6 +10,7 @@
  * per-message 查询（聊天页「查看调用链」deep-link）：
  *   GET /api/observability/traces/:date/callchain?sessionId=X&messageId=Y
  *     返回 X 会话中 messageId=Y 所在轮次的调用链（steps 已过滤），并携带 focus 解析结果。
+ *     会话级指标（llmCallCount / 工具调用 / token / 耗时 / 错误）同步重算为该轮对话的指标。
  *     messageId 为助手消息时直接命中 trace；为用户消息时通过会话消息解析到其后第一个
  *     助手轮次（工具循环产生的多个助手消息全部纳入）。会话消息不可用时退化为空步骤。
  *
@@ -149,6 +150,8 @@ export interface CallChainSession {
   sessionId: string;
   model: string;
   steps: CallChainStep[];
+  /** 已完成（有 response 配对）的 LLM 调用次数 */
+  llmCallCount: number;
   totalDurationMs: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -330,6 +333,35 @@ export function extractLiveSession(messages: Array<{
 }
 
 /**
+ * 从调用链步骤汇总指标（完整会话与 per-message 过滤链共用）。
+ *
+ * 只统计已完成（kind === "llm" 且有 llm 数据）的步骤：
+ * - LLM 调用次数 = llm 步骤数
+ * - 工具调用次数 = 所有 llm 步骤的 tools 总数
+ * - token / 耗时 / 错误 = llm 步骤字段求和
+ */
+export function summarizeSteps(
+  steps: CallChainStep[],
+): Pick<CallChainSession, "llmCallCount" | "totalDurationMs" | "totalInputTokens" | "totalOutputTokens" | "toolCallCount" | "errorCount"> {
+  let llmCallCount = 0;
+  let totalDurationMs = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let toolCallCount = 0;
+  let errorCount = 0;
+  for (const step of steps) {
+    if (step.kind !== "llm" || !step.llm) continue;
+    llmCallCount++;
+    totalDurationMs += step.llm.durationMs ?? 0;
+    totalInputTokens += step.llm.inputTokens ?? 0;
+    totalOutputTokens += step.llm.outputTokens ?? 0;
+    toolCallCount += step.tools.length;
+    if (step.llm.error) errorCount++;
+  }
+  return { llmCallCount, totalDurationMs, totalInputTokens, totalOutputTokens, toolCallCount, errorCount };
+}
+
+/**
  * 重建调用链。
  *
  * 算法：按文件顺序遍历记录，request 开启一个「用户消息 + LLM 节点」，
@@ -447,17 +479,11 @@ export function buildCallChains(
       }
     }
 
-    const responses = sessionRecords.filter((r) => r.direction === "response");
-    const toolCalls = responses.filter((r) => r.hasToolCalls);
     result.push({
       sessionId,
       model: sessionRecords[0]?.model ?? "",
       steps,
-      totalDurationMs: responses.reduce((s, r) => s + (r.durationMs ?? 0), 0),
-      totalInputTokens: responses.reduce((s, r) => s + (r.inputTokens ?? 0), 0),
-      totalOutputTokens: responses.reduce((s, r) => s + (r.outputTokens ?? 0), 0),
-      toolCallCount: toolCalls.reduce((s, r) => s + (r.toolCalls?.length ?? 0), 0),
-      errorCount: responses.filter((r) => r.error).length,
+      ...summarizeSteps(steps),
     });
   }
 
@@ -750,7 +776,8 @@ export function createObservabilityRoutes(options: ObservabilityOptions = {}): H
       if (target) {
         const sessionMessages = options.getSessionMessages?.(target.sessionId);
         const filtered = filterCallChainByMessage(target, messageId, sessionMessages);
-        sessions = [{ ...target, steps: filtered.steps }];
+        // per-message 聚焦：会话级指标重算为该轮对话的指标（工具调用/token/耗时/LLM 次数）
+        sessions = [{ ...target, steps: filtered.steps, ...summarizeSteps(filtered.steps) }];
         focus = filtered.focus;
       } else {
         sessions = [];
