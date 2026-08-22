@@ -9,14 +9,29 @@
  *   bun run eval --date=2026-08-13                            # 分析指定日期
  *   bun run eval --all                                        # 分析所有日志
  *   bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl  # 分析指定文件
+ *   bun run eval --optimize                                   # 分析 + 自优化诊断（输出建议报告）
  */
 
 export { parseLogFile, findLogFile, findAllLogFiles, analyzeRecords } from "./analyzer.ts";
 export type { TraceRecord, SessionTrace, AnalysisResult, ModelComparison } from "./analyzer.ts";
 export { generateMarkdownReport, outputReport } from "./reporter.ts";
+export {
+  diagnose,
+  runSelfOptimize,
+  renderSuggestionsMarkdown,
+  DEFAULT_THRESHOLDS,
+} from "./self-optimize.ts";
+export type {
+  OptimizationSuggestion,
+  OptimizationPlan,
+  OptimizationThresholds,
+  SuggestionType,
+  Severity,
+} from "./self-optimize.ts";
 
 import { findLogFile, findAllLogFiles, parseLogFile, analyzeRecords } from "./analyzer.ts";
 import { outputReport } from "./reporter.ts";
+import { runSelfOptimize, renderSuggestionsMarkdown } from "./self-optimize.ts";
 
 /**
  * 运行评测分析。
@@ -29,6 +44,8 @@ export async function runEval(options?: {
   file?: string;
   logDir?: string;
   excludeModels?: string[];
+  /** 评测后运行自优化诊断（写入 .fengagent/optimizations/ 建议报告） */
+  optimize?: boolean;
 }): Promise<void> {
   let files: string[];
 
@@ -70,13 +87,25 @@ export async function runEval(options?: {
 
     const result = analyzeRecords(records, file);
     outputReport(result);
+
+    if (options?.optimize) {
+      console.log("\n==== 自优化诊断 ====");
+      const plan = runSelfOptimize(result, { writeReport: true });
+      console.log(renderSuggestionsMarkdown(plan));
+    }
   }
 }
 
 // CLI 入口
 if (import.meta.main) {
   const args = process.argv.slice(2);
-  const options: { date?: string; all?: boolean; file?: string; excludeModels?: string[] } = {};
+  const options: {
+    date?: string;
+    all?: boolean;
+    file?: string;
+    excludeModels?: string[];
+    optimize?: boolean;
+  } = {};
 
   for (const arg of args) {
     if (arg.startsWith("--date=")) {
@@ -87,6 +116,8 @@ if (import.meta.main) {
       options.file = arg.slice("--file=".length);
     } else if (arg.startsWith("--exclude-model=")) {
       options.excludeModels = arg.slice("--exclude-model=".length).split(",").map((s) => s.trim());
+    } else if (arg === "--optimize") {
+      options.optimize = true;
     }
   }
 
