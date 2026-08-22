@@ -29,6 +29,14 @@ export type {
   SuggestionType,
   Severity,
 } from "./self-optimize.ts";
+export {
+  judgeSession,
+  judgeAllSessions,
+  mergeJudgeResults,
+  buildSessionSummary,
+  parseJudgeResponse,
+} from "./judge.ts";
+export type { JudgeOptions } from "./judge.ts";
 
 import { findLogFile, findAllLogFiles, parseLogFile, analyzeRecords } from "./analyzer.ts";
 import { outputReport } from "./reporter.ts";
