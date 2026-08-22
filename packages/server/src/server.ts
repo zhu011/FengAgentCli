@@ -18,6 +18,7 @@ import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import type { Config } from "@fengagent/core";
 import type { Agent } from "@fengagent/agent";
+import type { LLMClient } from "@fengagent/llm";
 import { SessionManager } from "./session-manager.ts";
 import { createSessionRoutes } from "./routes/sessions.ts";
 import { createModelRoutes } from "./routes/models.ts";
@@ -35,6 +36,8 @@ export interface ServerOptions {
   staticDir?: string;
   /** 可选的 SessionStore，用于跨重启恢复历史会话 */
   sessionStore?: import("@fengagent/agent").SessionStore;
+  /** LLM 客户端（可选；评测模块 per-message judgeMessage 使用，缺失时 judge 返回 null） */
+  llmClient?: LLMClient;
 }
 
 /**
@@ -54,7 +57,7 @@ export function createApp(options: ServerOptions): {
   app: Hono;
   sessionManager: SessionManager;
 } {
-  const { config, createAgent, staticDir, sessionStore } = options;
+  const { config, createAgent, staticDir, sessionStore, llmClient } = options;
 
   // 创建会话管理器
   const sessionManager = new SessionManager({ createAgent, sessionStore });
@@ -99,6 +102,8 @@ export function createApp(options: ServerOptions): {
       const session = sessionManager.getSession(sessionId);
       return session?.messages as unknown as import("./routes/observability.ts").SessionMessageLike[] | undefined;
     },
+    // per-message LLM-judge：llmClient 缺失时 judge 返回 null（评测页展示等待接入提示）
+    llmClient,
   }));
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）

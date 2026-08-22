@@ -9,11 +9,12 @@
  * - GET /api/observability/traces/:date/messages?sessionId（消息粒度摘要）
  * - GET /api/eval/overview（报告/建议/测试集清单）
  * - GET /api/eval/messages/:date?sessionId&messageId（单条消息评测）
+ * - GET /api/eval/messages/:date judgeMessage 接入（llmClient 提供时 judge 由 judgeMessage 填充）
  * - GET /api/eval/reports/:date、/optimizations/:date、/testsets/:name
  * - 日期格式校验与 404 行为
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,7 +26,9 @@ import {
   filterCallChainByMessage,
   type SessionMessageLike,
 } from "../routes/observability.ts";
+import { createEvalRoutes } from "../routes/eval.ts";
 import type { TraceRecord } from "@fengagent/eval";
+import type { LLMClient, LLMRequest, LLMResponse } from "@fengagent/llm";
 
 // ──────────────────────────────────────────────
 // Fixture：临时数据根（llm-trace + 评测报告 + 优化建议 + 测试集）
@@ -168,6 +171,26 @@ const liveMessages = [
     content: [{ type: "tool-result", toolUseId: "tu-1", content: "src/  packages/  docs/", isError: false }],
   },
 ];
+
+/** 创建 mock LLM 客户端（judgeMessage 接入测试用；返回固定 judge JSON） */
+function createMockLLMClient(responseContent: string): {
+  client: LLMClient;
+  generateMock: ReturnType<typeof mock>;
+} {
+  const mockResponse: LLMResponse = {
+    id: "mock-judge-resp",
+    model: "mock-judge",
+    content: [{ type: "text", text: responseContent }],
+    usage: { inputTokens: 100, outputTokens: 50 },
+    finishReason: "end_turn",
+  };
+  const generateMock = mock(async () => mockResponse);
+  const client = {
+    generate: generateMock,
+    stream: async function* () {},
+  } as unknown as LLMClient;
+  return { client, generateMock };
+}
 
 beforeAll(() => {
   dataRoot = join(tmpdir(), `fengagent-obs-test-${Date.now()}`);
@@ -471,7 +494,7 @@ describe("GET /api/eval", () => {
     expect(body.message).toEqual({ role: "assistant", text: "分析完成" });
     expect(body.trace?.llmCallCount).toBe(1);
     expect(body.trace?.finishReasons).toEqual(["end_turn"]);
-    // judge 为 KG judgeMessage 扩展点，当前为 null
+    // 未配置 llmClient 时 judge 为 null（judgeMessage 接入后由 llmClient 填充）
     expect(body.judge).toBeNull();
   });
 
@@ -488,5 +511,142 @@ describe("GET /api/eval", () => {
     expect((await app.request("/api/eval/reports/1999-01-01")).status).toBe(404);
     expect((await app.request("/api/eval/reports/not-a-date")).status).toBe(400);
     expect((await app.request("/api/eval/testsets/..%2F..%2Fsecret")).status).toBe(400);
+  });
+});
+
+// ──────────────────────────────────────────────
+// judgeMessage 接入（R2）：GET /api/eval/messages/:date
+// 路由层从 filtered.steps 提取 model + 工具名/参数构建 MessageTraceInfo，
+// 调用 judgeMessage() 后合并 { ...judgeResult, messageId } 回填 judge 字段。
+// ──────────────────────────────────────────────
+
+describe("GET /api/eval/messages/:date — judgeMessage 接入", () => {
+  const JUDGE_JSON = `{"completionScore": 95, "correctnessScore": 100, "conclusion": "completed", "note": "工具使用正确，任务完成"}`;
+
+  /** 带 llmClient 的完整 app（与 beforeAll 同一数据根） */
+  function createJudgeApp(llmClient: LLMClient) {
+    const { app: judgeApp } = createApp({
+      config: {
+        model: "test-model",
+        smallModel: "test-small-model",
+        provider: "anthropic",
+        maxTokens: 4096,
+        temperature: 1.0,
+        contextWindow: 200_000,
+        serverHost: "127.0.0.1",
+        serverPort: 0,
+        corsOrigin: "*",
+      } as never,
+      createAgent: () => ({}) as never,
+      sessionStore: undefined,
+      llmClient,
+    });
+    return judgeApp;
+  }
+
+  test("llmClient 接入后 judge 由 judgeMessage 填充（messageId 合并）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const judgeApp = createJudgeApp(client);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { judge: Record<string, unknown> | null };
+    expect(body.judge).toEqual({
+      messageId: "msg-1",
+      sessionId: "sess-1",
+      completionScore: 95,
+      correctnessScore: 100,
+      conclusion: "completed",
+      note: "工具使用正确，任务完成",
+    });
+
+    // LLM 请求已提取 model + 工具名/参数 + 用户/助手文本（MessageTraceInfo）
+    const req = generateMock.mock.calls[0]![0] as LLMRequest;
+    expect(req.model).toBe("model-a");
+    const summaryText = (req.messages[0]!.content[0] as { text: string }).text;
+    expect(summaryText).toContain("模型: model-a");
+    expect(summaryText).toContain("分析项目结构");
+    expect(summaryText).toContain("我将运行 bash 查看目录");
+    expect(summaryText).toContain('bash({"command":"ls -la"})');
+    expect(summaryText).toContain("完成原因: tool_use");
+  });
+
+  test("无工具调用的消息也能评判（工具名/参数为空列表）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const judgeApp = createJudgeApp(client);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-2`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { judge: { messageId: string; conclusion: string } | null };
+    expect(body.judge).toMatchObject({ messageId: "msg-2", conclusion: "completed" });
+
+    const req = generateMock.mock.calls[0]![0] as LLMRequest;
+    const summaryText = (req.messages[0]!.content[0] as { text: string }).text;
+    expect(summaryText).not.toContain("工具调用:");
+    expect(summaryText).toContain("分析完成");
+  });
+
+  test("LLM 调用失败时 judge 返回 failed 结果（judgeMessage 容错）", async () => {
+    const errorClient = {
+      generate: mock(async () => {
+        throw new Error("timeout");
+      }),
+      stream: async function* () {},
+    } as unknown as LLMClient;
+    const judgeApp = createJudgeApp(errorClient);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { judge: { messageId: string; conclusion: string; note: string } | null };
+    expect(body.judge).toMatchObject({ messageId: "msg-1", sessionId: "sess-1", conclusion: "failed" });
+    expect(body.judge!.note).toContain("timeout");
+  });
+
+  test("用户消息 deep-link 也触发 judge（userText 提取到 MessageTraceInfo）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    // 直接构造 eval 路由（注入会话消息，用户消息 → 助手轮次解析）
+    const routeApp = createEvalRoutes({
+      logDir: join(dataRoot, "logs"),
+      getSessionMessages: () => SESSION_MESSAGES,
+      llmClient: client,
+    });
+
+    const res = await routeApp.request(
+      `/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=user-1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      focus: { role: string };
+      message: { role: string; text: string } | null;
+      judge: { messageId: string } | null;
+    };
+    expect(body.focus?.role).toBe("user");
+    expect(body.message).toEqual({ role: "user", text: "分析项目结构" });
+    expect(body.judge).toMatchObject({ messageId: "user-1" });
+
+    const req = generateMock.mock.calls[0]![0] as LLMRequest;
+    const summaryText = (req.messages[0]!.content[0] as { text: string }).text;
+    expect(summaryText).toContain("分析项目结构");
+    expect(summaryText).toContain('bash({"command":"ls -la"})');
+  });
+
+  test("无匹配消息时 judge 为 null（无 trace 步骤不触发 LLM 调用）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const judgeApp = createJudgeApp(client);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=ghost`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { trace: unknown; judge: unknown };
+    expect(body.trace).toBeNull();
+    expect(body.judge).toBeNull();
+    expect(generateMock.mock.calls).toHaveLength(0);
   });
 });

@@ -82,6 +82,8 @@ export async function main(argv: string[]): Promise<void> {
       staticDir,
       // Phase 3：跨重启恢复历史会话（与 ctx.storage 同一份 SessionStore）
       sessionStore: runtimeResult.sessionStore ?? undefined,
+      // per-message LLM-judge（评测模块 judgeMessage）
+      llmClient: runtimeResult.llmClient,
     });
     return;
   }

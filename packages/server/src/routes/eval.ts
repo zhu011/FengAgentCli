@@ -6,10 +6,12 @@
  *   GET /api/eval/reports/:date         — 指定日期的评测报告（Markdown）
  *   GET /api/eval/optimizations/:date   — 指定日期的自优化建议报告（Markdown）
  *   GET /api/eval/messages/:date?sessionId=X&messageId=Y — 单条消息评测
- *     （trace 摘要 + judge 扩展点；聊天页「查看评测」deep-link 消费。
- *       judge 字段当前为 null，R2/R3 由 KG 的 judgeMessage(sessionId, messageId)
- *       填充，结构对齐 JudgeResult：completionScore / correctnessScore /
- *      conclusion / note，维度为 messageId。）
+ *     （trace 摘要 + LLM-judge 结果；聊天页「查看评测」deep-link 消费。
+ *       judge 字段由路由层接入 KG 的 judgeMessage() 填充：从 filtered.steps
+ *       提取 model + 工具名/参数构建 MessageTraceInfo → judgeMessage() →
+ *       合并 { ...judgeResult, messageId }，结构对齐 JudgeResult：
+ *       completionScore / correctnessScore / conclusion / note，维度为 messageId。
+ *       未配置 llmClient 时 judge 为 null。）
  *
  * 数据源约定（见 docs/EVALUATION.md 二、三）：
  *   - 评测报告：<数据根>/logs/eval-report-{date}.md（bun run eval 落盘）
@@ -22,13 +24,16 @@ import { Hono } from "hono";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "@fengagent/shared";
-import { parseLogFile } from "@fengagent/eval";
+import { parseLogFile, judgeMessage } from "@fengagent/eval";
+import type { JudgeResult, MessageTraceInfo } from "@fengagent/eval";
+import type { LLMClient } from "@fengagent/llm";
 import {
   buildCallChains,
   filterCallChainByMessage,
   resolveBranchDataRoot,
   traceFileForDate,
   type CallChainFocus,
+  type CallChainStep,
   type SessionMessageLike,
 } from "./observability.ts";
 
@@ -73,6 +78,8 @@ export interface EvalRoutesOptions {
   testsetsDir?: string;
   /** 会话消息提取器（可选；用于 per-message 评测：用户消息 → 助手轮次解析） */
   getSessionMessages?: (sessionId: string) => SessionMessageLike[] | undefined;
+  /** LLM 客户端（可选；per-message 评测 judgeMessage 使用，缺失时 judge 返回 null） */
+  llmClient?: LLMClient;
 }
 
 /** 单条消息评测：trace 指标摘要 */
@@ -98,11 +105,12 @@ export interface MessageEvalResponse {
   /** 该消息轮次的 trace 指标摘要 */
   trace: MessageEvalTrace | null;
   /**
-   * 单条消息 LLM-judge 结果（扩展点）。
-   * 当前为 null；R2/R3 由 KG 的 judgeMessage(sessionId, messageId) 填充，
-   * 结构对齐 JudgeResult：{ messageId, sessionId, completionScore, correctnessScore, conclusion, note? }。
+   * 单条消息 LLM-judge 结果（路由层接入 judgeMessage() 填充）。
+   * 结构对齐 JudgeResult 并合并 messageId：
+   * { messageId, sessionId, completionScore, correctnessScore, conclusion, note? }。
+   * 未配置 llmClient 或该消息无 trace 步骤时为 null。
    */
-  judge: null;
+  judge: (JudgeResult & { messageId: string }) | null;
 }
 
 /** 列出 `prefix-date.ext` 形态的文件并解析日期 */
@@ -140,6 +148,54 @@ function summarizeTestSet(path: string): Pick<TestSetMeta, "records" | "valid" |
   } catch {
     return { records: 0, valid: false, shape: "invalid-json" };
   }
+}
+
+/** 工具参数序列化为字符串（MessageTraceInfo.toolCalls.input 约定为 string） */
+function stringifyToolInput(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (input === undefined || input === null) return "";
+  const str = JSON.stringify(input);
+  return typeof str === "string" ? str : "";
+}
+
+/**
+ * 从过滤后的调用链步骤提取 judgeMessage 输入（MessageTraceInfo）。
+ *
+ * 数据源是 filtered.steps（buildCallChains + filterCallChainByMessage 产出）：
+ * - userText       — 轮次内的用户步骤文本
+ * - assistantText  — 点击消息对应的 LLM 步骤回复文本（工具循环多步时取首步）
+ * - toolCalls      — 该轮次全部 LLM 步骤的工具调用（名 + 序列化参数）
+ * - finishReasons / errors — 全部 LLM 步骤聚合
+ * - model          — 点击消息对应 LLM 步骤的模型（缺失时取首个 LLM 步骤）
+ */
+function buildMessageTraceInfo(
+  sessionId: string,
+  messageId: string,
+  filteredSteps: CallChainStep[],
+): MessageTraceInfo {
+  const llmSteps = filteredSteps.filter((s) => s.kind === "llm");
+  const primary =
+    llmSteps.find((s) => s.messageId === messageId) ?? llmSteps[0];
+  const userStep = filteredSteps.find((s) => s.kind === "user");
+
+  const toolCalls = llmSteps.flatMap((s) =>
+    s.tools.map((t) => ({ name: t.name, input: stringifyToolInput(t.input) })),
+  );
+
+  return {
+    sessionId,
+    messageId,
+    userText: userStep?.user?.text ?? "",
+    assistantText: primary?.llm?.responseText ?? "",
+    toolCalls,
+    finishReasons: llmSteps
+      .map((s) => s.llm?.finishReason)
+      .filter((r): r is string => Boolean(r)),
+    errors: llmSteps
+      .map((s) => s.llm?.error)
+      .filter((e): e is string => Boolean(e)),
+    model: primary?.llm?.model ?? "",
+  };
 }
 
 /** 创建评测模块路由 */
@@ -222,7 +278,7 @@ export function createEvalRoutes(options: EvalRoutesOptions = {}): Hono {
   });
 
   // GET /messages/:date?sessionId=X&messageId=Y — 单条消息评测（聊天页「查看评测」deep-link）
-  app.get("/messages/:date", (c) => {
+  app.get("/messages/:date", async (c) => {
     const date = c.req.param("date");
     const sessionId = c.req.query("sessionId") ?? "";
     const messageId = c.req.query("messageId") ?? "";
@@ -276,7 +332,25 @@ export function createEvalRoutes(options: EvalRoutesOptions = {}): Hono {
       if (text) message = { role: "user", text };
     }
 
-    log.info("eval", `messageEval date=${date} sessionId=${sessionId} messageId=${messageId} llmSteps=${llmSteps.length}`);
+    // LLM-judge 单条消息评测（R2：接入 judgeMessage）
+    // 从 filtered.steps 提取 model + 工具名/参数构建 MessageTraceInfo，
+    // 调用 judgeMessage() 后合并 { ...judgeResult, messageId } 回填 judge 字段。
+    let judge: MessageEvalResponse["judge"] = null;
+    if (options.llmClient && filtered && llmSteps.length > 0) {
+      try {
+        const info = buildMessageTraceInfo(sessionId, messageId, filtered.steps);
+        const judgeResult = await judgeMessage(info, { llmClient: options.llmClient });
+        judge = { ...judgeResult, messageId };
+      } catch (err) {
+        log.warn(
+          "eval",
+          `judgeMessage failed sessionId=${sessionId} messageId=${messageId} err=${err instanceof Error ? err.message : String(err)}`,
+        );
+        judge = null;
+      }
+    }
+
+    log.info("eval", `messageEval date=${date} sessionId=${sessionId} messageId=${messageId} llmSteps=${llmSteps.length} judged=${judge !== null}`);
     return c.json({
       date,
       sessionId,
@@ -284,7 +358,7 @@ export function createEvalRoutes(options: EvalRoutesOptions = {}): Hono {
       focus,
       message,
       trace,
-      judge: null,
+      judge,
     } satisfies MessageEvalResponse);
   });
 
