@@ -95,6 +95,34 @@ const result = analyzeRecords(records, "llm-trace-2026-08-13.jsonl");
 await runEval({ date: "2026-08-13" }); // 或 CLI
 ```
 
+### 2.5 观测面板与评测页面（WebUI 使用说明）
+
+启动服务后访问 `http://127.0.0.1:3000`，顶栏导航含 **对话 / 观测 / 评测** 三个页面：
+
+```bash
+bun run serve        # 生产模式（后端 + 静态前端）
+# 或开发模式：bun run dev（server:3000 + web-ui:5180）
+```
+
+**📡 观测页（AgentLoop 观测面板）**
+
+| 区块 | 操作 | 说明 |
+|------|------|------|
+| 日期切换 | 顶部分日选择 | 选择要分析的 trace 日期（对应 `llm-trace-{date}.jsonl`） |
+| 汇总指标卡 | 自动展示 | LLM 调用数 / 平均耗时 / Token / 工具调用 / 错误数 / 缓存命中率 |
+| 调用链树 | 点击节点**展开 / 折叠** | 「会话 → 消息 → LLM 调用 → 工具调用」四层树形还原；LLM 节点展开显示模型、耗时、输入/输出 token、KV cache、完成原因、回复摘要；工具节点显示参数 JSON、返回结果、耗时、成功/失败标识 |
+| 指标图表 | 自动展示 | 模型平均耗时/Token 对比图、工具使用分布、完成原因图、模型对比表 |
+
+**🧪 评测页（评测模块 UI）**
+
+| 区块 | 操作 | 说明 |
+|------|------|------|
+| 测试集管理 | 清单浏览 / JSON 查看 / 导出 | 展示 `<数据根>/testsets/*.json`（AgentBench / DeepEval 风格），宽容解析各类结构 |
+| 评测报告 | 按日期浏览 + 导出 | `bun run eval` 生成的 `eval-report-{date}.md` Markdown 渲染 |
+| 自优化建议 | 按日期浏览 + 导出 | `bun run eval --optimize` 生成的 `optimization-{date}.md` 渲染（含 LLM-judge 结论驱动建议） |
+
+> 数据源约定：观测页与评测页消费同一 `AnalysisResult`（`@fengagent/eval` 分析器）与落盘报告文件，命令行与 WebUI 看到的是同一份数据。
+
 ## 三、自优化流程说明
 
 ### 3.1 闭环流程
