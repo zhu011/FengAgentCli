@@ -117,6 +117,13 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 - 右侧面板：权限审批、消息检查器、对话图（分支可视化 / 回退，三套主题自适应）
 - 底部状态栏：输入 / 输出 / 缓存命中 / 命中率 / 合计 tokens
 
+### 可观测性 / 评测 / 自优化
+
+- **观测**：每次 LLM 调用自动落盘 trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`，含耗时 / token / 工具调用 / 错误，测试环境自动跳过）。WebUI 顶栏「📡 观测」页：日期切换 + 汇总指标卡 + **调用链树**（会话→消息→LLM 调用→工具调用四层展开，节点含参数 / 返回 / 耗时 / token 明细）+ 指标图表
+- **评测**：`bun run eval` 分析 trace 生成报告（`<数据根>/logs/eval-report-{date}.md`）；支持 `--date= / --all / --file= / --exclude-model=`；WebUI「🧪 评测」页：测试集管理（`<数据根>/testsets/*.json`）、报告浏览与导出
+- **自优化**：`bun run eval --optimize` 评测后自动诊断，输出可执行调优建议（系统提示词 / 工具描述 / 上下文策略，含 LLM-judge 结论驱动规则）至 `<数据根>/optimizations/optimization-{date}.md`，WebUI 评测页可直接浏览
+- 完整说明见 [docs/EVALUATION.md](docs/EVALUATION.md)（可观测性接入 / 评测手册 / 自优化流程 / LLM-judge 数据结构对齐）
+
 ### 配置
 
 完整环境变量与配置说明见 [docs/CONFIGURATION.md](docs/CONFIGURATION.md)，常用：

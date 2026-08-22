@@ -1075,8 +1075,21 @@ max_turns: 20
 bun run eval --date=2026-08-16                 # 分析指定日期
 bun run eval --all                             # 分析全部日志
 bun run eval --file=.fengagent-cordis/logs/llm-trace-2026-08-16.jsonl  # 指定文件
-bun run eval --exclude-model=test-model,custom-model   # 排除 mock 模型</code></pre>
-  <p>报告输出到 <code>&lt;数据根&gt;/logs/eval-report-{date}.md</code>。</p>
+bun run eval --exclude-model=test-model,custom-model   # 排除 mock 模型
+bun run eval --optimize                        # 评测 + 自优化诊断（输出调优建议）</code></pre>
+  <p>报告输出到 <code>&lt;数据根&gt;/logs/eval-report-{date}.md</code>；自优化建议输出到
+    <code>&lt;数据根&gt;/optimizations/optimization-{date}.md</code>。</p>
+  <p><strong>观测面板（WebUI）</strong>：顶栏「📡 观测」页——日期切换 + 汇总指标卡 +
+    <strong>调用链树</strong>（会话→消息→LLM 调用→工具调用四层展开 / 折叠，节点显示
+    模型、耗时、输入/输出 token、KV cache、完成原因，工具节点显示参数 JSON、返回结果、
+    成功/失败）+ 指标图表（模型对比 / 工具分布 / 完成原因）。</p>
+  <p><strong>评测模块（WebUI）</strong>：顶栏「🧪 评测」页——测试集管理
+    （<code>&lt;数据根&gt;/testsets/*.json</code>，AgentBench / DeepEval 风格）、评测报告与
+    自优化建议浏览（Markdown 渲染）+ 导出。</p>
+  <p><strong>LLM-judge 评测</strong>：评测引擎可对 trace 会话做完成度 / 正确性打分
+    （分数 0-100），结论枚举 completed / partial / failed / tool_misused / unsafe /
+    inefficient；判定结果合并进分析结果后，自优化诊断将据此生成归因建议（工具误用 →
+    工具描述，安全风险 → 零容忍，详见 <a href="docs/EVALUATION.md">docs/EVALUATION.md</a>）。</p>
 </section>
 
 <!-- ==================== 命令参考 ==================== -->
@@ -1153,7 +1166,10 @@ bun run eval --all
 bun run eval --file=.fengagent-cordis/logs/llm-trace-2026-08-13.jsonl
 
 # 排除 mock 模型（如测试用 test-model）
-bun run eval --date=2026-08-16 --exclude-model=test-model,custom-model</code></pre>
+bun run eval --date=2026-08-16 --exclude-model=test-model,custom-model
+
+# 评测 + 自优化诊断（基于评测结果自动生成调优建议）
+bun run eval --optimize</code></pre>
 </section>
 
 <!-- ==================== API 文档 ==================== -->
