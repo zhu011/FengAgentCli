@@ -197,6 +197,8 @@ export interface CallChainSession {
   sessionId: string;
   model: string;
   steps: CallChainStep[];
+  /** 已完成（有 response 配对）的 LLM 调用次数 */
+  llmCallCount: number;
   totalDurationMs: number;
   totalInputTokens: number;
   totalOutputTokens: number;
