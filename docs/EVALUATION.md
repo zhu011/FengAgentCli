@@ -104,7 +104,7 @@ await runEval({ date: "2026-08-13" }); // 或 CLI
 ```
 bun run eval --optimize
   ├─ 分析日志（analyzeRecords）
-  ├─ 规则诊断（diagnose：七类规则，阈值触发）
+  ├─ 规则诊断（diagnose：规则 + LLM-judge 结论，阈值触发）
   └─ 建议报告落盘 <数据根>/optimizations/optimization-{date}.md
         ↓
 人工 / 评测协作方审阅建议（本模块保守默认：只出建议、不自动改配置）
@@ -118,6 +118,8 @@ bun run eval --optimize
 
 参考 DeepEval 六项 Agent 指标（任务完成 / 步骤效率 / 工具正确性 / 参数正确性 / 计划质量 / 计划遵循）与美团「结果 / 过程 / 效率 / 风险」四层归因，默认阈值见 `DEFAULT_THRESHOLDS`（`packages/eval/src/self-optimize.ts`）：
 
+**A. 指标规则（基于 trace 聚合指标，不依赖 judge）**
+
 | # | 触发条件（默认阈值） | 建议类型 | 归因层 |
 |---|---------------------|---------|--------|
 | 1 | 任务完成率 < 60%（end_turn 占比） | system-prompt | 结果 |
@@ -129,7 +131,32 @@ bun run eval --optimize
 | 7 | max_tokens / stop_sequence 截断占比 > 30% | context（maxTokens / 压缩） | 过程 |
 | 8 | 工具调用率 < 10% 且会话数 ≥ 3 | workflow（工具可见性） | 过程 |
 
-每条建议包含：触发依据（指标数值 + 阈值）、样本证据（错误消息 / 完成原因分布）、具体修改建议——支持按归因维度（规划 / 工具 / 上下文）快速定位问题。
+**B. LLM-judge 规则（KG 评测引擎产出 `judgeResults` 后生效，基数 ≥ judgeMinSamples=3）**
+
+| # | 触发条件（默认阈值） | 建议类型 | 归因层 |
+|---|---------------------|---------|--------|
+| 9 | judge 平均完成度 < 60 或未完成（failed/partial/tool_misused）占比 > 30%；其中工具误用占未完成 ≥ 50% | tool-description（更细归因） | 结果 + 过程 |
+| 10 | 同上，但工具误用占比 < 50% | system-prompt（对照 judge note 定位规划问题） | 结果 |
+| 11 | judge 判定 unsafe 达到 1 个（零容忍，不受基数限制） | system-prompt（安全约束） | 风险 |
+| 12 | judge 判定 inefficient 占比 > 30% | workflow（步骤冗余） | 效率 |
+
+每条建议包含：触发依据（指标数值 + 阈值）、样本证据（错误消息 / 完成原因分布 / judge note）、具体修改建议——支持按归因维度（规划 / 工具 / 上下文）快速定位问题。
+
+### 3.3 LLM-judge 数据结构对齐（KG 评测引擎 ↔ 自优化诊断器）
+
+`judgeResults` 为 `AnalysisResult` 的可选字段（`packages/eval/src/analyzer.ts` 的 `JudgeResult` 类型），由评测引擎的 LLM-judge 评测产出后合并（`analyzeRecords` 不产生此字段）。数据结构约定：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sessionId` | string | 判定的会话 ID（与 `TraceRecord.sessionId` 对应） |
+| `completionScore` | number 0–100 | 任务完成度分数（DeepEval TaskCompletionMetric；越小问题越严重） |
+| `correctnessScore` | number 0–100 | 输出正确性分数（与任务目标符合度） |
+| `conclusion` | 枚举 | `completed` 完成 / `partial` 部分完成 / `failed` 未完成 / `tool_misused` 工具误用 / `unsafe` 安全风险 / `inefficient` 效率低 |
+| `note` | string（可选） | 判定依据（展示为证据） |
+
+- **分数区间统一 0–100**，与现有百分比指标一致；
+- **结论枚举驱动归因**：`tool_misused` → 工具描述问题、`unsafe` → 安全约束、`inefficient` → 步骤效率、其余未完成 → 系统提示词规划问题；
+- 评测引擎产出 `JudgeResult[]` 后调用 `diagnose(result)`（result.judgeResults 合并即可），自优化侧无需改动接口。
 
 ### 3.3 阈值配置
 

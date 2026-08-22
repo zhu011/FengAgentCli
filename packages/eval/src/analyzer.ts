@@ -69,6 +69,30 @@ export interface ModelComparison {
   cacheHitRate: number;
 }
 
+/**
+ * LLM-judge 对单个会话的判定结果（由评测引擎的 LLM-judge 评测产出）。
+ *
+ * 数据结构对齐约定（KG 评测引擎 ↔ self-optimize 诊断器）：
+ * - 输入字段：sessionId（与 TraceRecord.sessionId 对应）+ 分数 + 结论枚举
+ * - 分数区间：0–100（与现有百分比指标一致，越小问题越严重）
+ * - 结论枚举：completed / partial / failed / tool_misused / unsafe / inefficient
+ *
+ * 评测引擎产出后合并进 AnalysisResult.judgeResults（analyzeRecords 不产生此字段）。
+ */
+export interface JudgeResult {
+  /** 判定的会话 ID（对应 TraceRecord.sessionId） */
+  sessionId: string;
+  /** 任务完成度分数 0–100（对应 DeepEval TaskCompletionMetric） */
+  completionScore: number;
+  /** 输出正确性分数 0–100（与任务目标的符合度） */
+  correctnessScore: number;
+  /** 结论枚举：completed 完成 / partial 部分完成 / failed 未完成 /
+   *  tool_misused 工具误用（选型或参数错误）/ unsafe 安全风险 / inefficient 效率低 */
+  conclusion: "completed" | "partial" | "failed" | "tool_misused" | "unsafe" | "inefficient";
+  /** 判定依据（judge 的说明，供证据展示） */
+  note?: string;
+}
+
 /** 一个会话的完整轨迹（请求+回复配对） */
 export interface SessionTrace {
   sessionId: string;
@@ -126,6 +150,8 @@ export interface AnalysisResult {
   totalCacheCreationTokens: number;
   /** KV cache 命中率（百分比 = totalCacheReadTokens / totalInputTokens * 100） */
   cacheHitRate: number;
+  /** LLM-judge 判定结果（可选：由评测引擎的 LLM-judge 评测产出并合并，analyzeRecords 不产生） */
+  judgeResults?: JudgeResult[];
 }
 
 /**

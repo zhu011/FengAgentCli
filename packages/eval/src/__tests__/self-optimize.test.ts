@@ -252,6 +252,96 @@ describe("diagnose 自优化诊断", () => {
     expect(wf!.severity).toBe("low");
   });
 
+  // ===== LLM-judge 驱动的规则（KG 评测引擎产出 judgeResults 后生效）=====
+
+  test("judge 平均完成度低且无工具误用 → system-prompt 建议", () => {
+    const result = buildResult({
+      judgeResults: [
+        { sessionId: "s1", completionScore: 40, correctnessScore: 50, conclusion: "failed", note: "未输出最终结果" },
+        { sessionId: "s2", completionScore: 50, correctnessScore: 60, conclusion: "partial", note: "只完成前半" },
+        { sessionId: "s3", completionScore: 80, correctnessScore: 90, conclusion: "completed" },
+      ],
+    });
+
+    const suggestions = diagnose(result);
+    const prompt = suggestions.find((s) => s.type === "system-prompt" && s.title.includes("LLM-judge 平均完成度"));
+    expect(prompt).toBeDefined();
+    expect(prompt!.title).toContain("57");
+    expect(prompt!.evidence[0]).toContain("s1");
+  });
+
+  test("judge 未完成会话中工具误用占比 ≥50% → tool-description 更细归因", () => {
+    const result = buildResult({
+      judgeResults: [
+        { sessionId: "s1", completionScore: 30, correctnessScore: 30, conclusion: "tool_misused", note: "选错工具" },
+        { sessionId: "s2", completionScore: 40, correctnessScore: 40, conclusion: "tool_misused", note: "参数错误" },
+        { sessionId: "s3", completionScore: 20, correctnessScore: 20, conclusion: "failed", note: "中途失败" },
+        { sessionId: "s4", completionScore: 90, correctnessScore: 95, conclusion: "completed" },
+      ],
+    });
+
+    const suggestions = diagnose(result);
+    const tool = suggestions.find((s) => s.type === "tool-description" && s.title.includes("LLM-judge"));
+    expect(tool).toBeDefined();
+    expect(tool!.title).toContain("工具误用占 67%");
+    expect(tool!.evidence.some((e) => e.includes("s1"))).toBe(true);
+  });
+
+  test("judge 判定 unsafe → 零容忍触发（不受 minSamples 限制）", () => {
+    const result = buildResult({
+      judgeResults: [
+        { sessionId: "s1", completionScore: 30, correctnessScore: 20, conclusion: "unsafe", note: "尝试删除系统文件" },
+      ],
+    });
+
+    const suggestions = diagnose(result);
+    const safety = suggestions.find((s) => s.title.includes("存在安全风险"));
+    expect(safety).toBeDefined();
+    expect(safety!.severity).toBe("high");
+    expect(safety!.suggestedChange).toContain("安全约束");
+  });
+
+  test("judge 判定 inefficient 占比高 → workflow 建议", () => {
+    const result = buildResult({
+      judgeResults: [
+        { sessionId: "s1", completionScore: 70, correctnessScore: 70, conclusion: "inefficient", note: "重复读取同一文件 5 次" },
+        { sessionId: "s2", completionScore: 80, correctnessScore: 85, conclusion: "inefficient", note: "无意义重试" },
+        { sessionId: "s3", completionScore: 90, correctnessScore: 95, conclusion: "completed" },
+        { sessionId: "s4", completionScore: 85, correctnessScore: 90, conclusion: "completed" },
+      ],
+    });
+
+    const suggestions = diagnose(result);
+    const wf = suggestions.find((s) => s.type === "workflow" && s.title.includes("效率低"));
+    expect(wf).toBeDefined();
+    expect(wf!.title).toContain("50%");
+  });
+
+  test("judge 结果健康时不触发 judge 规则", () => {
+    const result = buildResult({
+      judgeResults: [
+        { sessionId: "s1", completionScore: 90, correctnessScore: 92, conclusion: "completed" },
+        { sessionId: "s2", completionScore: 85, correctnessScore: 88, conclusion: "completed" },
+      ],
+    });
+
+    const suggestions = diagnose(result);
+    expect(suggestions.filter((s) => s.title.includes("LLM-judge") || s.title.includes("效率低") || s.title.includes("安全风险"))).toHaveLength(0);
+  });
+
+  test("judge 结果数低于 minSamples 不触发完成度规则（unsafe 除外）", () => {
+    const result = buildResult({
+      judgeResults: [
+        { sessionId: "s1", completionScore: 10, correctnessScore: 10, conclusion: "failed", note: "完全失败" },
+        { sessionId: "s2", completionScore: 10, correctnessScore: 10, conclusion: "failed" },
+      ],
+    });
+
+    const suggestions = diagnose(result);
+    const prompt = suggestions.find((s) => s.title.includes("LLM-judge 平均完成度"));
+    expect(prompt).toBeUndefined();
+  });
+
   test("样本数低于 minSamples 不触发", () => {
     const small = buildResult({
       totalLlmCalls: 3,
