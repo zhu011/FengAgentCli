@@ -1028,7 +1028,9 @@ max_turns: 20
   </ul>
   <div class="code-label">bash — 运行测评与自优化</div>
   <pre><code>bun run eval                     # 分析今天的日志
-bun run eval --optimize          # 评测 + 自优化诊断（输出调优建议）</code></pre>
+bun run eval --date=2026-08-16    # 分析指定日期
+bun run eval --all                # 分析全部日志
+bun run eval --optimize           # 评测 + 自优化诊断（输出调优建议）</code></pre>
   <p>报告输出到 <code>.fengagent/logs/eval-report-{date}.md</code>；自优化建议输出到
     <code>.fengagent/optimizations/optimization-{date}.md</code>。</p>
   <p><strong>观测面板（WebUI）</strong>：顶栏「📡 观测」页——日期切换 + 汇总指标卡 +
