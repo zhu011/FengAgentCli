@@ -9,12 +9,17 @@
 
 import type {
   AgentEvent,
+  CallChainResponse,
+  EvalOverview,
   GraphData,
+  MarkdownReport,
   ModelsResponse,
   PermissionResult,
   RollbackResponse,
   Session,
   SessionMeta,
+  TraceAnalysisResponse,
+  TraceFileMeta,
 } from "./types.ts";
 
 /** API 错误 */
@@ -286,6 +291,87 @@ export class ApiClient {
       throw await this.toApiError(res, "Failed to rollback session");
     }
     return (await res.json()) as RollbackResponse;
+  }
+
+  // ──────────────────────────────────────────────
+  // 可观测性（AgentLoop 观测面板）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/observability/traces — 列出全部 trace 日志文件 */
+  async listTraces(): Promise<TraceFileMeta[]> {
+    const res = await fetch(`${this.baseUrl}/api/observability/traces`);
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to list traces");
+    }
+    return (await res.json()) as TraceFileMeta[];
+  }
+
+  /** GET /api/observability/traces/:date — 指定日期的指标分析 */
+  async getTraceAnalysis(date: string): Promise<TraceAnalysisResponse> {
+    const res = await fetch(
+      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get trace analysis");
+    }
+    return (await res.json()) as TraceAnalysisResponse;
+  }
+
+  /** GET /api/observability/traces/:date/callchain — 指定日期的完整调用链 */
+  async getCallChains(date: string): Promise<CallChainResponse> {
+    const res = await fetch(
+      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}/callchain`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get call chains");
+    }
+    return (await res.json()) as CallChainResponse;
+  }
+
+  // ──────────────────────────────────────────────
+  // 评测模块
+  // ──────────────────────────────────────────────
+
+  /** GET /api/eval/overview — 评测报告 / 自优化建议 / 测试集清单 */
+  async getEvalOverview(): Promise<EvalOverview> {
+    const res = await fetch(`${this.baseUrl}/api/eval/overview`);
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get eval overview");
+    }
+    return (await res.json()) as EvalOverview;
+  }
+
+  /** GET /api/eval/reports/:date — 评测报告（Markdown） */
+  async getEvalReport(date: string): Promise<MarkdownReport> {
+    const res = await fetch(
+      `${this.baseUrl}/api/eval/reports/${encodeURIComponent(date)}`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get eval report");
+    }
+    return (await res.json()) as MarkdownReport;
+  }
+
+  /** GET /api/eval/optimizations/:date — 自优化建议报告（Markdown） */
+  async getOptimizationReport(date: string): Promise<MarkdownReport> {
+    const res = await fetch(
+      `${this.baseUrl}/api/eval/optimizations/${encodeURIComponent(date)}`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get optimization report");
+    }
+    return (await res.json()) as MarkdownReport;
+  }
+
+  /** GET /api/eval/testsets/:name — 单个测试集原始 JSON */
+  async getTestSet(name: string): Promise<unknown> {
+    const res = await fetch(
+      `${this.baseUrl}/api/eval/testsets/${encodeURIComponent(name)}`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get test set");
+    }
+    return await res.json();
   }
 
   // ──────────────────────────────────────────────

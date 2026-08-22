@@ -29,6 +29,7 @@
     "@fengagent/tools": "workspace:*",
     "@fengagent/context": "workspace:*",
     "@fengagent/cordis": "workspace:*",
+    "@fengagent/eval": "workspace:*",
     "@fengagent/graph": "workspace:*",
     "hono": "^4.13.0",
     "zod": "^3.23.0"

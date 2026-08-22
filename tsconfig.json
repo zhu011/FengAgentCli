@@ -36,6 +36,8 @@
       "@fengagent/llm/*": ["./packages/llm/src/*"],
       "@fengagent/context": ["./packages/context/src/index.ts"],
       "@fengagent/context/*": ["./packages/context/src/*"],
+      "@fengagent/eval": ["./packages/eval/src/index.ts"],
+      "@fengagent/eval/*": ["./packages/eval/src/*"],
       "@fengagent/cli": ["./packages/cli/src/index.ts"],
       "@fengagent/cli/*": ["./packages/cli/src/*"],
       "@fengagent/server": ["./packages/server/src/index.ts"],

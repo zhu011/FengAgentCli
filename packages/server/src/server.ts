@@ -22,6 +22,8 @@ import { SessionManager } from "./session-manager.ts";
 import { createSessionRoutes } from "./routes/sessions.ts";
 import { createModelRoutes } from "./routes/models.ts";
 import { createHealthRoutes } from "./routes/health.ts";
+import { createObservabilityRoutes, extractLiveSession } from "./routes/observability.ts";
+import { createEvalRoutes } from "./routes/eval.ts";
 
 /** Server 构造选项 */
 export interface ServerOptions {
@@ -74,6 +76,20 @@ export function createApp(options: ServerOptions): {
   app.route("/api/health", createHealthRoutes());
   app.route("/api/sessions", createSessionRoutes(sessionManager));
   app.route("/api/models", createModelRoutes(config));
+
+  // 可观测性（AgentLoop 观测面板） + 评测模块（WebUI）
+  // 调用链中的工具返回结果优先从实时会话消息回填
+  app.route(
+    "/api/observability",
+    createObservabilityRoutes({
+      getLiveSession: (sessionId) => {
+        const session = sessionManager.getSession(sessionId);
+        if (!session) return undefined;
+        return extractLiveSession(session.messages);
+      },
+    }),
+  );
+  app.route("/api/eval", createEvalRoutes());
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）
   if (staticDir) {
