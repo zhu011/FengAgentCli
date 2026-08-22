@@ -38,12 +38,18 @@ export {
   parseJudgeResponse,
 } from "./judge.ts";
 export type { JudgeOptions, MessageTraceInfo } from "./judge.ts";
+export { parseTestSet, listTestSets } from "./testset.ts";
+export type { TestCase, TestSet } from "./testset.ts";
 
 import { findLogFile, findAllLogFiles, parseLogFile, analyzeRecords } from "./analyzer.ts";
 import { outputReport } from "./reporter.ts";
 import { runSelfOptimize, renderSuggestionsMarkdown } from "./self-optimize.ts";
+import { judgeAllSessions, mergeJudgeResults } from "./judge.ts";
+import { listTestSets } from "./testset.ts";
 import { resolveDataRoot } from "@fengagent/shared";
 import { join } from "node:path";
+import type { LLMClient } from "@fengagent/llm";
+import type { AnalysisResult, JudgeResult } from "./analyzer.ts";
 
 /**
  * 运行评测分析。
@@ -58,6 +64,12 @@ export async function runEval(options?: {
   excludeModels?: string[];
   /** 评测后运行自优化诊断（写入 <dataRoot>/optimizations/ 建议报告） */
   optimize?: boolean;
+  /** 运行 LLM-judge 全链路（测试集→analyze→judge→diagnose→建议报告） */
+  judge?: boolean;
+  /** LLM 客户端（judge 模式必需） */
+  llmClient?: LLMClient;
+  /** 测试集目录（默认 <dataRoot>/testsets） */
+  testsetsDir?: string;
 }): Promise<void> {
   let files: string[];
 
@@ -100,7 +112,33 @@ export async function runEval(options?: {
     const result = analyzeRecords(records, file);
     outputReport(result);
 
-    if (options?.optimize) {
+    if (options?.judge) {
+      console.log("\n==== LLM-judge 评测 ====");
+      if (!options.llmClient) {
+        console.error("  ⚠️ 未提供 LLM 客户端，跳过 judge。请通过 --judge 配合 LLM 配置使用。");
+      } else {
+        // 显示测试集概览（如有）
+        const testsetsDir = options.testsetsDir ?? join(resolveDataRoot(), "testsets");
+        const testsets = listTestSets(testsetsDir);
+        if (testsets.length > 0) {
+          console.log(`  测试集: ${testsets.map((t) => `${t.name}(${t.cases.length})`).join(", ")}`);
+        }
+
+        // judge 全部会话
+        const judgeResults: JudgeResult[] = await judgeAllSessions(result.sessions, {
+          llmClient: options.llmClient,
+        });
+
+        // 合并到 AnalysisResult
+        const merged: AnalysisResult = mergeJudgeResults(result, judgeResults);
+        console.log(`  judge 完成: ${judgeResults.length} 条结果`);
+
+        // diagnose（含 judge 规则）
+        console.log("\n==== 自优化诊断（含 judge 规则）====");
+        const plan = runSelfOptimize(merged, { writeReport: true });
+        console.log(renderSuggestionsMarkdown(plan));
+      }
+    } else if (options?.optimize) {
       console.log("\n==== 自优化诊断 ====");
       const plan = runSelfOptimize(result, { writeReport: true });
       console.log(renderSuggestionsMarkdown(plan));
@@ -117,6 +155,7 @@ if (import.meta.main) {
     file?: string;
     excludeModels?: string[];
     optimize?: boolean;
+    judge?: boolean;
   } = {};
 
   for (const arg of args) {
@@ -130,6 +169,23 @@ if (import.meta.main) {
       options.excludeModels = arg.slice("--exclude-model=".length).split(",").map((s) => s.trim());
     } else if (arg === "--optimize") {
       options.optimize = true;
+    } else if (arg === "--judge") {
+      options.judge = true;
+    }
+  }
+
+  // judge 模式需要 LLM 客户端
+  if (options.judge) {
+    const { loadConfig } = await import("@fengagent/core");
+    const { createClientFromEnv } = await import("@fengagent/llm");
+    try {
+      const config = await loadConfig();
+      const { buildEnvForLLM } = await import("@fengagent/server");
+      const envForLLM = buildEnvForLLM(config);
+      const { client } = createClientFromEnv(envForLLM);
+      (options as { llmClient?: LLMClient }).llmClient = client;
+    } catch {
+      // 配置不可用时仍运行（judge 会显示警告）
     }
   }
 
