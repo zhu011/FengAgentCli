@@ -61,6 +61,18 @@ export interface OptimizationThresholds {
   truncationRateHigh: number;
   /** 工具调用率低于此值触发（百分比） */
   toolCallRateLow: number;
+  /** judge 平均完成度分数低于此值触发（0–100） */
+  judgeCompletionLow: number;
+  /** judge failed / partial 结论占比高于此值触发（百分比） */
+  judgeUnfinishedHigh: number;
+  /** judge tool_misused 结论占未完成结论的比例高于此值 → 归因工具描述（百分比） */
+  judgeMisuseShareHigh: number;
+  /** judge inefficient 结论占比高于此值触发（百分比） */
+  judgeInefficientHigh: number;
+  /** judge unsafe 结论达到该数量即触发（安全风险零容忍） */
+  judgeUnsafeAny: number;
+  /** judge 结果基数小于该值不触发 judge 完成度/效率规则（judge 按会话计，基数要求低于 minSamples） */
+  judgeMinSamples: number;
   /** 统计基数小于该值不触发（避免小样本误报） */
   minSamples: number;
 }
@@ -74,6 +86,12 @@ export const DEFAULT_THRESHOLDS: OptimizationThresholds = {
   avgDurationMsHigh: 30_000,
   truncationRateHigh: 30,
   toolCallRateLow: 10,
+  judgeCompletionLow: 60,
+  judgeUnfinishedHigh: 30,
+  judgeMisuseShareHigh: 50,
+  judgeInefficientHigh: 30,
+  judgeUnsafeAny: 1,
+  judgeMinSamples: 3,
   minSamples: 10,
 };
 
@@ -301,6 +319,89 @@ export function diagnose(
     });
   }
 
+  // 8. judge 完成度低 → 按工具误用占比归因分流（结果层 + 更细归因）
+  const judgeResults = result.judgeResults ?? [];
+  if (judgeResults.length >= thresholds.judgeMinSamples) {
+    const scores = judgeResults.map((j) => j.completionScore);
+    const avgCompletion = Math.round(scores.reduce((s, x) => s + x, 0) / scores.length);
+    // 未完成 = failed / partial / tool_misused（均为未达任务目标）
+    const unfinished = judgeResults.filter(
+      (j) => j.conclusion === "failed" || j.conclusion === "partial" || j.conclusion === "tool_misused",
+    );
+    const unfinishedShare = Math.round((unfinished.length / judgeResults.length) * 100);
+    const misuseShare = unfinished.length > 0
+      ? Math.round((unfinished.filter((j) => j.conclusion === "tool_misused").length / unfinished.length) * 100)
+      : 0;
+
+    if (avgCompletion < thresholds.judgeCompletionLow || unfinishedShare > thresholds.judgeUnfinishedHigh) {
+      if (misuseShare >= thresholds.judgeMisuseShareHigh) {
+        add({
+          type: "tool-description",
+          target: "全部工具",
+          severity: "high",
+          title: `LLM-judge 判定 ${unfinishedShare}% 会话未完成，其中工具误用占 ${misuseShare}%`,
+          reason: `judge 平均完成度 ${avgCompletion} < ${thresholds.judgeCompletionLow} 或未完成占比 ${unfinishedShare}% > ${thresholds.judgeUnfinishedHigh}%`,
+          evidence: unfinished
+            .filter((j) => j.conclusion === "tool_misused")
+            .slice(0, 3)
+            .map((j) => `[${j.sessionId.slice(0, 8)}] ${j.note ?? "工具误用"}`),
+          suggestedChange:
+            "judge 判定工具误用占比高：检查工具描述与参数 schema 是否与实际调用场景匹配" +
+            "（工具选型错误 → 强化描述区分度；参数错误 → 补充参数说明与示例），并核对工具返回的错误提示是否足够友好。",
+        });
+      } else {
+        add({
+          type: "system-prompt",
+          target: "全局",
+          severity: "high",
+          title: `LLM-judge 平均完成度 ${avgCompletion} 低于阈值 ${thresholds.judgeCompletionLow}`,
+          reason: `${judgeResults.length} 个会话被 judge 判定，未完成（failed/partial）占比 ${unfinishedShare}%`,
+          evidence: unfinished.slice(0, 3).map((j) => `[${j.sessionId.slice(0, 8)}] ${j.note ?? j.conclusion}`),
+          suggestedChange:
+            "judge 判定任务完成度低：检查系统提示词中的任务理解与执行路径（是否缺步骤拆解、完成标准不明确），" +
+            "对照 judge 的 note 定位是规划问题还是指令理解问题。",
+        });
+      }
+    }
+  }
+
+  // 9. judge 判定安全风险 → 零容忍（风险层）
+  if (judgeResults.length > 0) {
+    const unsafe = judgeResults.filter((j) => j.conclusion === "unsafe");
+    if (unsafe.length >= thresholds.judgeUnsafeAny) {
+      add({
+        type: "system-prompt",
+        target: "全局",
+        severity: "high",
+        title: `LLM-judge 判定 ${unsafe.length} 个会话存在安全风险`,
+        reason: `unsafe 结论数 ${unsafe.length} >= ${thresholds.judgeUnsafeAny}（安全零容忍，不受 minSamples 限制）`,
+        evidence: unsafe.slice(0, 3).map((j) => `[${j.sessionId.slice(0, 8)}] ${j.note ?? "安全风险"}`),
+        suggestedChange:
+          "在系统提示词中补充安全约束（禁止越权操作、危险命令白名单、敏感操作前需用户确认），" +
+          "并核对权限系统是否对高风险工具（bash、file-write、沙箱出口）强制审批。",
+      });
+    }
+  }
+
+  // 10. judge 判定效率低 → 步骤效率（效率层）
+  if (judgeResults.length >= thresholds.judgeMinSamples) {
+    const inefficient = judgeResults.filter((j) => j.conclusion === "inefficient");
+    const inefficientShare = Math.round((inefficient.length / judgeResults.length) * 100);
+    if (inefficientShare > thresholds.judgeInefficientHigh) {
+      add({
+        type: "workflow",
+        target: "全局",
+        severity: "medium",
+        title: `LLM-judge 判定 ${inefficientShare}% 会话效率低`,
+        reason: `inefficient 结论占比 ${inefficientShare}% > ${thresholds.judgeInefficientHigh}%`,
+        evidence: inefficient.slice(0, 3).map((j) => `[${j.sessionId.slice(0, 8)}] ${j.note ?? "步骤冗余"}`),
+        suggestedChange:
+          "judge 判定步骤冗余：检查工具调用序列是否有重复操作或低效回退（如反复读同一文件、多次失败重试），" +
+          "在系统提示词中约束「复用已获取信息，避免重复工具调用」。",
+      });
+    }
+  }
+
   const severityRank: Record<Severity, number> = { high: 0, medium: 1, low: 2 };
   return suggestions.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
 }
@@ -370,7 +471,7 @@ export function runSelfOptimize(
   options?: {
     writeReport?: boolean;
     thresholds?: OptimizationThresholds;
-    /** 报告输出目录（默认 .fengagent/optimizations） */
+    /** 报告输出目录（默认 <数据根>/optimizations） */
     outputDir?: string;
   },
 ): OptimizationPlan {
@@ -394,4 +495,9 @@ export function runSelfOptimize(
   }
 
   return plan;
+}
+
+/** 报告输出目录（供 CLI 提示） */
+export function optimizationsDir(): string {
+  return resolve(process.cwd(), ".fengagent/optimizations");
 }
