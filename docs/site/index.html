@@ -1044,6 +1044,15 @@ bun run eval --optimize           # 评测 + 自优化诊断（输出调优建�
     （分数 0-100），结论枚举 completed / partial / failed / tool_misused / unsafe /
     inefficient；判定结果合并进分析结果后，自优化诊断将据此生成归因建议（工具误用 →
     工具描述，安全风险 → 零容忍，详见 <a href="docs/EVALUATION.md">docs/EVALUATION.md</a>）。</p>
+  <p><strong>每轮对话深链（聊天 → 观测/评测）</strong>：聊天页每条消息右侧「查看调用链」/
+    「查看评测」按钮，按每轮对话粒度跳转到观测/评测页——deep-link
+    <code>?view=observability|eval&amp;sessionId=X&amp;messageId=Y</code> 自动定位日期 / 会话 /
+    消息并展开调用链或评测结果（用户消息自动解析到其后助手轮次，工具循环多步全部纳入）；
+    会话列表每个会话行另有「查看观测 / 查看评测」入口，跳转后经消息选择器点选任意一轮。
+    服务端 per-message API：<code>/api/observability/traces/:date/callchain?sessionId&amp;messageId</code>
+    （该轮次过滤调用链 + focus 解析）、<code>/api/observability/traces/:date/messages?sessionId</code>
+    （消息粒度摘要）、<code>/api/eval/messages/:date?sessionId&amp;messageId</code>（单条消息评测，
+    trace 指标 + LLM-judge 扩展点）。旧日志无 messageId 时自动按文本匹配回退。</p>
 </section>
 
 <!-- ==================== 命令参考 ==================== -->
