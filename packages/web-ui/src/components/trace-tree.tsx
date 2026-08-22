@@ -71,7 +71,8 @@ export function TraceTree({ sessions, loading, error }: TraceTreeProps) {
     );
   }
 
-  const activeSession = sessions.find((s) => s.sessionId === selectedSession) ?? sessions[0];
+  // sessions 非空（上面已提前返回），选中会话缺省取第一条
+  const activeSession = sessions.find((s) => s.sessionId === selectedSession) ?? sessions[0]!;
 
   return (
     <div className="trace-tree">

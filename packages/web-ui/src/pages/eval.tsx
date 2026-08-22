@@ -64,8 +64,8 @@ export function EvalPage({ client }: EvalPageProps) {
       const ov = await client.getEvalOverview();
       setOverview(ov);
       // 默认选中最近一份
-      if (ov.reports.length > 0) setReportDate((prev) => prev ?? ov.reports[ov.reports.length - 1].date);
-      if (ov.optimizations.length > 0) setOptDate((prev) => prev ?? ov.optimizations[ov.optimizations.length - 1].date);
+      if (ov.reports.length > 0) setReportDate((prev) => prev ?? ov.reports[ov.reports.length - 1]!.date);
+      if (ov.optimizations.length > 0) setOptDate((prev) => prev ?? ov.optimizations[ov.optimizations.length - 1]!.date);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

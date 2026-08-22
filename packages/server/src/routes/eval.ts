@@ -16,7 +16,8 @@
 import { Hono } from "hono";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { createLogger, resolveDataRoot } from "@fengagent/shared";
+import { createLogger } from "@fengagent/shared";
+import { resolveBranchDataRoot } from "./observability.ts";
 
 const log = createLogger("server");
 
@@ -99,7 +100,7 @@ function summarizeTestSet(path: string): Pick<TestSetMeta, "records" | "valid" |
 /** 创建评测模块路由 */
 export function createEvalRoutes(options: EvalRoutesOptions = {}): Hono {
   const app = new Hono();
-  const dataRoot = resolveDataRoot();
+  const dataRoot = resolveBranchDataRoot();
   const logDir = options.logDir ?? join(dataRoot, "logs");
   const optimizationsDir = options.optimizationsDir ?? join(dataRoot, "optimizations");
   const testsetsDir = options.testsetsDir ?? join(dataRoot, "testsets");

@@ -18,11 +18,32 @@
 import { Hono } from "hono";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { createLogger, resolveLogsDir } from "@fengagent/shared";
+import { createLogger } from "@fengagent/shared";
 import { analyzeRecords, parseLogFile } from "@fengagent/eval";
 import type { AnalysisResult, TraceRecord } from "@fengagent/eval";
 
 const log = createLogger("server");
+
+/**
+ * 解析当前分支数据根（与 @fengagent/shared resolveDataRoot 语义一致，
+ * 但兼容两分支：main 的 shared 不导出 data-root，故本地实现）。
+ *
+ * 优先级：`FENG_DATA_DIR` > 工作目录 `.fengagent-cordis`（refactor 分支）> `.fengagent`（main 分支）。
+ */
+export function resolveBranchDataRoot(): string {
+  if (process.env.FENG_DATA_DIR && process.env.FENG_DATA_DIR !== "") {
+    return process.env.FENG_DATA_DIR;
+  }
+  const cwd = process.cwd();
+  const cordis = join(cwd, ".fengagent-cordis");
+  if (existsSync(cordis)) return cordis;
+  return join(cwd, ".fengagent");
+}
+
+/** 日志目录 = 数据根/logs */
+export function resolveBranchLogsDir(): string {
+  return join(resolveBranchDataRoot(), "logs");
+}
 
 // ──────────────────────────────────────────────
 // 类型
@@ -395,7 +416,7 @@ export function buildCallChains(
 /** 创建可观测性路由 */
 export function createObservabilityRoutes(options: ObservabilityOptions = {}): Hono {
   const app = new Hono();
-  const logDir = options.logDir ?? resolveLogsDir();
+  const logDir = options.logDir ?? resolveBranchLogsDir();
 
   // GET /traces — 列出全部 trace 日志
   app.get("/traces", (c) => {

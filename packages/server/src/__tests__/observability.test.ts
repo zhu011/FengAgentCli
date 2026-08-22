@@ -202,7 +202,7 @@ describe("buildCallChains", () => {
     expect(sess1!.toolCallCount).toBe(1);
     expect(sess1!.errorCount).toBe(0);
 
-    const llm0 = sess1!.steps[1];
+    const llm0 = sess1!.steps[1]!;
     expect(llm0.llm?.durationMs).toBe(3000);
     expect(llm0.llm?.finishReason).toBe("tool_use");
     expect(llm0.tools).toHaveLength(1);
@@ -214,7 +214,7 @@ describe("buildCallChains", () => {
   test("实时会话消息可回填工具返回结果", () => {
     const chains = buildCallChains(TRACE_RECORDS, () => extractLiveSession(liveMessages as never));
     const sess1 = chains.find((c) => c.sessionId === "sess-1");
-    const tool = sess1!.steps[1].tools[0]!;
+    const tool = sess1!.steps[1]!.tools[0]!;
     expect(tool.result?.content).toContain("src/");
     expect(tool.result?.isError).toBe(false);
   });

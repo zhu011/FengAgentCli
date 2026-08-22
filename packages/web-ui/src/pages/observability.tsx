@@ -84,7 +84,7 @@ export function ObservabilityPage({ client }: ObservabilityPageProps) {
     if (selectedDate) void loadDate(selectedDate);
   }, [selectedDate, loadDate]);
 
-  const latestDate = traces.length > 0 ? traces[traces.length - 1].date : null;
+  const latestDate = traces.length > 0 ? traces[traces.length - 1]!.date : null;
 
   const chartData = useMemo(() => {
     if (!analysis) return null;
