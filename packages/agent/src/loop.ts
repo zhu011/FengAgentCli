@@ -135,7 +135,7 @@ export class AgentLoop {
         maxTokens: this.options.config.maxTokens,
         temperature: this.options.config.temperature,
       };
-      llmTracer.logRequest(session.id, llmRequest);
+      llmTracer.logRequest(session.id, llmRequest, messageId);
       const llmStartTime = Date.now();
       const llmEvents: LLMEvent[] = [];
 
@@ -186,7 +186,7 @@ export class AgentLoop {
       }
 
       // LLM trace：记录回复
-      llmTracer.logResponse(session.id, session.model, llmEvents, Date.now() - llmStartTime);
+      llmTracer.logResponse(session.id, session.model, llmEvents, Date.now() - llmStartTime, messageId);
 
       // 将累积的 text / thinking 转为 ContentBlock（顺序：thinking → text → tool-use）
       if (thinkingAccumulator) {

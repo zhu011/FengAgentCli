@@ -8,7 +8,7 @@
  * 层级：会话 → 步骤（用户消息 / LLM 调用）→ 工具调用（LLM 子节点）
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -34,16 +34,42 @@ interface TraceTreeProps {
   /** 加载状态（切换日期时展示） */
   loading?: boolean;
   error?: string | null;
+  /** 初始展开所有 LLM/工具步骤（per-message 聚焦视图用） */
+  autoExpand?: boolean;
+  /** 初始选中的会话 ID（deep-link 会话级进入时用） */
+  initialSessionId?: string | null;
 }
 
 /** 调用链树（多会话） */
-export function TraceTree({ sessions, loading, error }: TraceTreeProps) {
+export function TraceTree({ sessions, loading, error, autoExpand, initialSessionId }: TraceTreeProps) {
   const [expanded, setExpanded] = useState<ExpandMap>({});
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
 
   const toggle = (id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
   };
+
+  // 外部指定初始会话（deep-link 会话级进入）
+  useEffect(() => {
+    if (initialSessionId) setSelectedSession(initialSessionId);
+  }, [initialSessionId]);
+
+  // per-message 聚焦视图：初始全部展开
+  useEffect(() => {
+    if (!autoExpand) return;
+    const map: ExpandMap = {};
+    for (const s of sessions) {
+      for (const step of s.steps) {
+        if (step.kind === "llm") {
+          map[step.id] = true;
+          step.tools.forEach((_, i) => {
+            map[`${step.id}-t${i}`] = true;
+          });
+        }
+      }
+    }
+    setExpanded(map);
+  }, [autoExpand, sessions]);
 
   if (loading) {
     return (
@@ -72,7 +98,10 @@ export function TraceTree({ sessions, loading, error }: TraceTreeProps) {
   }
 
   // sessions 非空（上面已提前返回），选中会话缺省取第一条
-  const activeSession = sessions.find((s) => s.sessionId === selectedSession) ?? sessions[0]!;
+  const activeSession =
+    sessions.find((s) => s.sessionId === selectedSession) ??
+    sessions.find((s) => s.sessionId === initialSessionId) ??
+    sessions[0]!;
 
   return (
     <div className="trace-tree">

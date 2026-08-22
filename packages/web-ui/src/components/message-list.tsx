@@ -8,9 +8,11 @@
  * 发送消息后、首条助手消息出现前的空窗期显示。
  * Round 3：生成中指示器增强 — 已用时长 + 「按 Esc 中断」提示。
  * Round 4：思考过程可视化 — 思考内容流式显示 + 点击展开/折叠。
+ * Round 5：每条消息右侧「查看调用链 / 查看评测」按钮（deep-link 到观测/评测页）。
  */
 
 import { memo, useEffect, useRef, useState } from "react";
+import { Activity, FlaskConical } from "lucide-react";
 import type { DisplayMessage } from "../hooks/use-session.ts";
 import { MarkdownRenderer } from "./markdown-renderer.tsx";
 import { ToolCallCard } from "./tool-call-card.tsx";
@@ -18,6 +20,10 @@ import { ToolCallCard } from "./tool-call-card.tsx";
 interface MessageListProps {
   messages: DisplayMessage[];
   isStreaming: boolean;
+  /** 查看该消息的调用链（deep-link 到观测页） */
+  onViewCallChain?: (messageId: string) => void;
+  /** 查看该消息的评测结果（deep-link 到评测页） */
+  onViewEval?: (messageId: string) => void;
 }
 
 /** Round 3：生成中已用秒数计时（指示器消失时归零） */
@@ -37,7 +43,7 @@ function useElapsed(active: boolean): number {
   return elapsed;
 }
 
-function MessageListImpl({ messages, isStreaming }: MessageListProps) {
+function MessageListImpl({ messages, isStreaming, onViewCallChain, onViewEval }: MessageListProps) {
   if (messages.length === 0) {
     return (
       <div className="message-list__empty">
@@ -54,7 +60,12 @@ function MessageListImpl({ messages, isStreaming }: MessageListProps) {
   return (
     <div className="message-list">
       {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          onViewCallChain={onViewCallChain}
+          onViewEval={onViewEval}
+        />
       ))}
       {showGenerating && (
         <div className="message-row message-row--assistant">
@@ -83,7 +94,15 @@ function MessageListImpl({ messages, isStreaming }: MessageListProps) {
 
 export const MessageList = memo(MessageListImpl);
 
-function MessageBubble({ message }: { message: DisplayMessage }) {
+function MessageBubble({
+  message,
+  onViewCallChain,
+  onViewEval,
+}: {
+  message: DisplayMessage;
+  onViewCallChain?: (messageId: string) => void;
+  onViewEval?: (messageId: string) => void;
+}) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -166,6 +185,32 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
             </div>
           )}
         </div>
+
+        {/* Round 5：每轮对话查看调用链 / 评测（deep-link） */}
+        {!message.streaming && (onViewCallChain || onViewEval) && (
+          <div className="message-bubble__actions">
+            {onViewCallChain && (
+              <button
+                type="button"
+                className="message-bubble__action"
+                onClick={() => onViewCallChain(message.id)}
+                title="查看该轮对话的调用链（观测页）"
+              >
+                <Activity size={12} /> 查看调用链
+              </button>
+            )}
+            {onViewEval && (
+              <button
+                type="button"
+                className="message-bubble__action"
+                onClick={() => onViewEval(message.id)}
+                title="查看该轮对话的评测结果（评测页）"
+              >
+                <FlaskConical size={12} /> 查看评测
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

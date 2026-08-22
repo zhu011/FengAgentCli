@@ -5,7 +5,10 @@
  * - GET /api/observability/traces（列表）
  * - GET /api/observability/traces/:date（指标分析，Map 序列化）
  * - GET /api/observability/traces/:date/callchain（调用链重建 + 工具结果回填）
+ * - GET /api/observability/traces/:date/callchain?sessionId&messageId（per-message 深链）
+ * - GET /api/observability/traces/:date/messages?sessionId（消息粒度摘要）
  * - GET /api/eval/overview（报告/建议/测试集清单）
+ * - GET /api/eval/messages/:date?sessionId&messageId（单条消息评测）
  * - GET /api/eval/reports/:date、/optimizations/:date、/testsets/:name
  * - 日期格式校验与 404 行为
  */
@@ -15,7 +18,13 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp } from "../server.ts";
-import { buildCallChains, extractLiveSession } from "../routes/observability.ts";
+import {
+  buildCallChains,
+  buildMessageSummaries,
+  extractLiveSession,
+  filterCallChainByMessage,
+  type SessionMessageLike,
+} from "../routes/observability.ts";
 import type { TraceRecord } from "@fengagent/eval";
 
 // ──────────────────────────────────────────────
@@ -28,6 +37,7 @@ const TRACE_RECORDS: TraceRecord[] = [
   {
     timestamp: "2026-08-22T10:00:00.000Z",
     sessionId: "sess-1",
+    messageId: "msg-1",
     direction: "request",
     model: "model-a",
     hasToolCalls: false,
@@ -39,6 +49,7 @@ const TRACE_RECORDS: TraceRecord[] = [
   {
     timestamp: "2026-08-22T10:00:03.000Z",
     sessionId: "sess-1",
+    messageId: "msg-1",
     direction: "response",
     model: "model-a",
     durationMs: 3000,
@@ -55,6 +66,7 @@ const TRACE_RECORDS: TraceRecord[] = [
   {
     timestamp: "2026-08-22T10:00:05.000Z",
     sessionId: "sess-1",
+    messageId: "msg-2",
     direction: "request",
     model: "model-a",
     hasToolCalls: false,
@@ -68,6 +80,7 @@ const TRACE_RECORDS: TraceRecord[] = [
   {
     timestamp: "2026-08-22T10:00:06.000Z",
     sessionId: "sess-1",
+    messageId: "msg-2",
     direction: "response",
     model: "model-a",
     durationMs: 1000,
@@ -81,6 +94,7 @@ const TRACE_RECORDS: TraceRecord[] = [
   {
     timestamp: "2026-08-22T10:01:00.000Z",
     sessionId: "sess-2",
+    messageId: "msg-3",
     direction: "request",
     model: "model-b",
     hasToolCalls: false,
@@ -90,6 +104,7 @@ const TRACE_RECORDS: TraceRecord[] = [
   {
     timestamp: "2026-08-22T10:01:01.000Z",
     sessionId: "sess-2",
+    messageId: "msg-3",
     direction: "response",
     model: "model-b",
     durationMs: 1000,
@@ -100,6 +115,15 @@ const TRACE_RECORDS: TraceRecord[] = [
     error: null,
     responseText: "hi",
   },
+];
+
+/** 模拟会话消息（per-message 用户消息 → 助手轮次解析用） */
+const SESSION_MESSAGES: SessionMessageLike[] = [
+  { id: "user-1", role: "user", createdAt: 1000, content: [{ type: "text", text: "分析项目结构" }] },
+  { id: "msg-1", role: "assistant", createdAt: 2000, content: [{ type: "text", text: "我将运行 bash" }] },
+  { id: "tool-user-1", role: "user", createdAt: 3000, content: [{ type: "tool-result", toolUseId: "tu-1", content: "src/ packages/" }] },
+  { id: "user-2", role: "user", createdAt: 4000, content: [{ type: "text", text: "继续" }] },
+  { id: "msg-2", role: "assistant", createdAt: 5000, content: [{ type: "text", text: "分析完成" }] },
 ];
 
 const EVAL_REPORT_MD = `# 评测报告 ${FIXTURE_DATE}
@@ -230,6 +254,74 @@ describe("buildCallChains", () => {
 });
 
 // ──────────────────────────────────────────────
+// 单元测试：per-message 解析（deep-link）
+// ──────────────────────────────────────────────
+
+describe("per-message 解析", () => {
+  test("调用链步骤携带 messageId", () => {
+    const chains = buildCallChains(TRACE_RECORDS);
+    const sess1 = chains.find((c) => c.sessionId === "sess-1")!;
+    const llmSteps = sess1.steps.filter((s) => s.kind === "llm");
+    expect(llmSteps.map((s) => s.messageId)).toEqual(["msg-1", "msg-2"]);
+  });
+
+  test("filterCallChainByMessage 直接命中助手消息（含前置用户步）", () => {
+    const chains = buildCallChains(TRACE_RECORDS);
+    const sess1 = chains.find((c) => c.sessionId === "sess-1")!;
+    const { steps, focus } = filterCallChainByMessage(sess1, "msg-2", SESSION_MESSAGES);
+    expect(focus).toEqual({ messageId: "msg-2", role: "assistant", resolvedMessageIds: ["msg-2"] });
+    expect(steps.map((s) => s.kind)).toEqual(["user", "llm"]);
+    expect(steps[1]!.messageId).toBe("msg-2");
+    expect(steps[1]!.llm?.finishReason).toBe("end_turn");
+  });
+
+  test("filterCallChainByMessage 用户消息解析到其后助手轮次", () => {
+    const chains = buildCallChains(TRACE_RECORDS);
+    const sess1 = chains.find((c) => c.sessionId === "sess-1")!;
+    const { steps, focus } = filterCallChainByMessage(sess1, "user-1", SESSION_MESSAGES);
+    expect(focus).toEqual({ messageId: "user-1", role: "user", resolvedMessageIds: ["msg-1"] });
+    expect(steps.map((s) => s.kind)).toEqual(["user", "llm"]);
+    expect(steps[0]!.user?.text).toContain("分析项目结构");
+    expect(steps[1]!.messageId).toBe("msg-1");
+  });
+
+  test("filterCallChainByMessage 无匹配返回空步骤", () => {
+    const chains = buildCallChains(TRACE_RECORDS);
+    const sess1 = chains.find((c) => c.sessionId === "sess-1")!;
+    const { steps, focus } = filterCallChainByMessage(sess1, "no-such-message", SESSION_MESSAGES);
+    expect(steps).toHaveLength(0);
+    expect(focus?.resolvedMessageIds).toEqual([]);
+  });
+
+  test("filterCallChainByMessage 旧格式日志（无 messageId）按文本回退定位", () => {
+    // 去掉 trace 中的 messageId，模拟旧格式日志
+    const legacyRecords = TRACE_RECORDS.map(({ messageId: _m, ...rest }) => rest);
+    const chains = buildCallChains(legacyRecords);
+    const sess1 = chains.find((c) => c.sessionId === "sess-1")!;
+    expect(sess1.steps.every((s) => s.messageId === undefined)).toBe(true);
+
+    // 用户消息按文本匹配 → 该轮用户步 + 后续 LLM 步
+    const userHit = filterCallChainByMessage(sess1, "user-1", SESSION_MESSAGES);
+    expect(userHit.focus).toMatchObject({ role: "user", legacyMatch: true });
+    expect(userHit.steps[0]!.kind).toBe("user");
+    expect(userHit.steps[0]!.user?.text).toContain("分析项目结构");
+    expect(userHit.steps.some((s) => s.kind === "llm")).toBe(true);
+  });
+
+  test("buildMessageSummaries 输出用户 + 助手消息粒度摘要", () => {
+    const records = TRACE_RECORDS.filter((r) => r.sessionId === "sess-1");
+    const summaries = buildMessageSummaries(records, SESSION_MESSAGES);
+    expect(summaries.map((s) => s.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    const assistant = summaries.find((s) => s.messageId === "msg-1")!;
+    expect(assistant.text).toBe("我将运行 bash 查看目录");
+    expect(assistant.toolCallCount).toBe(1);
+    expect(assistant.durationMs).toBe(3000);
+    // tool-result 内部用户消息不产生条目
+    expect(summaries.some((s) => s.text.includes("src/ packages/"))).toBe(false);
+  });
+});
+
+// ──────────────────────────────────────────────
 // 可观测性路由
 // ──────────────────────────────────────────────
 
@@ -274,6 +366,54 @@ describe("GET /api/observability", () => {
     const sess1 = body.sessions.find((s) => s.sessionId === "sess-1");
     expect(sess1!.steps).toHaveLength(4);
   });
+
+  test("traces/:date/callchain?sessionId&messageId 返回单条消息轮次的过滤链", async () => {
+    const res = await app.request(
+      `/api/observability/traces/${FIXTURE_DATE}/callchain?sessionId=sess-1&messageId=msg-2`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      sessions: Array<{ sessionId: string; steps: Array<{ kind: string; messageId?: string }> }>;
+      focus: { messageId: string; role: string; resolvedMessageIds: string[] } | null;
+    };
+    expect(body.sessions).toHaveLength(1);
+    expect(body.sessions[0]!.sessionId).toBe("sess-1");
+    expect(body.sessions[0]!.steps.map((s) => s.kind)).toEqual(["user", "llm"]);
+    expect(body.sessions[0]!.steps[1]!.messageId).toBe("msg-2");
+    expect(body.focus).toEqual({ messageId: "msg-2", role: "assistant", resolvedMessageIds: ["msg-2"] });
+  });
+
+  test("traces/:date/callchain?sessionId&messageId 对不存在的消息返回空步骤", async () => {
+    const res = await app.request(
+      `/api/observability/traces/${FIXTURE_DATE}/callchain?sessionId=sess-1&messageId=ghost`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessions: Array<{ steps: unknown[] }>; focus: unknown };
+    expect(body.sessions[0]!.steps).toHaveLength(0);
+    expect(body.focus).not.toBeNull();
+  });
+
+  test("traces/:date/messages?sessionId 返回消息粒度摘要", async () => {
+    const res = await app.request(
+      `/api/observability/traces/${FIXTURE_DATE}/messages?sessionId=sess-1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      sessionId: string;
+      messages: Array<{ messageId: string | null; role: string; llmCallCount: number; toolCallCount: number }>;
+    };
+    expect(body.sessionId).toBe("sess-1");
+    // 无会话消息时仅含 trace 助手消息（2 条）
+    expect(body.messages).toHaveLength(2);
+    const msg1 = body.messages.find((m) => m.messageId === "msg-1")!;
+    expect(msg1.role).toBe("assistant");
+    expect(msg1.toolCallCount).toBe(1);
+  });
+
+  test("traces/:date/messages 缺少 sessionId 返回 400", async () => {
+    const res = await app.request(`/api/observability/traces/${FIXTURE_DATE}/messages`);
+    expect(res.status).toBe(400);
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -314,6 +454,34 @@ describe("GET /api/eval", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: unknown[] };
     expect(body.items).toHaveLength(2);
+  });
+
+  test("messages/:date?sessionId&messageId 返回单条消息评测（trace 摘要 + judge 扩展点）", async () => {
+    const res = await app.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-2`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      messageId: string;
+      message: { role: string; text: string } | null;
+      trace: { llmCallCount: number; toolCallCount: number; finishReasons: string[] } | null;
+      judge: unknown;
+    };
+    expect(body.messageId).toBe("msg-2");
+    expect(body.message).toEqual({ role: "assistant", text: "分析完成" });
+    expect(body.trace?.llmCallCount).toBe(1);
+    expect(body.trace?.finishReasons).toEqual(["end_turn"]);
+    // judge 为 KG judgeMessage 扩展点，当前为 null
+    expect(body.judge).toBeNull();
+  });
+
+  test("messages/:date 缺少参数返回 400", async () => {
+    expect(
+      (await app.request(`/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1`)).status,
+    ).toBe(400);
+    expect(
+      (await app.request(`/api/eval/messages/${FIXTURE_DATE}?messageId=msg-2`)).status,
+    ).toBe(400);
   });
 
   test("缺失资源返回 404，非法日期返回 400", async () => {

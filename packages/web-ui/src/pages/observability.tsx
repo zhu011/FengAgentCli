@@ -6,34 +6,53 @@
  * - 汇总指标卡（调用数 / 耗时 / token / 错误率 / 缓存命中）
  * - 调用链树（会话 → 消息 → LLM 调用 → 工具调用，可展开/折叠）
  * - 指标详情（模型对比、工具使用分布、完成原因分布）
+ *
+ * Deep-link（聊天页「查看调用链」/ 会话列表「查看观测」）：
+ * - ?sessionId=X&messageId=Y：自动定位会话与消息，聚焦展示该轮调用链
+ * - ?sessionId=X：展示该会话的全部消息列表，点击消息后聚焦其调用链
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   Bot,
   Clock,
   Cpu,
   Database,
+  FlaskConical,
   Loader2,
   RefreshCw,
   Wrench,
   Zap,
 } from "lucide-react";
 import type { ApiClient } from "../api/client.ts";
-import type { CallChainSession, SerializedAnalysis, TraceFileMeta } from "../api/types.ts";
+import type {
+  CallChainResponse,
+  CallChainSession,
+  MessageTraceSummary,
+  SerializedAnalysis,
+  TraceFileMeta,
+} from "../api/types.ts";
 import { TraceTree } from "../components/trace-tree.tsx";
+import { MessagePicker } from "../components/message-picker.tsx";
 import { BarChart, DonutChart, MetricCard } from "../components/metric-charts.tsx";
 import { formatDuration, formatTokens } from "../lib/format.ts";
+import { findSessionTraceDate } from "../lib/trace-date.ts";
+import type { AppView, DeepLinkTarget } from "../app.tsx";
 
 interface ObservabilityPageProps {
   client: ApiClient;
+  /** deep-link 目标（聊天消息 / 会话列表跳转） */
+  deepLink?: DeepLinkTarget;
+  /** 视图导航（返回对话 / 切换评测 / 选择消息） */
+  onNavigate?: (view: AppView, target?: DeepLinkTarget) => void;
 }
 
 type DetailTab = "callchain" | "metrics";
 
-export function ObservabilityPage({ client }: ObservabilityPageProps) {
+export function ObservabilityPage({ client, deepLink, onNavigate }: ObservabilityPageProps) {
   const [traces, setTraces] = useState<TraceFileMeta[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<SerializedAnalysis | null>(null);
@@ -41,6 +60,15 @@ export function ObservabilityPage({ client }: ObservabilityPageProps) {
   const [tab, setTab] = useState<DetailTab>("callchain");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // deep-link 状态：聚焦会话/消息 + 消息选择器
+  const [focusSessionId, setFocusSessionId] = useState<string | null>(null);
+  const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
+  const [focusedChain, setFocusedChain] = useState<CallChainResponse | null>(null);
+  const [messagePicker, setMessagePicker] = useState<MessageTraceSummary[] | null>(null);
+  const [pickerSessionId, setPickerSessionId] = useState<string | null>(null);
+  const [focusLoading, setFocusLoading] = useState(false);
+  const [focusError, setFocusError] = useState<string | null>(null);
 
   // 加载 trace 文件列表
   const loadTraces = useCallback(async () => {
@@ -84,6 +112,69 @@ export function ObservabilityPage({ client }: ObservabilityPageProps) {
     if (selectedDate) void loadDate(selectedDate);
   }, [selectedDate, loadDate]);
 
+  // ──────────────────────────────────────────────
+  // deep-link：定位会话/消息
+  // ──────────────────────────────────────────────
+  const deepLinkSession = deepLink?.sessionId;
+  const deepLinkMessage = deepLink?.messageId;
+
+  useEffect(() => {
+    if (!deepLinkSession) {
+      setFocusSessionId(null);
+      setFocusMessageId(null);
+      setFocusedChain(null);
+      setMessagePicker(null);
+      setPickerSessionId(null);
+      setFocusError(null);
+      return;
+    }
+    let cancelled = false;
+    setFocusLoading(true);
+    setFocusError(null);
+    (async () => {
+      try {
+        const date = await findSessionTraceDate(client, deepLinkSession);
+        if (cancelled) return;
+        if (!date) {
+          setFocusSessionId(deepLinkSession);
+          setFocusMessageId(deepLinkMessage ?? null);
+          setFocusedChain(null);
+          setMessagePicker([]);
+          setPickerSessionId(deepLinkSession);
+          setFocusError("未找到该会话的 trace 日志（可能该会话尚无对话产生调用链）");
+          return;
+        }
+        setSelectedDate(date);
+        setFocusSessionId(deepLinkSession);
+        setFocusMessageId(deepLinkMessage ?? null);
+        if (deepLinkMessage) {
+          const [chain, msgs] = await Promise.all([
+            client.getCallChainForMessage(date, deepLinkSession, deepLinkMessage),
+            client.getMessageTraces(date, deepLinkSession),
+          ]);
+          if (cancelled) return;
+          setFocusedChain(chain);
+          setMessagePicker(msgs.messages);
+          setPickerSessionId(deepLinkSession);
+        } else {
+          const msgs = await client.getMessageTraces(date, deepLinkSession);
+          if (cancelled) return;
+          setFocusedChain(null);
+          setMessagePicker(msgs.messages);
+          setPickerSessionId(deepLinkSession);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setFocusError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setFocusLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, deepLinkSession, deepLinkMessage]);
+
   const latestDate = traces.length > 0 ? traces[traces.length - 1]!.date : null;
 
   const chartData = useMemo(() => {
@@ -120,6 +211,21 @@ export function ObservabilityPage({ client }: ObservabilityPageProps) {
   const refresh = () => {
     void loadTraces();
     if (selectedDate) void loadDate(selectedDate);
+  };
+
+  /** 选择消息 → 聚焦其调用链（更新 URL deep-link） */
+  const pickMessage = (messageId: string | null) => {
+    if (!pickerSessionId) return;
+    onNavigate?.("observability", {
+      sessionId: pickerSessionId,
+      messageId: messageId ?? undefined,
+    });
+  };
+
+  /** 返回完整调用链（取消消息聚焦） */
+  const clearFocus = () => {
+    if (!focusSessionId) return;
+    onNavigate?.("observability", { sessionId: focusSessionId });
   };
 
   return (
@@ -162,6 +268,58 @@ export function ObservabilityPage({ client }: ObservabilityPageProps) {
         <div className="obs-page__error">
           <AlertTriangle size={15} />
           <span>{error}</span>
+        </div>
+      )}
+
+      {/* deep-link 横幅（聚焦会话/消息） */}
+      {focusSessionId && (
+        <div className="obs-banner">
+          <span className="obs-banner__icon" aria-hidden="true">🔗</span>
+          <div className="obs-banner__body">
+            <span className="obs-banner__title">
+              聚焦会话 <code>{shortId(focusSessionId)}</code>
+              {focusMessageId && (
+                <>
+                  {" "}· 消息 <code>{shortId(focusMessageId)}</code>
+                </>
+              )}
+            </span>
+            {focusMessageId && (
+              <span className="obs-banner__hint">
+                {focusedChain?.focus?.legacyMatch
+                  ? "旧格式日志（无 messageId），已按文本匹配定位到该轮对话"
+                  : "已定位到该消息所属轮次的调用链"}
+              </span>
+            )}
+          </div>
+          <div className="obs-banner__actions">
+            {focusMessageId && (
+              <button
+                type="button"
+                className="obs-banner__btn"
+                onClick={clearFocus}
+                title="查看该会话完整调用链"
+              >
+                <Activity size={13} /> 完整调用链
+              </button>
+            )}
+            <button
+              type="button"
+              className="obs-banner__btn"
+              onClick={() => onNavigate?.("eval", { sessionId: focusSessionId, messageId: focusMessageId ?? undefined })}
+              title="在评测页查看该消息"
+            >
+              <FlaskConical size={13} /> 查看评测
+            </button>
+            <button
+              type="button"
+              className="obs-banner__btn"
+              onClick={() => onNavigate?.("chat")}
+              title="返回对话"
+            >
+              <ArrowLeft size={13} /> 返回对话
+            </button>
+          </div>
         </div>
       )}
 
@@ -245,7 +403,57 @@ export function ObservabilityPage({ client }: ObservabilityPageProps) {
 
           {tab === "callchain" ? (
             <section className="obs-page__section">
-              <TraceTree sessions={callChains} loading={loading} error={error} />
+              {/* 聚焦视图：单条消息的调用链 */}
+              {focusMessageId && pickerSessionId ? (
+                focusLoading ? (
+                  <div className="trace-tree trace-tree--state">
+                    <Loader2 size={18} className="trace-tree__spinner" />
+                    <span>定位消息调用链…</span>
+                  </div>
+                ) : focusError ? (
+                  <div className="trace-tree trace-tree--state trace-tree--error">
+                    <AlertTriangle size={18} />
+                    <span>{focusError}</span>
+                  </div>
+                ) : focusedChain && focusedChain.sessions.length > 0 ? (
+                  <>
+                    <MessagePicker
+                      messages={messagePicker ?? []}
+                      activeMessageId={focusMessageId}
+                      onPick={(m) => pickMessage(m.messageId)}
+                    />
+                    <TraceTree
+                      sessions={focusedChain.sessions}
+                      loading={false}
+                      autoExpand
+                    />
+                  </>
+                ) : (
+                  <div className="trace-tree trace-tree--state trace-tree--error">
+                    <AlertTriangle size={18} />
+                    <span>
+                      {focusError ?? "该日期没有此消息的调用链 —— 先运行一次对话产生 llm-trace 日志。"}
+                    </span>
+                  </div>
+                )
+              ) : focusSessionId && pickerSessionId ? (
+                /* 会话级 deep-link：消息选择器 + 完整调用链 */
+                <>
+                  <MessagePicker
+                    messages={messagePicker ?? []}
+                    activeMessageId={null}
+                    onPick={(m) => pickMessage(m.messageId)}
+                  />
+                  <TraceTree
+                    sessions={callChains}
+                    loading={loading}
+                    error={error}
+                    initialSessionId={focusSessionId}
+                  />
+                </>
+              ) : (
+                <TraceTree sessions={callChains} loading={loading} error={error} />
+              )}
             </section>
           ) : (
             <section className="obs-page__section">
@@ -337,4 +545,11 @@ export function ObservabilityPage({ client }: ObservabilityPageProps) {
       )}
     </div>
   );
+}
+
+/** 会话消息选择器（deep-link 会话级进入时展示，点击聚焦单条消息） */
+
+/** 短 ID（前 8 位） */
+function shortId(id: string): string {
+  return id.length > 8 ? id.slice(0, 8) : id;
 }
