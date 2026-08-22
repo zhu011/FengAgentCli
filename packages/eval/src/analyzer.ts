@@ -13,6 +13,8 @@ import { resolveDataRoot } from "@fengagent/shared";
 export interface TraceRecord {
   timestamp: string;
   sessionId: string;
+  /** 本次 LLM 调用对应的助手消息 ID（Agent Loop 写入；per-message 查询用） */
+  messageId?: string;
   direction: "request" | "response";
   model: string;
   durationMs?: number;

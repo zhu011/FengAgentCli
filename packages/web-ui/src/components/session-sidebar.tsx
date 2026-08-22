@@ -6,10 +6,12 @@
  * Round 2：会话标题「双击重命名」（行内输入框，Enter 保存 / Esc 取消）。
  * Round 3：顶部会话搜索框（按标题过滤，支持清空）+ 会话行 hover 操作
  * 重命名 / 删除（键盘 focus 时同样可见）。
+ * Round 5：每个会话行新增「查看观测 / 查看评测」入口（deep-link 到
+ * 观测/评测页，展示该会话全部消息列表供用户选择）。
  */
 
 import { useState } from "react";
-import { MessageSquare, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { Activity, FlaskConical, MessageSquare, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { SessionMeta } from "../api/types.ts";
 
 interface SessionSidebarProps {
@@ -20,6 +22,10 @@ interface SessionSidebarProps {
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string, title: string) => void;
+  /** 打开该会话的观测页（消息选择器） */
+  onOpenObservability?: (sessionId: string) => void;
+  /** 打开该会话的评测页（消息选择器） */
+  onOpenEval?: (sessionId: string) => void;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -50,6 +56,8 @@ export function SessionSidebar({
   onSelectSession,
   onDeleteSession,
   onRenameSession,
+  onOpenObservability,
+  onOpenEval,
 }: SessionSidebarProps) {
   // 双击重命名状态：editingId 正在编辑的会话 + 草稿
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -220,6 +228,34 @@ export function SessionSidebar({
               >
                 <Pencil size={13} />
               </button>
+              {onOpenObservability && (
+                <button
+                  type="button"
+                  className="session-card__obs session-card__obs--activity"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenObservability(session.id);
+                  }}
+                  aria-label="查看观测"
+                  title="查看该会话的观测（调用链）"
+                >
+                  <Activity size={13} />
+                </button>
+              )}
+              {onOpenEval && (
+                <button
+                  type="button"
+                  className="session-card__obs session-card__obs--eval"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenEval(session.id);
+                  }}
+                  aria-label="查看评测"
+                  title="查看该会话的评测结果"
+                >
+                  <FlaskConical size={13} />
+                </button>
+              )}
             </div>
           ))
         ) : (
@@ -296,6 +332,34 @@ export function SessionSidebar({
                   >
                     <Pencil size={13} />
                   </button>
+                  {onOpenObservability && (
+                    <button
+                      type="button"
+                      className="session-card__obs session-card__obs--activity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenObservability(session.id);
+                      }}
+                      aria-label="查看观测"
+                      title="查看该会话的观测（调用链）"
+                    >
+                      <Activity size={13} />
+                    </button>
+                  )}
+                  {onOpenEval && (
+                    <button
+                      type="button"
+                      className="session-card__obs session-card__obs--eval"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenEval(session.id);
+                      }}
+                      aria-label="查看评测"
+                      title="查看该会话的评测结果"
+                    >
+                      <FlaskConical size={13} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

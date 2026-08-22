@@ -10,6 +10,7 @@
  * {
  *   "timestamp": "2026-08-13T15:00:00.000Z",
  *   "sessionId": "xxx",
+ *   "messageId": "xxx",  // 本次 LLM 调用对应的助手消息 ID（deep-link 到单条消息）
  *   "direction": "request" | "response",
  *   "model": "deepseek-v4-pro",
  *   "durationMs": 1234,
@@ -34,6 +35,8 @@ import type { LLMRequest, LLMEvent } from "./types.ts";
 export interface LlmTraceRecord {
   timestamp: string;
   sessionId: string;
+  /** 本次 LLM 调用对应的助手消息 ID（Agent Loop 每个循环步生成；用于按消息粒度查询调用链） */
+  messageId?: string;
   direction: "request" | "response";
   model: string;
   durationMs?: number;
@@ -120,11 +123,16 @@ export function createLlmTracer() {
     /**
      * 记录 LLM 请求。
      * 在调用 llmClient.stream() / generate() 前调用。
+     *
+     * @param sessionId - 会话 ID
+     * @param request - LLM 请求
+     * @param messageId - 本次调用对应的助手消息 ID（可选，用于 per-message 查询）
      */
-    logRequest(sessionId: string, request: LLMRequest): void {
+    logRequest(sessionId: string, request: LLMRequest, messageId?: string): void {
       const record: LlmTraceRecord = {
         timestamp: new Date().toISOString(),
         sessionId,
+        ...(messageId ? { messageId } : {}),
         direction: "request",
         model: request.model,
         hasToolCalls: false,
@@ -147,12 +155,19 @@ export function createLlmTracer() {
     /**
      * 记录 LLM 回复。
      * 在 LLM 流结束后调用，传入收集到的事件。
+     *
+     * @param sessionId - 会话 ID
+     * @param model - 模型名
+     * @param events - LLM 事件列表
+     * @param durationMs - 调用耗时
+     * @param messageId - 本次调用对应的助手消息 ID（可选，与 logRequest 一致）
      */
     logResponse(
       sessionId: string,
       model: string,
       events: LLMEvent[],
       durationMs: number,
+      messageId?: string,
     ): void {
       const toolCalls: Array<{ name: string; input: unknown }> = [];
       let inputTokens = 0;
@@ -189,6 +204,7 @@ export function createLlmTracer() {
       const record: LlmTraceRecord = {
         timestamp: new Date().toISOString(),
         sessionId,
+        ...(messageId ? { messageId } : {}),
         direction: "response",
         model,
         durationMs,

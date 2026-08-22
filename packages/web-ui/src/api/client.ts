@@ -13,6 +13,8 @@ import type {
   EvalOverview,
   GraphData,
   MarkdownReport,
+  MessageEvalResponse,
+  MessageTracesResponse,
   ModelsResponse,
   PermissionResult,
   RollbackResponse,
@@ -328,6 +330,34 @@ export class ApiClient {
     return (await res.json()) as CallChainResponse;
   }
 
+  /** GET /api/observability/traces/:date/callchain?sessionId&messageId — 单条消息轮次的调用链（deep-link） */
+  async getCallChainForMessage(
+    date: string,
+    sessionId: string,
+    messageId: string,
+  ): Promise<CallChainResponse> {
+    const params = new URLSearchParams({ sessionId, messageId });
+    const res = await fetch(
+      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}/callchain?${params.toString()}`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get message call chain");
+    }
+    return (await res.json()) as CallChainResponse;
+  }
+
+  /** GET /api/observability/traces/:date/messages?sessionId — 指定会话的按消息粒度摘要（消息选择器） */
+  async getMessageTraces(date: string, sessionId: string): Promise<MessageTracesResponse> {
+    const params = new URLSearchParams({ sessionId });
+    const res = await fetch(
+      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}/messages?${params.toString()}`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get message traces");
+    }
+    return (await res.json()) as MessageTracesResponse;
+  }
+
   // ──────────────────────────────────────────────
   // 评测模块
   // ──────────────────────────────────────────────
@@ -372,6 +402,22 @@ export class ApiClient {
       throw await this.toApiError(res, "Failed to get test set");
     }
     return await res.json();
+  }
+
+  /** GET /api/eval/messages/:date?sessionId&messageId — 单条消息评测（trace 摘要 + judge 扩展点） */
+  async getMessageEval(
+    date: string,
+    sessionId: string,
+    messageId: string,
+  ): Promise<MessageEvalResponse> {
+    const params = new URLSearchParams({ sessionId, messageId });
+    const res = await fetch(
+      `${this.baseUrl}/api/eval/messages/${encodeURIComponent(date)}?${params.toString()}`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get message eval");
+    }
+    return (await res.json()) as MessageEvalResponse;
   }
 
   // ──────────────────────────────────────────────

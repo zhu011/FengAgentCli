@@ -32,6 +32,7 @@ bun run eval（分析聚合） / 自优化诊断 / 观测面板（消费同一�
 |------|------|------|
 | `timestamp` | 双向 | 时间戳（ISO 8601） |
 | `sessionId` | 双向 | 会话 ID（同会话多轮消息可关联成调用链） |
+| `messageId` | 双向 | 本次 LLM 调用对应的助手消息 ID（Agent Loop 每个循环步生成；用于 per-message 深链查询） |
 | `model` | 双向 | 模型 ID |
 | `durationMs` | response | 单次调用耗时 |
 | `inputTokens` / `outputTokens` | response | token 用量 |
@@ -122,6 +123,28 @@ bun run serve        # 生产模式（后端 + 静态前端）
 | 自优化建议 | 按日期浏览 + 导出 | `bun run eval --optimize` 生成的 `optimization-{date}.md` 渲染（含 LLM-judge 结论驱动建议） |
 
 > 数据源约定：观测页与评测页消费同一 `AnalysisResult`（`@fengagent/eval` 分析器）与落盘报告文件，命令行与 WebUI 看到的是同一份数据。
+
+### 2.6 聊天 → 观测/评测 deep-link（每轮对话粒度）
+
+聊天页的每条消息（用户 / 助手）右侧都有两个按钮，按**每轮对话粒度**直接跳转到观测 / 评测页：
+
+| 入口 | 位置 | 效果 |
+|------|------|------|
+| **查看调用链** | 聊天页每条消息右侧 | 跳转观测页并聚焦该消息所属轮次的调用链（用户消息会解析到其后的助手轮次，工具循环多步全部纳入） |
+| **查看评测** | 聊天页每条消息右侧 | 跳转评测页展示该轮对话的 trace 指标（LLM 调用 / 工具 / 耗时 / token / 完成原因 / 错误）与 LLM-judge 单条消息评测结果（`judgeMessage` 接入后自动显示） |
+| **查看观测 / 查看评测** | 会话列表每个会话行 | 跳转后展示该会话的全部消息列表（消息选择器），点击任意消息定位其调用链 / 评测结果 |
+
+跳转通过 deep-link URL 实现：`?view=observability&sessionId=X&messageId=Y`（或 `view=eval`），刷新 / 分享链接后仍可定位到同一会话与消息。
+
+**服务端 per-message API：**
+
+| API | 说明 |
+|------|------|
+| `GET /api/observability/traces/:date/callchain?sessionId=X&messageId=Y` | 返回 X 会话中 messageId=Y 所在轮次的调用链（steps 已过滤），并携带 `focus` 解析结果（用户消息 → 助手轮次） |
+| `GET /api/observability/traces/:date/messages?sessionId=X` | 返回该会话的按消息粒度摘要（消息选择器数据源） |
+| `GET /api/eval/messages/:date?sessionId=X&messageId=Y` | 返回单条消息评测：trace 指标摘要 + `judge` 字段（单条消息 LLM-judge 扩展点，当前为 null，由 `judgeMessage(sessionId, messageId)` 接入后填充） |
+
+**数据层约定**：`llm-trace` 记录已携带 `messageId`（Agent Loop 每个循环步写入，见 1.2 记录格式），无需重建数据层；旧记录无 `messageId` 时，per-message 查询自动回退为按消息文本匹配定位（`focus.legacyMatch=true`），无法匹配时返回空步骤提示。
 
 ## 三、自优化流程说明
 

@@ -239,6 +239,8 @@ export interface CallChainStep {
   user?: CallChainUserNode;
   llm?: CallChainLlmNode;
   tools: CallChainToolNode[];
+  /** 该 LLM 调用对应的助手消息 ID（用户步骤无此字段；per-message 查询用） */
+  messageId?: string;
 }
 
 /** 单个会话的完整调用链 */
@@ -321,6 +323,69 @@ export interface CallChainResponse {
   date: string;
   file: string;
   sessions: CallChainSession[];
+  /** per-message 深链解析结果（?sessionId=X&messageId=Y 时返回） */
+  focus?: {
+    messageId: string;
+    role: "user" | "assistant";
+    resolvedMessageIds: string[];
+    /** 旧格式日志（无 messageId）按文本匹配定位时为 true */
+    legacyMatch?: boolean;
+  } | null;
+}
+
+/** 按消息粒度的调用链摘要（/traces/:date/messages 与评测 per-message 视图消费） */
+export interface MessageTraceSummary {
+  messageId: string | null;
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string;
+  llmCallCount: number;
+  toolCallCount: number;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  finishReason?: string;
+  error?: string | null;
+}
+
+/** 消息摘要响应（/traces/:date/messages?sessionId=X） */
+export interface MessageTracesResponse {
+  date: string;
+  file: string;
+  sessionId: string;
+  messages: MessageTraceSummary[];
+}
+
+/** 单条消息评测响应（/eval/messages/:date?sessionId=X&messageId=Y） */
+export interface MessageEvalResponse {
+  date: string;
+  sessionId: string;
+  messageId: string;
+  focus: {
+    messageId: string;
+    role: "user" | "assistant";
+    resolvedMessageIds: string[];
+    legacyMatch?: boolean;
+  } | null;
+  message: { role: "user" | "assistant"; text: string } | null;
+  trace: {
+    llmCallCount: number;
+    toolCallCount: number;
+    durationMs: number;
+    inputTokens: number;
+    outputTokens: number;
+    finishReasons: string[];
+    errors: string[];
+  } | null;
+  /** 单条消息 LLM-judge 结果（KG judgeMessage 扩展点；当前为 null，接入后自动渲染） */
+  judge: {
+    messageId: string;
+    sessionId: string;
+    completionScore: number;
+    correctnessScore: number;
+    conclusion: string;
+    note?: string;
+  } | null;
 }
 
 // ──────────────────────────────────────────────

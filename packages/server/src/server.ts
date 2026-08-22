@@ -78,7 +78,8 @@ export function createApp(options: ServerOptions): {
   app.route("/api/models", createModelRoutes(config));
 
   // 可观测性（AgentLoop 观测面板） + 评测模块（WebUI）
-  // 调用链中的工具返回结果优先从实时会话消息回填
+  // 调用链中的工具返回结果优先从实时会话消息回填；
+  // per-message 深链（用户消息 → 助手轮次）通过会话消息解析
   app.route(
     "/api/observability",
     createObservabilityRoutes({
@@ -87,9 +88,18 @@ export function createApp(options: ServerOptions): {
         if (!session) return undefined;
         return extractLiveSession(session.messages);
       },
+      getSessionMessages: (sessionId) => {
+        const session = sessionManager.getSession(sessionId);
+        return session?.messages as unknown as import("./routes/observability.ts").SessionMessageLike[] | undefined;
+      },
     }),
   );
-  app.route("/api/eval", createEvalRoutes());
+  app.route("/api/eval", createEvalRoutes({
+    getSessionMessages: (sessionId) => {
+      const session = sessionManager.getSession(sessionId);
+      return session?.messages as unknown as import("./routes/observability.ts").SessionMessageLike[] | undefined;
+    },
+  }));
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）
   if (staticDir) {

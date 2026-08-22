@@ -3993,3 +3993,448 @@ body {
   font-size: 13px;
 }
 
+/* ──────────────────────────────────────────────
+   Round 5：deep-link（聊天 → 观测/评测）
+   ────────────────────────────────────────────── */
+
+/* 消息气泡内「查看调用链 / 查看评测」按钮 */
+.message-bubble__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.message-bubble__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.message-bubble__action:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+/* 会话卡片「查看观测 / 查看评测」入口 */
+.session-card__obs {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.session-card:hover .session-card__obs,
+.session-card:focus-within .session-card__obs {
+  opacity: 1;
+}
+.session-card__obs--activity:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+.session-card__obs--eval:hover {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+/* deep-link 横幅（观测页 / 评测页聚焦视图） */
+.obs-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 16px 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+}
+
+.obs-banner__icon {
+  font-size: 15px;
+}
+
+.obs-banner__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.obs-banner__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.obs-banner__title code,
+.obs-banner__hint code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--bg-code-block);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+.obs-banner__hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.obs-banner__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.obs-banner__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.obs-banner__btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+/* 会话消息选择器（deep-link 会话级进入） */
+.obs-msg-picker {
+  margin-bottom: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.obs-msg-picker--empty {
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.obs-msg-picker__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.obs-msg-picker__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.obs-msg-picker__count {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.obs-msg-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.obs-msg-picker__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.obs-msg-picker__item:hover {
+  background: var(--bg-hover);
+}
+
+.obs-msg-picker__item--active {
+  background: var(--accent-light);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.obs-msg-picker__role {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.obs-msg-picker__role--user {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.obs-msg-picker__role--assistant {
+  color: var(--success);
+  background: var(--success-light);
+}
+
+.obs-msg-picker__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obs-msg-picker__meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* 评测页 deep-link 单条消息评测视图 */
+.eval-deeplink {
+  padding: 0 16px 24px;
+}
+
+.eval-deeplink__loading,
+.eval-deeplink__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 18px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.eval-deeplink__error {
+  color: var(--danger);
+}
+
+.eval-deeplink__grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 14px;
+  margin-top: 14px;
+  align-items: start;
+}
+
+.eval-deeplink__picker .obs-msg-picker__list {
+  max-height: 420px;
+}
+
+.eval-deeplink__result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.eval-deeplink__empty {
+  padding: 20px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.eval-msg-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  padding: 12px 14px;
+}
+
+.eval-msg-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.eval-msg-card__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.eval-msg-card__text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.eval-msg-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.eval-msg-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+
+.eval-msg-metric__label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.eval-msg-metric__value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.eval-msg-metric--good .eval-msg-metric__value {
+  color: var(--success);
+}
+
+.eval-msg-metric--bad .eval-msg-metric__value {
+  color: var(--danger);
+}
+
+/* LLM-judge 单条消息评测结果 */
+.eval-judge {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.eval-judge--pending {
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.eval-judge--pending code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--bg-code-block);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+.eval-judge__hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.eval-judge__scores {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.eval-judge__score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.eval-judge__score-label {
+  flex-shrink: 0;
+  width: 90px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.eval-judge__score-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-code-block);
+  overflow: hidden;
+}
+
+.eval-judge__score-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.3s ease;
+}
+
+.eval-judge__score-value {
+  flex-shrink: 0;
+  width: 32px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.eval-judge__conclusion {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.eval-judge__note {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* 窄屏：评测 deep-link 单列布局 */
+@media (max-width: 900px) {
+  .eval-deeplink__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+

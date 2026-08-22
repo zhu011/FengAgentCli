@@ -5,6 +5,11 @@
  *   GET /api/eval/overview              — 评测报告 / 自优化建议 / 测试集 三合一清单
  *   GET /api/eval/reports/:date         — 指定日期的评测报告（Markdown）
  *   GET /api/eval/optimizations/:date   — 指定日期的自优化建议报告（Markdown）
+ *   GET /api/eval/messages/:date?sessionId=X&messageId=Y — 单条消息评测
+ *     （trace 摘要 + judge 扩展点；聊天页「查看评测」deep-link 消费。
+ *       judge 字段当前为 null，R2/R3 由 KG 的 judgeMessage(sessionId, messageId)
+ *       填充，结构对齐 JudgeResult：completionScore / correctnessScore /
+ *      conclusion / note，维度为 messageId。）
  *
  * 数据源约定（见 docs/EVALUATION.md 二、三）：
  *   - 评测报告：<数据根>/logs/eval-report-{date}.md（bun run eval 落盘）
@@ -17,7 +22,15 @@ import { Hono } from "hono";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "@fengagent/shared";
-import { resolveBranchDataRoot } from "./observability.ts";
+import { parseLogFile } from "@fengagent/eval";
+import {
+  buildCallChains,
+  filterCallChainByMessage,
+  resolveBranchDataRoot,
+  traceFileForDate,
+  type CallChainFocus,
+  type SessionMessageLike,
+} from "./observability.ts";
 
 const log = createLogger("server");
 
@@ -58,6 +71,38 @@ export interface EvalRoutesOptions {
   optimizationsDir?: string;
   /** 测试集目录（默认 <数据根>/testsets） */
   testsetsDir?: string;
+  /** 会话消息提取器（可选；用于 per-message 评测：用户消息 → 助手轮次解析） */
+  getSessionMessages?: (sessionId: string) => SessionMessageLike[] | undefined;
+}
+
+/** 单条消息评测：trace 指标摘要 */
+export interface MessageEvalTrace {
+  llmCallCount: number;
+  toolCallCount: number;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  finishReasons: string[];
+  errors: string[];
+}
+
+/** 单条消息评测响应（聊天页「查看评测」deep-link 消费） */
+export interface MessageEvalResponse {
+  date: string;
+  sessionId: string;
+  messageId: string;
+  /** deep-link 解析结果（用户消息 → 助手轮次） */
+  focus: CallChainFocus | null;
+  /** 消息内容（角色 + 文本） */
+  message: { role: "user" | "assistant"; text: string } | null;
+  /** 该消息轮次的 trace 指标摘要 */
+  trace: MessageEvalTrace | null;
+  /**
+   * 单条消息 LLM-judge 结果（扩展点）。
+   * 当前为 null；R2/R3 由 KG 的 judgeMessage(sessionId, messageId) 填充，
+   * 结构对齐 JudgeResult：{ messageId, sessionId, completionScore, correctnessScore, conclusion, note? }。
+   */
+  judge: null;
 }
 
 /** 列出 `prefix-date.ext` 形态的文件并解析日期 */
@@ -104,7 +149,6 @@ export function createEvalRoutes(options: EvalRoutesOptions = {}): Hono {
   const logDir = options.logDir ?? join(dataRoot, "logs");
   const optimizationsDir = options.optimizationsDir ?? join(dataRoot, "optimizations");
   const testsetsDir = options.testsetsDir ?? join(dataRoot, "testsets");
-
   // GET /overview — 三合一清单
   app.get("/overview", (c) => {
     const reports = listDatedFiles(logDir, "eval-report-", ".md").map((f) => f as EvalReportMeta);
@@ -175,6 +219,73 @@ export function createEvalRoutes(options: EvalRoutesOptions = {}): Hono {
     } catch {
       return c.json({ error: { message: `Test set "${name}" is not valid JSON` } }, 422);
     }
+  });
+
+  // GET /messages/:date?sessionId=X&messageId=Y — 单条消息评测（聊天页「查看评测」deep-link）
+  app.get("/messages/:date", (c) => {
+    const date = c.req.param("date");
+    const sessionId = c.req.query("sessionId") ?? "";
+    const messageId = c.req.query("messageId") ?? "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return c.json({ error: { message: "date must be YYYY-MM-DD" } }, 400);
+    }
+    if (!sessionId || !messageId) {
+      return c.json({ error: { message: "sessionId and messageId are required" } }, 400);
+    }
+    const file = traceFileForDate(logDir, date);
+    if (!file) {
+      return c.json({ error: { message: `Trace log for ${date} not found` } }, 404);
+    }
+    const records = parseLogFile(file).filter((r) => r.sessionId === sessionId);
+    const sessionMessages = options.getSessionMessages?.(sessionId);
+
+    // 通过调用链重建解析该消息所属轮次
+    const chains = buildCallChains(records, undefined);
+    const chain = chains.find((s) => s.sessionId === sessionId);
+    const filtered = chain
+      ? filterCallChainByMessage(chain, messageId, sessionMessages)
+      : null;
+    const focus = filtered?.focus ?? null;
+    const llmSteps = filtered?.steps.filter((s) => s.kind === "llm") ?? [];
+
+    const trace: MessageEvalTrace | null = llmSteps.length > 0
+      ? {
+          llmCallCount: llmSteps.length,
+          toolCallCount: llmSteps.reduce((sum, s) => sum + s.tools.length, 0),
+          durationMs: llmSteps.reduce((sum, s) => sum + (s.llm?.durationMs ?? 0), 0),
+          inputTokens: llmSteps.reduce((sum, s) => sum + (s.llm?.inputTokens ?? 0), 0),
+          outputTokens: llmSteps.reduce((sum, s) => sum + (s.llm?.outputTokens ?? 0), 0),
+          finishReasons: llmSteps
+            .map((s) => s.llm?.finishReason)
+            .filter((r): r is string => Boolean(r)),
+          errors: llmSteps
+            .map((s) => s.llm?.error)
+            .filter((e): e is string => Boolean(e)),
+        }
+      : null;
+
+    // 消息内容：助手消息取 responseText；用户消息取过滤链中的用户步骤文本
+    let message: MessageEvalResponse["message"] = null;
+    if (focus?.role === "assistant") {
+      const step = llmSteps.find((s) => s.messageId === messageId);
+      const text = step?.llm?.responseText ?? "";
+      if (text) message = { role: "assistant", text };
+    } else if (focus?.role === "user") {
+      const userStep = filtered?.steps.find((s) => s.kind === "user");
+      const text = userStep?.user?.text ?? "";
+      if (text) message = { role: "user", text };
+    }
+
+    log.info("eval", `messageEval date=${date} sessionId=${sessionId} messageId=${messageId} llmSteps=${llmSteps.length}`);
+    return c.json({
+      date,
+      sessionId,
+      messageId,
+      focus,
+      message,
+      trace,
+      judge: null,
+    } satisfies MessageEvalResponse);
   });
 
   return app;

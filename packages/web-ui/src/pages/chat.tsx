@@ -34,6 +34,10 @@ interface ChatPageProps {
   theme: Theme;
   onSelectTheme: (theme: Theme) => void;
   onRenameSession: (id: string, title: string) => void;
+  /** 打开观测页（定位到消息） */
+  onOpenObservability: (sessionId: string, messageId?: string) => void;
+  /** 打开评测页（定位到消息） */
+  onOpenEval: (sessionId: string, messageId?: string) => void;
 }
 
 /** 欢迎页建议卡片（点击即发起对话）— Round 2 文案贴合 Agent 场景 */
@@ -64,7 +68,7 @@ const SUGGESTIONS = [
   },
 ];
 
-export function ChatPage({ client, session, theme, onSelectTheme, onRenameSession }: ChatPageProps) {
+export function ChatPage({ client, session, theme, onSelectTheme, onRenameSession, onOpenObservability, onOpenEval }: ChatPageProps) {
   const models = useModels(client);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [showInspector, setShowInspector] = useState(false);
@@ -340,7 +344,16 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
               </div>
             </div>
           ) : (
-            <MessageList messages={session.activeMessages} isStreaming={session.isStreaming} />
+            <MessageList
+              messages={session.activeMessages}
+              isStreaming={session.isStreaming}
+              onViewCallChain={(messageId) =>
+                onOpenObservability(session.activeSession!.id, messageId)
+              }
+              onViewEval={(messageId) =>
+                onOpenEval(session.activeSession!.id, messageId)
+              }
+            />
           )
         ) : (
           <div className="chat-page__no-session">
