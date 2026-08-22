@@ -307,3 +307,95 @@ export function mergeJudgeResults(
 ): AnalysisResult {
   return { ...result, judgeResults };
 }
+
+/**
+ * per-message 评测输入：单条消息的 trace 摘要。
+ *
+ * 由服务端从 trace 日志中提取该消息所属轮次的 LLM 调用信息后传入，
+ * judge.ts 不直接读 trace 文件（保持无文件系统依赖）。
+ */
+export interface MessageTraceInfo {
+  /** 会话 ID */
+  sessionId: string;
+  /** 消息 ID（助手消息的 messageId） */
+  messageId: string;
+  /** 用户消息文本（该轮次的请求） */
+  userText: string;
+  /** 助手回复文本（该轮次的响应） */
+  assistantText: string;
+  /** 该轮次的工具调用列表 */
+  toolCalls: Array<{ name: string; input: string }>;
+  /** 完成原因 */
+  finishReasons: string[];
+  /** 错误列表（如有） */
+  errors: string[];
+  /** 模型名称 */
+  model: string;
+}
+
+/**
+ * 对单条消息进行 LLM-judge 评判（per-message 粒度）。
+ *
+ * 从 MessageTraceInfo 构建消息级别的摘要（比会话级更聚焦），
+ * 调用 LLM 评判该轮次回复的完成度/正确性/结论。
+ *
+ * @param info - 单条消息的 trace 信息
+ * @param options - 评判选项
+ * @returns 评判结果（JudgeResult，sessionId 为 info.sessionId）
+ */
+export async function judgeMessage(
+  info: MessageTraceInfo,
+  options: JudgeOptions,
+): Promise<JudgeResult> {
+  const lines: string[] = [];
+  lines.push(`会话 ID: ${info.sessionId}`);
+  lines.push(`消息 ID: ${info.messageId}`);
+  lines.push(`模型: ${info.model}`);
+  lines.push("");
+  lines.push("--- 消息轨迹 ---");
+  lines.push(`用户: ${truncate(info.userText, 500)}`);
+  lines.push(`助手: ${truncate(info.assistantText, 500)}`);
+
+  if (info.toolCalls.length > 0) {
+    lines.push("\n工具调用:");
+    for (const tc of info.toolCalls) {
+      lines.push(`  ${tc.name}(${truncate(tc.input, 200)})`);
+    }
+  }
+
+  if (info.finishReasons.length > 0) {
+    lines.push(`完成原因: ${info.finishReasons.join(", ")}`);
+  }
+  if (info.errors.length > 0) {
+    lines.push(`错误: ${info.errors.length} 个`);
+  }
+
+  const summary = lines.join("\n");
+  const request: LLMRequest = {
+    model: options.model ?? info.model,
+    system: options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+    messages: [
+      {
+        id: `judge-msg-${info.messageId}`,
+        role: "user" as const,
+        content: [{ type: "text" as const, text: summary }],
+        createdAt: Date.now(),
+      },
+    ],
+    maxTokens: 500,
+    temperature: 0,
+  };
+
+  try {
+    const response = await options.llmClient.generate(request);
+    return parseJudgeResponse(response.content, info.sessionId);
+  } catch (err) {
+    return {
+      sessionId: info.sessionId,
+      completionScore: 0,
+      correctnessScore: 0,
+      conclusion: "failed",
+      note: `LLM 调用失败: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}

@@ -32,11 +32,12 @@ export type {
 export {
   judgeSession,
   judgeAllSessions,
+  judgeMessage,
   mergeJudgeResults,
   buildSessionSummary,
   parseJudgeResponse,
 } from "./judge.ts";
-export type { JudgeOptions } from "./judge.ts";
+export type { JudgeOptions, MessageTraceInfo } from "./judge.ts";
 
 import { findLogFile, findAllLogFiles, parseLogFile, analyzeRecords } from "./analyzer.ts";
 import { outputReport } from "./reporter.ts";

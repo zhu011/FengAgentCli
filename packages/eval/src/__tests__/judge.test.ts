@@ -258,3 +258,75 @@ describe("LLM-judge 评测引擎", () => {
     expect(summary).toContain("错误: 1");  // errors count shown
   });
 });
+
+// ─── per-message judge tests ───
+
+import type { MessageTraceInfo } from "../judge.ts";
+import { judgeMessage } from "../judge.ts";
+
+function createTestMessageInfo(overrides?: Partial<MessageTraceInfo>): MessageTraceInfo {
+  return {
+    sessionId: "test-session-001",
+    messageId: "msg-001",
+    userText: "帮我读取 config.json 文件",
+    assistantText: "已读取 config.json，内容如下：{\"model\": \"deepseek\"}",
+    toolCalls: [{ name: "file-read", input: '{"path":"config.json"}' }],
+    finishReasons: ["end_turn"],
+    errors: [],
+    model: "deepseek-chat",
+    ...overrides,
+  };
+}
+
+describe("judgeMessage — per-message 评测", () => {
+  test("正常 JSON 响应解析", async () => {
+    const mockJson = `{"completionScore": 95, "correctnessScore": 100, "conclusion": "completed", "note": "文件读取正确"}`;
+    const client = createMockClient(mockJson);
+
+    const result = await judgeMessage(createTestMessageInfo(), { llmClient: client });
+
+    expect(result.sessionId).toBe("test-session-001");
+    expect(result.completionScore).toBe(95);
+    expect(result.correctnessScore).toBe(100);
+    expect(result.conclusion).toBe("completed");
+    expect(result.note).toBe("文件读取正确");
+  });
+
+  test("tool_misused 结论（工具选型错误）", async () => {
+    const mockJson = `{"completionScore": 30, "correctnessScore": 20, "conclusion": "tool_misused", "note": "应用 file-read 却用了 bash"}`;
+    const client = createMockClient(mockJson);
+
+    const result = await judgeMessage(
+      createTestMessageInfo({ toolCalls: [{ name: "bash", input: "cat config.json" }] }),
+      { llmClient: client },
+    );
+
+    expect(result.conclusion).toBe("tool_misused");
+    expect(result.completionScore).toBe(30);
+  });
+
+  test("LLM 异常时返回 failed", async () => {
+    const errorClient: LLMClient = {
+      generate: mock(() => Promise.reject(new Error("timeout"))),
+      stream: async function* () {},
+    } as unknown as LLMClient;
+
+    const result = await judgeMessage(createTestMessageInfo(), { llmClient: errorClient });
+
+    expect(result.conclusion).toBe("failed");
+    expect(result.note).toContain("timeout");
+  });
+
+  test("空工具调用列表也能评判", async () => {
+    const mockJson = `{"completionScore": 80, "correctnessScore": 85, "conclusion": "completed"}`;
+    const client = createMockClient(mockJson);
+
+    const result = await judgeMessage(
+      createTestMessageInfo({ toolCalls: [], userText: "你好", assistantText: "你好！" }),
+      { llmClient: client },
+    );
+
+    expect(result.completionScore).toBe(80);
+    expect(result.conclusion).toBe("completed");
+  });
+});
