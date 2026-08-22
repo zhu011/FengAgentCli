@@ -131,7 +131,7 @@ bun run serve        # 生产模式（后端 + 静态前端）
 | 入口 | 位置 | 效果 |
 |------|------|------|
 | **查看调用链** | 聊天页每条消息右侧 | 跳转观测页并聚焦该消息所属轮次的调用链（用户消息会解析到其后的助手轮次，工具循环多步全部纳入） |
-| **查看评测** | 聊天页每条消息右侧 | 跳转评测页展示该轮对话的 trace 指标（LLM 调用 / 工具 / 耗时 / token / 完成原因 / 错误）与 LLM-judge 单条消息评测结果（`judgeMessage` 接入后自动显示） |
+| **查看评测** | 聊天页每条消息右侧 | 跳转评测页展示该轮对话的 trace 指标（LLM 调用 / 工具 / 耗时 / token / 完成原因 / 错误）与 LLM-judge 单条消息评测结果（`judgeMessage` 自动评判：完成度/正确性分数条 + 判定结论 + 依据 note） |
 | **查看观测 / 查看评测** | 会话列表每个会话行 | 跳转后展示该会话的全部消息列表（消息选择器），点击任意消息定位其调用链 / 评测结果 |
 
 跳转通过 deep-link URL 实现：`?view=observability&sessionId=X&messageId=Y`（或 `view=eval`），刷新 / 分享链接后仍可定位到同一会话与消息。
@@ -142,7 +142,7 @@ bun run serve        # 生产模式（后端 + 静态前端）
 |------|------|
 | `GET /api/observability/traces/:date/callchain?sessionId=X&messageId=Y` | 返回 X 会话中 messageId=Y 所在轮次的调用链（steps 已过滤），并携带 `focus` 解析结果（用户消息 → 助手轮次） |
 | `GET /api/observability/traces/:date/messages?sessionId=X` | 返回该会话的按消息粒度摘要（消息选择器数据源） |
-| `GET /api/eval/messages/:date?sessionId=X&messageId=Y` | 返回单条消息评测：trace 指标摘要 + `judge` 字段（单条消息 LLM-judge 扩展点，当前为 null，由 `judgeMessage(sessionId, messageId)` 接入后填充） |
+| `GET /api/eval/messages/:date?sessionId=X&messageId=Y` | 返回单条消息评测：trace 指标摘要 + `judge` 字段（单条消息 LLM-judge 结果；路由层从该轮次调用链提取 model + 工具名/参数构建 `MessageTraceInfo`，调用 `judgeMessage()` 后合并 `{ ...judgeResult, messageId }` 填充；未配置 LLM 客户端时为 null） |
 
 **数据层约定**：`llm-trace` 记录已携带 `messageId`（Agent Loop 每个循环步写入，见 1.2 记录格式），无需重建数据层；旧记录无 `messageId` 时，per-message 查询自动回退为按消息文本匹配定位（`focus.legacyMatch=true`），无法匹配时返回空步骤提示。
 
