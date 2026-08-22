@@ -134,3 +134,179 @@ export interface PermissionRequest {
 export type PermissionResult =
   | { decision: "allow" }
   | { decision: "deny"; reason?: string };
+
+// ──────────────────────────────────────────────
+// 可观测性（AgentLoop 观测面板）— 镜像 server/routes/observability.ts
+// ──────────────────────────────────────────────
+
+/** 单个 trace 日志文件元信息 */
+export interface TraceFileMeta {
+  date: string;
+  path: string;
+  size: number;
+  records: number;
+  sessions: number;
+  models: string[];
+  modifiedAt: string;
+}
+
+/** 调用链：工具节点 */
+export interface CallChainToolNode {
+  name: string;
+  input: unknown;
+  result: { content: string; isError?: boolean } | null;
+  durationMs?: number;
+  timestamp: string;
+  isError?: boolean;
+}
+
+/** 调用链：LLM 调用节点 */
+export interface CallChainLlmNode {
+  index: number;
+  model: string;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  finishReason?: string;
+  error?: string | null;
+  responseText?: string;
+  hasToolCalls: boolean;
+}
+
+/** 调用链：用户消息节点 */
+export interface CallChainUserNode {
+  text: string;
+}
+
+/** 调用链步骤（用户消息或 LLM 调用；工具为 LLM 子节点） */
+export interface CallChainStep {
+  id: string;
+  kind: "user" | "llm";
+  timestamp: string;
+  user?: CallChainUserNode;
+  llm?: CallChainLlmNode;
+  tools: CallChainToolNode[];
+}
+
+/** 单个会话的完整调用链 */
+export interface CallChainSession {
+  sessionId: string;
+  model: string;
+  steps: CallChainStep[];
+  totalDurationMs: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  toolCallCount: number;
+  errorCount: number;
+}
+
+/** 序列化分析结果（server 端 Map → 普通对象） */
+export interface SerializedAnalysis {
+  logFile: string;
+  totalRecords: number;
+  sessionCount: number;
+  totalLlmCalls: number;
+  totalDurationMs: number;
+  avgDurationMs: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  avgInputTokens: number;
+  avgOutputTokens: number;
+  toolCallCount: number;
+  toolCallRate: number;
+  toolUsage: Record<string, number>;
+  errorCount: number;
+  errorRate: number;
+  errors: string[];
+  finishReasons: Record<string, number>;
+  sessions: Array<{
+    sessionId: string;
+    model: string;
+    requests: number;
+    responses: number;
+    totalDurationMs: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    toolCallCount: number;
+    toolNames: string[];
+    errors: string[];
+    finishReasons: string[];
+  }>;
+  models: string[];
+  modelComparisons: Array<{
+    model: string;
+    totalCalls: number;
+    toolCallCount: number;
+    toolSuccessCount: number;
+    toolFailureCount: number;
+    errorCount: number;
+    errorRate: number;
+    finishReasons: Record<string, number>;
+    avgDurationMs: number;
+    avgInputTokens: number;
+    avgOutputTokens: number;
+    toolSuccessRate: number;
+    taskCompletionRate: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    cacheHitRate: number;
+  }>;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
+  cacheHitRate: number;
+}
+
+/** 观测数据响应 */
+export interface TraceAnalysisResponse {
+  date: string;
+  file: string;
+  analysis: SerializedAnalysis;
+}
+
+/** 调用链响应 */
+export interface CallChainResponse {
+  date: string;
+  file: string;
+  sessions: CallChainSession[];
+}
+
+// ──────────────────────────────────────────────
+// 评测模块 — 镜像 server/routes/eval.ts
+// ──────────────────────────────────────────────
+
+export interface EvalReportMeta {
+  date: string;
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
+
+export interface OptimizationMeta {
+  date: string;
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
+
+export interface TestSetMeta {
+  name: string;
+  path: string;
+  size: number;
+  records: number;
+  valid: boolean;
+  shape: string;
+}
+
+export interface EvalOverview {
+  reports: EvalReportMeta[];
+  optimizations: OptimizationMeta[];
+  testsets: TestSetMeta[];
+}
+
+export interface MarkdownReport {
+  date: string;
+  path: string;
+  content: string;
+}
