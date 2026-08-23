@@ -1076,7 +1076,8 @@ bun run eval --date=2026-08-16                 # 分析指定日期
 bun run eval --all                             # 分析全部日志
 bun run eval --file=.fengagent-cordis/logs/llm-trace-2026-08-16.jsonl  # 指定文件
 bun run eval --exclude-model=test-model,custom-model   # 排除 mock 模型
-bun run eval --optimize                        # 评测 + 自优化诊断（输出调优建议）</code></pre>
+bun run eval --optimize                        # 评测 + 自优化诊断（输出调优建议）
+bun run eval --judge                           # 全链路评测：测试集→LLM-judge→diagnose→建议报告</code></pre>
   <p>报告输出到 <code>&lt;数据根&gt;/logs/eval-report-{date}.md</code>；自优化建议输出到
     <code>&lt;数据根&gt;/optimizations/optimization-{date}.md</code>。</p>
   <p><strong>观测面板（WebUI）</strong>：顶栏「📡 观测」页——日期切换 + 汇总指标卡 +

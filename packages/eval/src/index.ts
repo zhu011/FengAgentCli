@@ -10,6 +10,7 @@
  *   bun run eval --all                                        # 分析所有日志
  *   bun run eval --file=<dataRoot>/logs/llm-trace-2026-08-13.jsonl  # 分析指定文件
  *   bun run eval --optimize                                   # 分析 + 自优化诊断（输出建议报告）
+ *   bun run eval --judge                                      # 全链路：测试集→LLM-judge→diagnose→建议报告
  */
 
 export { parseLogFile, findLogFile, findAllLogFiles, analyzeRecords } from "./analyzer.ts";
