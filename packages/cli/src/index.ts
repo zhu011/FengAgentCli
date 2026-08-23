@@ -10,5 +10,5 @@ export type { PrintModeOptions } from "./print-mode.ts";
 
 export { parseArgs, type ParsedArgs, type ArgParseError } from "./args.ts";
 
-export { createAgent } from "./create-agent.ts";
+export { createAgent, buildEnvForLLM } from "./create-agent.ts";
 export type { CreateAgentOptions } from "./create-agent.ts";

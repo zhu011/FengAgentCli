@@ -181,7 +181,7 @@ if (import.meta.main) {
     const { createClientFromEnv } = await import("@fengagent/llm");
     try {
       const config = await loadConfig();
-      const { buildEnvForLLM } = await import("@fengagent/server");
+      const { buildEnvForLLM } = await import("@fengagent/cli");
       const envForLLM = buildEnvForLLM(config);
       const { client } = createClientFromEnv(envForLLM);
       (options as { llmClient?: LLMClient }).llmClient = client;
