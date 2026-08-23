@@ -61,6 +61,7 @@ bun run eval --all                                  # 分析全部历史日志�
 bun run eval --file=<数据根>/logs/llm-trace-2026-08-13.jsonl  # 分析指定文件
 bun run eval --exclude-model=mock-model             # 过滤指定模型（多模型逗号分隔）
 bun run eval --optimize                             # 分析 + 自优化诊断（见第三章）
+bun run eval --judge                                # 全链路评测：测试集→analyze→LLM-judge→diagnose→建议报告（自动加载 LLM 配置）
 ```
 
 输出：控制台表格 + `<数据根>/logs/eval-report-{date}.md` 完整报告。
