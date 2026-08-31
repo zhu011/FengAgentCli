@@ -693,6 +693,16 @@ export function buildMessageSummaries(
         if (s) summaries.push(s);
       }
     }
+    // 补齐 trace 中存在、但会话消息缺失的助手轮次（中断会话回放）：
+    // 会话在 loop 未收尾时被终止（服务被杀 / 死循环被终止）→ SQLite/事件日志
+    // 只落了用户消息，助手回复丢失；trace 文件才是完整的回放源，这里按 trace
+    // 顺序把缺失的助手消息追加回来，保证消息选择器能点出每一轮调用链/评测。
+    const seenIds = new Set(
+      summaries.map((s) => s.messageId).filter((id): id is string => Boolean(id)),
+    );
+    for (const s of assistantById.values()) {
+      if (s.messageId && !seenIds.has(s.messageId)) summaries.push(s);
+    }
   } else {
     summaries.push(...assistantById.values());
   }

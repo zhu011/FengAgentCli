@@ -473,4 +473,86 @@ describe("端到端：主 Agent → task 工具 → 子 Agent", () => {
       .join("");
     expect(finalText).toContain("子 Agent 已完成重构");
   });
+
+  test("AGE-29 回归：模型误用 camelCase subagentType 也能成功派遣（不再反复调用死循环）", async () => {
+    const setup = createTestSetup();
+
+    // 模拟 AGE-29 现场：主 Agent 第一轮把参数写成 subagentType（camelCase），
+    // 修复前 zod 剥离未知键 → "Unknown agent type: undefined" → 模型反复重试 25 轮。
+    // 修复后 schema 归一化别名，任务正常派遣。
+    const responses: LLMEvent[][] = [
+      // 主 Agent 第一轮：camelCase 参数
+      [
+        textDelta("派 3 个研究员并行调研。"),
+        {
+          type: "tool-call",
+          id: "call-1",
+          name: "task",
+          input: {
+            description: "调研 Textual",
+            prompt: "调研 Textual TUI 框架",
+            subagentType: "researcher", // ← 模型误拼
+          },
+        },
+        finish("tool_use"),
+      ],
+      // 子 Agent 轮
+      [textDelta("Textual 是 Python 的 TUI 框架。"), finish("end_turn")],
+      // 主 Agent 第二轮：汇总
+      [textDelta("调研完成：Textual 是 Python TUI 框架。"), finish("end_turn")],
+    ];
+    setup.mockLLM.setResponses(responses);
+
+    const loader = createAgentDefinitionLoader({
+      workdir: TEST_WORKDIR,
+      config: setup.config,
+    });
+    await loader.load();
+
+    const spawnSubagent = createSubagentRunner({
+      llmClient: setup.mockLLM,
+      toolRegistry: setup.toolRegistry,
+      toolExecutor: setup.toolExecutor,
+      contextManager: setup.contextManager,
+      config: setup.config,
+      workdir: TEST_WORKDIR,
+      agentDefinitionLoader: loader,
+    });
+
+    const loopOptions: AgentLoopOptions = {
+      llmClient: setup.mockLLM,
+      toolRegistry: setup.toolRegistry,
+      toolExecutor: setup.toolExecutor,
+      contextManager: setup.contextManager,
+      config: setup.config,
+      workdir: TEST_WORKDIR,
+      spawnSubagent,
+      agentDepth: 0,
+    };
+
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("调研并总结 3 个开源 TUI 框架"));
+
+    const loop = new AgentLoop(loopOptions);
+    const events = await collectEvents(loop.run(session));
+
+    // 不应出现错误事件（修复前是 Unknown agent type 反复重试）
+    expect(events.some((e) => e.type === "error")).toBe(false);
+
+    // task 工具调用成功，返回了子 Agent 的调研结果
+    const taskResult = events.find((e) => e.type === "tool-call-result");
+    expect(taskResult).toBeDefined();
+    const result = (taskResult as { result: { content: string; isError?: boolean } }).result;
+    expect(result.isError).toBe(false);
+    expect(result.content).toContain("Textual 是 Python 的 TUI 框架");
+
+    // 主 Agent 最终完成汇总（2 轮即结束，无死循环）
+    const finalText = session.messages
+      .filter((m) => m.role === "assistant")
+      .flatMap((m) => m.content)
+      .filter((c) => c.type === "text")
+      .map((c) => (c as { text: string }).text)
+      .join("");
+    expect(finalText).toContain("调研完成");
+  });
 });

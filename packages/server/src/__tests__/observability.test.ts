@@ -9,6 +9,7 @@
  * - GET /api/observability/traces/:date/messages?sessionId（消息粒度摘要）
  * - GET /api/eval/overview（报告/建议/测试集清单）
  * - GET /api/eval/messages/:date?sessionId&messageId（单条消息评测）
+ * - GET /api/eval/messages/:date judgeMessage 接入（llmClient 提供时 judge 由 judgeMessage 填充）
  * - GET /api/eval/reports/:date、/optimizations/:date、/testsets/:name
  * - 日期格式校验与 404 行为
  */
@@ -323,6 +324,19 @@ describe("per-message 解析", () => {
     // tool-result 内部用户消息不产生条目
     expect(summaries.some((s) => s.text.includes("src/ packages/"))).toBe(false);
   });
+
+  test("buildMessageSummaries 会话消息不完整（中断会话）时从 trace 补齐助手轮次（AGE-29 回放失败根因）", () => {
+    const records = TRACE_RECORDS.filter((r) => r.sessionId === "sess-1");
+    // 模拟死循环被终止 / 服务被杀的中断会话：SQLite 只落了用户消息，助手回复全部缺失
+    const interruptedSessionMessages: SessionMessageLike[] = [
+      { id: "user-1", role: "user", createdAt: 1000, content: [{ type: "text", text: "分析项目结构" }] },
+    ];
+    const summaries = buildMessageSummaries(records, interruptedSessionMessages);
+    // 用户消息 + trace 中全部助手轮次（msg-1 / msg-2）都被列出
+    expect(summaries.map((s) => s.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(summaries.map((s) => s.messageId)).toEqual(["user-1", "msg-1", "msg-2"]);
+    expect(summaries.find((s) => s.messageId === "msg-2")!.text).toBe("分析完成");
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -513,7 +527,7 @@ describe("GET /api/eval", () => {
     expect(body.message).toEqual({ role: "assistant", text: "分析完成" });
     expect(body.trace?.llmCallCount).toBe(1);
     expect(body.trace?.finishReasons).toEqual(["end_turn"]);
-    // judge 为 KG judgeMessage 扩展点，当前为 null
+    // 未配置 llmClient 时 judge 为 null（judgeMessage 接入后由 llmClient 填充）
     expect(body.judge).toBeNull();
   });
 
@@ -532,3 +546,4 @@ describe("GET /api/eval", () => {
     expect((await app.request("/api/eval/testsets/..%2F..%2Fsecret")).status).toBe(400);
   });
 });
+

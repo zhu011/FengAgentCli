@@ -256,6 +256,13 @@ export class SessionManager {
       existing.updatedAt = Date.now();
     }
 
+    // 并发防护：同会话已有运行中任务时拒绝（防双开/重复提交导致历史重复与调用链错乱，AGE-29）
+    if (this.runningTasks.has(sessionId)) {
+      log.warn("sendMessage", `session ${sessionId} already has a running task, rejecting concurrent request`);
+      yield { type: "error", error: { message: "该会话正在处理中，请等待当前任务完成或中断后再发送" } };
+      return;
+    }
+
     log.info("sendMessage", `sessionId=${sessionId}, text preview=${text.slice(0, 50)}, model=${existing.model}`);
 
     // 创建权限回调（将权限请求推送到 SSE 监听器）

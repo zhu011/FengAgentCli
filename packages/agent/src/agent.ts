@@ -148,6 +148,12 @@ export class Agent {
           });
         }
       }
+      // 每个 loop 轮次结束即增量持久化消息（而非只等在 prompt() 收尾）
+      // —— 会话被中断（SSE 断开 / 服务被杀 / 死循环被终止）时，SQLite
+      // 仍保留已完成的轮次，观测/评测回放不会只剩一条用户消息（AGE-29 回放失败根因）
+      if (event.type === "turn-end" && this.sessionStore) {
+        this.sessionStore.saveMessages(sess.id, sess.messages);
+      }
       yield event;
     }
 

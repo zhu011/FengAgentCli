@@ -2,7 +2,7 @@
 
 # ⚡ FengAgentCli
 
-**开源本地 AI Agent 对话平台** — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩、权限审批。
+**开源本地 AI Agent 对话平台** — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩、对话图溯源与回退重答。
 
 [TypeScript](https://www.typescriptlang.org/) · [Bun](https://bun.sh/) · [Ink TUI](https://github.com/vadimdemedes/ink) · [React](https://react.dev/) · [Hono](https://hono.dev/)
 
@@ -11,12 +11,12 @@
 ![License](https://img.shields.io/badge/License-MIT-6366f1)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-a855f7)
 
-📖 [在线文档](https://zhu011.github.io/FengAgentCli/) · 👶 [新手手册](docs/GUIDE.md) · 📦 [Releases](https://github.com/zhu011/FengAgentCli/releases) · 🐛 [Issues](https://github.com/zhu011/FengAgentCli/issues)
+📖 [在线文档](https://zhu011.github.io/FengAgentCli/) · 📦 [Releases](https://github.com/zhu011/FengAgentCli/releases) · 🐛 [Issues](https://github.com/zhu011/FengAgentCli/issues)
 
 </div>
 
-> **分支说明**：本 README 对应 `main` 分支（经典 Loop 架构）。新架构（Cordis 插件化 + 对话图/事件溯源）在
-> [`refactor/cordis-graph-architecture`](https://github.com/zhu011/FengAgentCli/tree/refactor/cordis-graph-architecture) 分支。
+> **分支说明**：本 README 对应 `refactor/cordis-graph-architecture` 分支（Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。
+> `main` 分支为经典 Loop 架构，两分支数据与配置完全隔离（本分支数据根 `.fengagent-cordis/`）。
 
 ---
 
@@ -25,26 +25,16 @@
 | 图标 | 特性 | 说明 |
 |:---:|------|------|
 | 💬 | **智能对话** | 多轮上下文对话，SSE 流式输出，Markdown 渲染，代码语法高亮 |
+| 🕸️ | **对话图（Graph）** | 每轮「提问→回答」沉淀为节点，可溯源、可分支、可回退 |
+| ↩️ | **回退重答** | `/rollback` 回退到任意节点重答，旧分支完整保留 |
+| 🧩 | **插件化架构** | 模型 / 工具 / 策略 / 存储 / 上下文 / Loop / 图全部为可插拔服务（Cordis） |
+| 📜 | **事件溯源** | 会话以 append-only 事件日志为准，可导出 / 导入 / 重建 / 跨机迁移 |
 | 🤖 | **多 Agent** | Task 工具派遣子 Agent，独立会话 + 角色定义 |
 | 🔧 | **工具调用** | 文件读写、Bash、Glob/Grep、Web 抓取、记忆、Skill |
-| 🌐 | **WebUI** | React + Vite 三套主题，权限审批推送，Token / KV Cache 统计 |
-| 📦 | **上下文压缩** | 工具结果裁剪 + 结构化摘要 + 迭代更新 |
-| 🧠 | **记忆系统** | MEMORY.md + 分类记忆 + 向量检索 |
 | 🧪 | **实验沙箱** | 临时文件 / 临时代码在隔离沙箱执行，安全可控 |
+| 🌐 | **WebUI** | React + Vite 三套主题，对话图可视化面板，KV Cache 统计 |
+| 🧠 | **记忆系统** | MEMORY.md + 分类记忆 + 向量检索 |
 | 📊 | **Agent 测评** | `bun run eval` 自动生成工具成功率 / KV Cache 命中率报告 |
-
-<details>
-<summary>更多特性</summary>
-
-- **多模型支持** — Anthropic、OpenAI、OpenAI-Compatible（DeepSeek 等）、Google Gemini、AWS Bedrock
-- **MCP 集成** — Model Context Protocol 客户端，自动发现外部工具
-- **权限系统** — 工具执行前交互式审批（CLI 弹框 / WebUI SSE 推送）
-- **插件系统** — 第三方插件加载，注册工具 / Provider / Hook / 命令
-- **Skills 系统** — 可复用 Prompt 模板，关键词触发
-- **会话持久化** — SQLite 主存储 + JSONL 副本，跨重启恢复
-- **Multica ACP** — 原生支持 Multica 平台 Agent 运行时集成
-- **编译二进制** — `bun build --compile` 生成独立可执行文件
-</details>
 
 ## 🚀 快速开始
 
@@ -109,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 ### TUI（终端对话）
 
 - **对话**：直接输入问题，`Enter` 发送；`/` 弹出命令补全
-- **常用命令**：`/help` 帮助 · `/model` 切换模型 · `/provider` 配置服务商 · `/compact` 压缩上下文 · `/clear` 清屏
+- **常用命令**：`/help` 帮助 · `/model` 切换模型 · `/provider` 配置服务商 · `/graph` 对话图 · `/rollback` 回退重答 · `/compact` 压缩上下文 · `/clear` 清屏
 - **长对话**：`PgUp/PgDn` 或鼠标滚轮翻阅历史，`Home` 回顶、`End` 回底
 - **思考可视化**：推理模型（DeepSeek reasoner / Anthropic thinking）的思考过程**实时流式显示**（`💭` 缩进斜体），不再只有动画宠物空转
 - **状态栏**：上下文占用进度条（含百分比与 token 计数）+ 模型 / 会话信息
@@ -124,15 +114,24 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 - **思考过程可视化**：推理模型的思考内容经 `thinking-delta` SSE 实时推送，以「💭 深度思考」面板流式展示，**点击展开 / 折叠**（流式期间自动展开，折叠后仍显示字数摘要）；历史消息的思考块同样可见
 - 欢迎页建议卡片点击**填入输入框**（确认后 Enter 发送），卡片 hover 微动画；空会话有轻量引导
 - 助手消息 Markdown 代码块带**复制按钮**（hover / 键盘 focus 可见）
-- 右侧面板：权限审批、消息检查器
+- 右侧面板：权限审批、消息检查器、对话图（分支可视化 / 回退，三套主题自适应）
 - 底部状态栏：输入 / 输出 / 缓存命中 / 命中率 / 合计 tokens
+
+### 多 Agent 协作（任务拆解 → 子 Agent 分工 → 汇总）
+
+- 主 Agent 通过 **`task` 工具**派遣子 Agent 执行独立子任务（前台阻塞，返回 `<task_result>` 汇总给主 Agent），天然支持「任务拆解 → 并行/串行派发 → 汇总结果」的协作模式
+- 内置子 Agent 角色：`default`（通用）、`coder`（代码编写）、`researcher`（只读研究）；也可在 `.fengagent/agents/*.md` 自定义角色
+- **参数容错**：`task` 工具同时接受规范键 `subagent_type` 与模型常见的误拼别名（`subagentType` / `agentType` / `type` / `agent` / `subagent` / `kind` / `name`），避免因参数名不匹配导致「Unknown agent type」反复重试的死循环
+- **死循环防护**：Agent Loop 检测到连续 3 轮工具调用全部失败（模型陷入失败重试循环）时，自动抛出明确错误并终止，不再空耗到 maxTurns；同一会话已有任务运行时，重复发送会被拒绝（防双开/重复提交造成调用链错乱）
+- **中断恢复**：会话消息在每个 loop 轮次结束即增量持久化——即使服务被杀 / 对话被中断，已完成的轮次也不会丢失，观测/评测回放完整
 
 ### 可观测性 / 评测 / 自优化
 
-- **观测**：每次 LLM 调用自动落盘 trace 日志（`.fengagent/logs/llm-trace-{date}.jsonl`，含耗时 / token / 工具调用 / 错误，测试环境自动跳过）。WebUI 顶栏「📡 观测」页：日期切换 + 汇总指标卡 + **调用链树**（会话→消息→LLM 调用→工具调用四层展开，节点含参数 / 返回 / 耗时 / token 明细）+ 指标图表
-- **评测**：`bun run eval` 分析 trace 生成报告（`.fengagent/logs/eval-report-{date}.md`）；支持 `--date= / --all / --file= / --exclude-model=`；WebUI「🧪 评测」页：测试集管理（`.fengagent/testsets/*.json`）、报告浏览与导出
-- **自优化**：`bun run eval --optimize` 评测后自动诊断；`bun run eval --judge` 跑「测试集→LLM-judge→diagnose→建议报告」全链路评测（自动加载 LLM 配置，测试集见 `.fengagent/testsets/*.json`），输出可执行调优建议（系统提示词 / 工具描述 / 上下文策略，含 LLM-judge 结论驱动规则）至 `.fengagent/optimizations/optimization-{date}.md`，WebUI 评测页可直接浏览
+- **观测**：每次 LLM 调用自动落盘 trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`，含耗时 / token / 工具调用 / 错误，测试环境自动跳过）。WebUI 顶栏「📡 观测」页：日期切换 + 汇总指标卡 + **调用链树**（会话→消息→LLM 调用→工具调用四层展开，节点含参数 / 返回 / 耗时 / token 明细）+ 指标图表
+- **评测**：`bun run eval` 分析 trace 生成报告（`<数据根>/logs/eval-report-{date}.md`）；支持 `--date= / --all / --file= / --exclude-model=`；WebUI「🧪 评测」页：测试集管理（`<数据根>/testsets/*.json`）、报告浏览与导出
+- **自优化**：`bun run eval --optimize` 评测后自动诊断；`bun run eval --judge` 跑「测试集→LLM-judge→diagnose→建议报告」全链路评测（自动加载 LLM 配置，测试集见 `<数据根>/testsets/*.json`），输出可执行调优建议（系统提示词 / 工具描述 / 上下文策略，含 LLM-judge 结论驱动规则）至 `<数据根>/optimizations/optimization-{date}.md`，WebUI 评测页可直接浏览
 - **每轮对话深链**：聊天页每条消息右侧「查看调用链」「查看评测」按钮，按每轮对话粒度跳转到观测/评测页（deep-link `?sessionId=X&messageId=Y`，用户消息自动解析到其后助手轮次，工具循环多步全部纳入）；会话列表每个会话行也有「查看观测 / 查看评测」入口，跳转后经消息选择器定位任意一轮；旧日志（无 messageId）自动按文本匹配回退
+- **中断会话回放**：若会话在 Loop 未收尾时被终止（服务被杀 / 死循环被终止），SQLite/事件日志可能只落了用户消息——消息选择器会**自动从 trace 日志补齐缺失的助手轮次**，保证每一轮调用链/评测仍可回放
 - 完整说明见 [docs/EVALUATION.md](docs/EVALUATION.md)（可观测性接入 / 评测手册 / 自优化流程 / LLM-judge 数据结构对齐）
 
 ### 配置
@@ -145,14 +144,14 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 | `FENG_MODEL` | `claude-sonnet-4-20250514` | 主模型 ID |
 | `FENG_CONTEXT_WINDOW` | `200000` | 上下文窗口（token） |
 | `FENG_SERVER_PORT` | `3000` | HTTP 服务端口 |
-| `FENG_DATA_DIR` | `.fengagent` | 数据根（会话 / 日志 / 记忆 / 配置） |
+| `FENG_DATA_DIR` | `.fengagent-cordis` | 数据根（会话 / 事件 / 图 / 日志 / 记忆） |
 
 ## 📚 文档
 
 | 文档 | 说明 |
 |------|------|
-| [新手手册](docs/GUIDE.md) | 从安装到每个功能的可照抄命令 + 预期输出（新手推荐） |
-| [架构设计](docs/ARCHITECTURE.md) | 系统架构与模块设计 |
+| [操作手册](docs/GUIDE-CORDIS.md) | 从安装到每个功能的可照抄命令 + 预期输出（新手推荐） |
+| [架构设计](docs/ARCHITECTURE-CORDIS.md) | Cordis 插件化 + 对话图 + 事件溯源设计 |
 | [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件、权限规则 |
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建、打包 |
 | [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent / Skill |
@@ -170,6 +169,9 @@ packages/
 ├── tools/      — 工具系统 + MCP + 权限 + Hook + 沙箱
 ├── context/    — 上下文管理（压缩、记忆、系统上下文）
 ├── agent/      — Agent 运行时（Loop、SessionStore、子 Agent）
+├── cordis/     — Cordis 插件化集成层
+├── graph/      — 对话图机制（可溯源 / 可回退）
+├── events/     — 事件溯源（append-only 日志 + 投影 + 迁移）
 ├── cli/        — CLI 入口（Ink TUI + print 模式）
 ├── server/     — HTTP 服务（Hono + SSE）
 ├── eval/       — Agent 测评模块

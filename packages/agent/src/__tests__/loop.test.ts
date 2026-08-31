@@ -484,6 +484,87 @@ describe("Agent — 入口类", () => {
 });
 
 // ──────────────────────────────────────────────
+// 测试：连续工具失败死循环防护（AGE-29）
+// ──────────────────────────────────────────────
+
+describe("AgentLoop — 连续工具失败防护", () => {
+  /** 注册一个总是返回错误的工具 */
+  function registerFailTool(toolRegistry: ReturnType<typeof createToolRegistry>) {
+    toolRegistry.register({
+      name: "fail-tool",
+      description: "Always fails",
+      inputSchema: z.object({}),
+      async execute() {
+        return { content: "Error: boom", isError: true };
+      },
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+    });
+  }
+
+  test("连续 3 轮工具全部失败 → 抛出错误并终止循环（不再空耗到 maxTurns）", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+    registerFailTool(options.toolRegistry);
+
+    // 模型每轮都调用 fail-tool（模拟陷入失败重试循环，如 AGE-29 的 task 参数名错误）
+    mockLLM.setResponses([
+      [toolCall("c1", "fail-tool", {}), finish("tool_use")],
+      [toolCall("c2", "fail-tool", {}), finish("tool_use")],
+      [toolCall("c3", "fail-tool", {}), finish("tool_use")],
+      // 第 4 轮不应到达（防护在 3 轮后触发）
+      [textDelta("should not reach here"), finish("end_turn")],
+    ]);
+
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("do it"));
+
+    const loop = new AgentLoop(options);
+    const events = await collectEvents(loop.run(session));
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as { error: { message: string } }).error.message).toContain("全部失败");
+
+    // 循环已终止：第 4 轮的文本未产生
+    expect(
+      events.some(
+        (e) => e.type === "text-delta" && (e as { text: string }).text.includes("should not reach"),
+      ),
+    ).toBe(false);
+
+    // 恰好 3 轮：user + (assistant + tool-result) × 3 = 7 条消息
+    expect(session.messages).toHaveLength(7);
+    const turnEnds = events.filter((e) => e.type === "turn-end");
+    expect(turnEnds).toHaveLength(3);
+    expect((turnEnds[2] as { reason: string }).reason).toBe("error");
+  });
+
+  test("失败轮后出现成功轮 → 计数重置，不触发防护", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+    registerFailTool(options.toolRegistry);
+
+    // 第 1 轮失败、第 2 轮成功、第 3 轮正常结束 — 不应触发防护
+    mockLLM.setResponses([
+      [toolCall("c1", "fail-tool", {}), finish("tool_use")],
+      [toolCall("c2", "echo", { text: "ok" }), finish("tool_use")],
+      [textDelta("done"), finish("end_turn")],
+    ]);
+
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("do it"));
+
+    const loop = new AgentLoop(options);
+    const events = await collectEvents(loop.run(session));
+
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    const turnEnds = events.filter((e) => e.type === "turn-end");
+    expect((turnEnds[turnEnds.length - 1] as { reason: string }).reason).toBe("end_turn");
+  });
+});
+
+// ──────────────────────────────────────────────
 // 测试：会话持久化
 // ──────────────────────────────────────────────
 
