@@ -959,7 +959,7 @@ bun run scripts/events-migrate.ts rebuild [--prune]         # 以事件为准重
   </ul>
 
   <h3 id="feat-agent">多 Agent 协作</h3>
-  <p>通过 <strong>Task 工具</strong>派遣子 Agent，支持独立 Session 和角色定义。在 <code>.fengagent/agents/*.md</code> 中创建 Agent 定义文件：</p>
+  <p>通过 <strong>Task 工具</strong>派遣子 Agent，支持独立 Session 和角色定义。内置角色：<code>default</code>（通用）、<code>coder</code>（代码编写）、<code>researcher</code>（只读研究）；主 Agent 天然支持「任务拆解 → 派子 Agent 分工执行 → 汇总结果」的协作模式。在 <code>.fengagent/agents/*.md</code> 中创建 Agent 定义文件：</p>
   <div class="code-label">markdown — .fengagent/agents/code-reviewer.md</div>
   <pre><code>---
 name: code-reviewer
@@ -1099,7 +1099,10 @@ bun run eval --judge                           # 全链路评测：测试集→L
     服务端 per-message API：<code>/api/observability/traces/:date/callchain?sessionId&amp;messageId</code>
     （该轮次过滤调用链 + focus 解析）、<code>/api/observability/traces/:date/messages?sessionId</code>
     （消息粒度摘要）、<code>/api/eval/messages/:date?sessionId&amp;messageId</code>（单条消息评测，
-    trace 指标 + LLM-judge 扩展点）。旧日志无 messageId 时自动按文本匹配回退。</p>
+    trace 指标 + LLM-judge 扩展点）。旧日志无 messageId 时自动按文本匹配回退。
+    <strong>中断会话回放兜底</strong>：会话在 Loop 未收尾时被终止（服务被杀 / 死循环被防护终止）
+    时，SQLite/事件日志可能只落了用户消息——消息选择器会自动从 trace 日志补齐缺失的助手轮次，
+    每一轮调用链/评测仍可回放（每个 loop 轮次结束即增量持久化消息）。</p>
 </section>
 
 <!-- ==================== 命令参考 ==================== -->

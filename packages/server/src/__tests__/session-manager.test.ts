@@ -299,4 +299,91 @@ describe("SessionManager", () => {
     const pending = manager.getPendingPermissions(session.id);
     expect(pending).toEqual([]);
   });
+
+  test("sendMessage — 会话已有运行中任务时拒绝并发启动（AGE-29 双重循环防护）", async () => {
+    // 用阻塞 LLM 构造 Agent：第一个 Loop 会停在 LLM 流上，期间第二次发送应被拒绝
+    let releaseFirst: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStreamStarted = false;
+
+    const blockingLLM: LLMClient = {
+      async *stream() {
+        firstStreamStarted = true;
+        await gate; // 阻塞直到释放
+        yield { type: "text-delta", text: "first done" };
+        yield { type: "finish", reason: "end_turn" };
+      },
+      async generate() {
+        return {
+          id: "g",
+          model: "m",
+          content: [{ type: "text", text: "s" }],
+          usage: { inputTokens: 1, outputTokens: 1 },
+          finishReason: "end_turn",
+        };
+      },
+    };
+
+    const config = createTestConfig();
+    const toolRegistry = createToolRegistry();
+    const toolExecutor = createToolExecutor();
+    const contextManager = createContextManager({
+      config: {
+        contextWindow: config.contextWindow,
+        compactThreshold: config.compactThreshold,
+        compactKeepTokens: config.compactKeepTokens,
+        disableCompact: config.disableCompact,
+        smallModel: config.smallModel,
+      },
+      summaryGenerator: blockingLLM,
+      systemContextOptions: { workdir: "." },
+    });
+    const blockingAgent = new Agent({
+      llmClient: blockingLLM,
+      toolRegistry,
+      toolExecutor,
+      contextManager,
+      config,
+      workdir: ".",
+    });
+
+    const m = new SessionManager({ createAgent: () => blockingAgent });
+    const session = m.createSession("Test");
+
+    // 启动第一个 Loop（不等待完成）：依次消费 session-start → message-start，
+    // 第三次 next() 才会进入 LLM 流并阻塞在 gate 上
+    const gen1 = m.sendMessage(session.id, "first");
+    const iter1 = gen1[Symbol.asyncIterator]();
+    await iter1.next(); // session-start
+    void iter1.next(); // message-start
+    const pendingLLM = iter1.next(); // 进入 LLM 流（阻塞在 gate 上）
+    // 等第一个 LLM 流真正开始（阻塞在 gate 上）
+    while (!firstStreamStarted) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    // 第二次发送 → 应被拒绝并返回 error 事件，而不是启动第二个 Loop
+    const events2 = await collectEvents(m.sendMessage(session.id, "second"));
+    const err2 = events2.find((e) => e.type === "error");
+    expect(err2).toBeDefined();
+    expect((err2 as { error: { message: string } }).error.message).toContain(
+      "正在执行",
+    );
+    // 被拒绝的发送不能往会话里追加消息
+    expect(session.messages.filter((msg) => msg.role === "user")).toHaveLength(1);
+
+    // 释放第一个 Loop，验证其正常结束
+    releaseFirst!();
+    await pendingLLM;
+    while (true) {
+      const result = await iter1.next();
+      if (result.done) break;
+    }
+
+    // 第一个 Loop 结束后，会话可再次正常发送
+    const events3 = await collectEvents(m.sendMessage(session.id, "third"));
+    expect(events3.some((e) => e.type === "session-end")).toBe(true);
+  });
 });

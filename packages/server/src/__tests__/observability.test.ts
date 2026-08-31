@@ -346,6 +346,19 @@ describe("per-message 解析", () => {
     // tool-result 内部用户消息不产生条目
     expect(summaries.some((s) => s.text.includes("src/ packages/"))).toBe(false);
   });
+
+  test("buildMessageSummaries 会话消息不完整（中断会话）时从 trace 补齐助手轮次（AGE-29 回放失败根因）", () => {
+    const records = TRACE_RECORDS.filter((r) => r.sessionId === "sess-1");
+    // 模拟死循环被终止 / 服务被杀的中断会话：SQLite 只落了用户消息，助手回复全部缺失
+    const interruptedSessionMessages: SessionMessageLike[] = [
+      { id: "user-1", role: "user", createdAt: 1000, content: [{ type: "text", text: "分析项目结构" }] },
+    ];
+    const summaries = buildMessageSummaries(records, interruptedSessionMessages);
+    // 用户消息 + trace 中全部助手轮次（msg-1 / msg-2）都被列出
+    expect(summaries.map((s) => s.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(summaries.map((s) => s.messageId)).toEqual(["user-1", "msg-1", "msg-2"]);
+    expect(summaries.find((s) => s.messageId === "msg-2")!.text).toBe("分析完成");
+  });
 });
 
 // ──────────────────────────────────────────────

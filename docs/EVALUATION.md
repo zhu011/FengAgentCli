@@ -147,6 +147,11 @@ bun run serve        # 生产模式（后端 + 静态前端）
 
 **数据层约定**：`llm-trace` 记录已携带 `messageId`（Agent Loop 每个循环步写入，见 1.2 记录格式），无需重建数据层；旧记录无 `messageId` 时，per-message 查询自动回退为按消息文本匹配定位（`focus.legacyMatch=true`），无法匹配时返回空步骤提示。
 
+**中断会话回放（AGE-29 修复）**：会话在 Loop 未收尾时被终止（服务被杀 / 死循环被防护终止）时，SQLite/事件日志可能只持久化了用户消息（旧实现只在回合收尾整批保存）。两条兜底保证回放完整：
+
+1. **增量持久化**：`RuntimeAgent.prompt` 在每个 `turn-end` 即调用 `ctx.storage.saveMessages`，中断前已完成的轮次全部落盘（事件日志按 messageId 幂等，重复保存不产生重复事件）。
+2. **trace 补齐**：`buildMessageSummaries`（`/traces/:date/messages` 消息选择器数据源）在会话消息不完整时，按 trace 顺序自动追加 trace 中缺失的助手轮次——即使旧数据根里的会话已损坏，选择器仍能点出每一轮调用链/评测。
+
 ## 三、自优化流程说明
 
 ### 3.1 闭环流程

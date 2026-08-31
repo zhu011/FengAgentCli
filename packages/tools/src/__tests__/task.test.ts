@@ -126,6 +126,59 @@ describe("taskTool — 基本属性", () => {
     });
     expect(withId.task_id).toBe("prev-task-123");
   });
+
+  test("输入 schema 归一化：接受 camelCase subagentType 别名（AGE-29 死循环根因）", () => {
+    // 模型常见误拼：subagentType（camelCase）
+    const camel = taskTool.inputSchema.parse({
+      description: "research tui",
+      prompt: "调研 TUI",
+      subagentType: "researcher",
+    }) as { description: string; subagent_type?: string; task_id?: string };
+    expect(camel.subagent_type).toBe("researcher");
+
+    // 其他别名（agentType / type / agent / subagent / kind / name）同样归一化
+    for (const alias of ["agentType", "type", "agent", "subagent", "kind", "name", "agent_type"]) {
+      const parsed = taskTool.inputSchema.parse({
+        description: "d",
+        prompt: "p",
+        [alias]: "coder",
+      }) as { subagent_type?: string };
+      expect(parsed.subagent_type).toBe("coder");
+    }
+
+    // 规范键优先于别名
+    const both = taskTool.inputSchema.parse({
+      description: "d",
+      prompt: "p",
+      subagent_type: "default",
+      subagentType: "coder",
+    }) as { subagent_type?: string };
+    expect(both.subagent_type).toBe("default");
+  });
+
+  test("输入 schema 归一化：别名缺失时 subagent_type 为 undefined（execute 给出明确错误）", () => {
+    const parsed = taskTool.inputSchema.parse({
+      description: "d",
+      prompt: "p",
+    }) as { subagent_type?: string };
+    expect(parsed.subagent_type).toBeUndefined();
+  });
+
+  test("execute 缺子 Agent 类型时返回可自纠正的错误信息", async () => {
+    const ctx: ToolContext = {
+      workdir: TEST_WORKDIR,
+      sessionId: "test-session",
+      messageId: "test-msg",
+      spawnSubagent: createMockSpawnSubagent(),
+    };
+    const result = await taskTool.execute(
+      { description: "d", prompt: "p", subagent_type: undefined },
+      ctx,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("subagent_type");
+    expect(result.content).toContain("researcher");
+  });
 });
 
 // ──────────────────────────────────────────────

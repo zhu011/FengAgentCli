@@ -30,6 +30,16 @@ import { llmEventToAgentEvents } from "./streaming.ts";
 
 const log = createLogger("agent-loop");
 
+/**
+ * 连续「全工具失败」轮次上限 — 死循环防护。
+ *
+ * 当模型反复调用同一批工具且每次都全部失败（如 task 工具参数名错误导致
+ * 「Unknown agent type」反复重试，AGE-29 现场连续 25 轮），继续循环只会
+ * 空耗 token 与时间。连续 N 轮工具调用全部失败即判定模型陷入失败重试循环，
+ * 抛出明确错误并终止（而不是等到 maxTurns=50 才停）。
+ */
+const MAX_CONSECUTIVE_TOOL_ERROR_STEPS = 3;
+
 /** AgentLoop 构造选项 */
 export interface AgentLoopOptions {
   llmClient: LLMClient;
@@ -80,6 +90,7 @@ export class AgentLoop {
   ): AsyncGenerator<AgentEvent> {
     let needsContinuation = true;
     let step = 0;
+    let consecutiveToolErrorSteps = 0;
     const { maxTurns } = this.options.config;
 
     while (needsContinuation && step < maxTurns) {
@@ -318,6 +329,31 @@ export class AgentLoop {
         session.updatedAt = Date.now();
         session.tokenCount =
           this.options.contextManager.estimateTokens(session.messages);
+
+        // 死循环防护：连续多轮工具调用全部失败 → 判定模型陷入失败重试循环，
+        // 抛出明确错误并终止（而非继续空耗到 maxTurns）。
+        const allToolsFailed =
+          toolResults.length > 0 && toolResults.every((tr) => tr.result.isError);
+        if (allToolsFailed) {
+          consecutiveToolErrorSteps++;
+        } else {
+          consecutiveToolErrorSteps = 0;
+        }
+        if (consecutiveToolErrorSteps >= MAX_CONSECUTIVE_TOOL_ERROR_STEPS) {
+          const failedNames = toolResults
+            .map((tr) => tr.result.content)
+            .filter((c): c is string => typeof c === "string")
+            .map((c) => String(c).slice(0, 80))
+            .join(" | ");
+          const message =
+            `工具调用连续 ${consecutiveToolErrorSteps} 轮全部失败（模型可能陷入重复失败重试循环），` +
+            `已终止本轮对话防止死循环。最近错误: ${failedNames || "(无错误内容)"}`;
+          log.error("run", `consecutive tool failure guard: ${message}`);
+          yield { type: "error", error: { message } };
+          yield { type: "turn-end", reason: "error" };
+          return;
+        }
+
         needsContinuation = true;
       } else {
         // 无工具调用 — 结束循环

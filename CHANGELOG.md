@@ -4,6 +4,27 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 多 Agent 协作死循环修复 + 回放兜底（AGE-29）
+
+### 修复
+
+- **多 Agent 协作死循环（AGE-29 现场：25 轮 / 48 次 task 调用全部失败）** — `task` 工具输入 schema 兼容模型常见的参数名误拼（`subagentType` / `agentType` / `type` / `agent` / `subagent` / `kind` / `name`），归一化到规范键 `subagent_type`；值仍与可用 Agent 类型（default / coder / researcher）运行时校验，缺失时返回可自纠正的明确错误（`packages/tools/src/builtin/task.ts`）
+- **Agent Loop 死循环防护** — 连续 3 轮工具调用全部失败（模型陷入失败重试循环）时自动抛出错误并终止，不再空耗到 maxTurns（`packages/agent/src/loop.ts`）
+- **同会话并发发送防护** — 会话已有运行中任务时拒绝再次启动 Loop，防止双开/重复提交造成用户消息重复入历史与调用链错乱（`packages/server/src/session-manager.ts`）
+- **中断会话回放兜底** — ① `RuntimeAgent.prompt` 每个 `turn-end` 增量持久化消息，服务被杀/对话中断时已完成的轮次不丢失；② `buildMessageSummaries` 在会话消息不完整时从 trace 日志补齐缺失的助手轮次，消息选择器仍可定位每一轮调用链/评测（`packages/server/src/create-runtime-agent.ts`、`packages/server/src/routes/observability.ts`）
+
+### 测试
+
+- `task.test.ts`：camelCase/别名归一化、缺失类型明确报错
+- `loop.test.ts`：连续工具失败防护触发 / 成功轮重置计数
+- `session-manager.test.ts`：并发发送拒绝（阻塞 LLM 门控）
+- `observability.test.ts`：中断会话消息选择器 trace 补齐
+- `subagent-runner.test.ts`：AGE-29 回归 E2E——模型误用 camelCase 也能完成「拆解 → 派子 Agent → 汇总」
+
+### 文档
+
+- README「多 Agent 协作」小节 + 中断会话回放说明；docs/EVALUATION.md §2.6 中断会话回放兜底
+
 ## [Unreleased] — 界面体验优化 Round 4（思考可视化 + 去 AI 味动效）
 
 ### 新功能（思考过程可视化）

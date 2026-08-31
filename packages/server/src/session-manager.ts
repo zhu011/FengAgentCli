@@ -271,6 +271,23 @@ export class SessionManager {
       throw new SessionNotFoundError(sessionId);
     }
 
+    // 并发防护：同一会话已有运行中的任务时拒绝再次启动（双开标签页 / 重复提交时，
+    // 两个 Loop 会同时读写同一 Session 并各自追加用户消息，造成调用链错乱与重复执行）
+    const running = this.runningTasks.get(sessionId);
+    if (running && !running.aborted) {
+      log.info(
+        "sendMessage",
+        `rejected concurrent run sessionId=${sessionId}, text preview=${text.slice(0, 50)}`,
+      );
+      yield {
+        type: "error",
+        error: {
+          message: "该会话已有正在执行的任务，请等待完成或先中断后再发送新消息。",
+        },
+      };
+      return;
+    }
+
     // 应用模型覆盖
     if (model && model !== existing.model) {
       existing.model = model;
