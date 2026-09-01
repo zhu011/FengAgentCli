@@ -288,6 +288,11 @@ export function useSession(client: ApiClient): UseSessionResult {
       const streamingText = new Map<string, string>();
       const streamingThinking = new Map<string, string>();
       const messageToolCalls = new Map<string, ToolCallInfo[]>();
+      // toolUseId → 所属 assistant 消息 id。
+      // 关键：loop 的事件顺序是 message-end 之后才执行工具并发出 tool-call-result，
+      // 届时 currentMessageId 已被 message-end 置空；必须用独立映射关联工具结果，
+      // 否则 tool-call-result 永远匹配不到消息，工具卡片停留在 "running"（转圈）不消失。
+      const toolUseToMessageId = new Map<string, string>();
       let currentMessageId: string | null = null;
 
       try {
@@ -346,6 +351,7 @@ export function useSession(client: ApiClient): UseSessionResult {
                 // 工具调用归属于当前正在生成的 assistant 消息
                 const msgId = currentMessageId;
                 if (!msgId) break;
+                toolUseToMessageId.set(event.toolUseId, msgId);
                 const calls = messageToolCalls.get(msgId) ?? [];
                 calls.push({
                   toolUseId: event.toolUseId,
@@ -363,7 +369,11 @@ export function useSession(client: ApiClient): UseSessionResult {
               }
 
               case "tool-call-result": {
-                const msgId = currentMessageId;
+                // 按 toolUseId → 消息 映射定位归属（message-end 已把 currentMessageId 置空，
+                // 工具结果在其后到达，不能再用 currentMessageId 关联）
+                const msgId =
+                  toolUseToMessageId.get(event.toolUseId) ?? currentMessageId;
+                toolUseToMessageId.delete(event.toolUseId);
                 if (!msgId) break;
                 const calls = messageToolCalls.get(msgId) ?? [];
                 const idx = calls.findIndex(
@@ -410,7 +420,8 @@ export function useSession(client: ApiClient): UseSessionResult {
               }
 
               // turn-end / session-end — 兜底清理：确保所有消息标记为非流式
-              // （防止 message-end 未到达时 streaming: true 永不消除）
+              // （防止 message-end 未到达时 streaming: true 永不消除）；
+              // 同时复位仍处于 running 的工具调用（loop 终止/出错时不再转圈）
               case "turn-end":
               case "session-end": {
                 if (currentMessageId) {
@@ -423,10 +434,13 @@ export function useSession(client: ApiClient): UseSessionResult {
                   streamingThinking.delete(currentMessageId);
                   currentMessageId = null;
                 }
-                // 安全清理：标记所有消息为非流式
-                setDisplayMessages((prev) =>
-                  prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-                );
+                // 安全清理：标记所有消息为非流式 + 复位 running 工具调用
+                setDisplayMessages((prev) => {
+                  const nonStreaming = prev.map((m) =>
+                    m.streaming ? { ...m, streaming: false } : m,
+                  );
+                  return markRunningToolCallsFailed(nonStreaming);
+                });
                 break;
               }
 
@@ -476,10 +490,15 @@ export function useSession(client: ApiClient): UseSessionResult {
         clearTimeout(timeoutTimer);
         setIsStreaming(false);
         abortRef.current = null;
-        // 安全清理：标记所有消息为非流式（保留 tokenStats 等已设置的字段）
-        setDisplayMessages((prev) =>
-          prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-        );
+        toolUseToMessageId.clear();
+        // 安全清理：标记所有消息为非流式 + 复位仍 running 的工具调用
+        // （覆盖中断/超时/流异常终止：未收到 tool-call-result 的子项不再转圈）
+        setDisplayMessages((prev) => {
+          const nonStreaming = prev.map((m) =>
+            m.streaming ? { ...m, streaming: false } : m,
+          );
+          return markRunningToolCallsFailed(nonStreaming);
+        });
         void refreshSessions();
       }
     },
@@ -490,10 +509,13 @@ export function useSession(client: ApiClient): UseSessionResult {
     // 始终清除 streaming 状态，不依赖 abort 副作用
     abortRef.current?.abort();
     setIsStreaming(false);
-    // 安全清理：标记所有消息为非流式
-    setDisplayMessages((prev) =>
-      prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-    );
+    // 安全清理：标记所有消息为非流式 + 复位 running 工具调用（中断后不再转圈）
+    setDisplayMessages((prev) => {
+      const nonStreaming = prev.map((m) =>
+        m.streaming ? { ...m, streaming: false } : m,
+      );
+      return markRunningToolCallsFailed(nonStreaming);
+    });
     // 使用 ref 读取最新 sessionId
     const sessionId = activeSessionIdRef.current;
     if (!sessionId) return;
@@ -548,8 +570,51 @@ export function useSession(client: ApiClient): UseSessionResult {
 // 辅助函数
 // ──────────────────────────────────────────────
 
+/**
+ * 将仍处于 running 的工具调用复位为 failed。
+ *
+ * loop 正常收尾时每个 tool-call-start 都有对应的 tool-call-result（completed/failed），
+ * 不会有 running 残留；running 残留只出现在异常终止路径（死循环防护/LLM 错误/中断/
+ * 超时/连接断开），此时把子项从「转圈」复位为明确的失败态。
+ */
+function markRunningToolCallsFailed(messages: DisplayMessage[]): DisplayMessage[] {
+  return messages.map((m) => {
+    if (!m.toolCalls.some((tc) => tc.status === "running")) return m;
+    return {
+      ...m,
+      toolCalls: m.toolCalls.map((tc) =>
+        tc.status === "running"
+          ? {
+              ...tc,
+              status: "failed",
+              result: {
+                content: "工具调用未完成（对话已终止或中断）",
+                isError: true,
+              },
+            }
+          : tc,
+      ),
+    };
+  });
+}
+
 /** 将 Session 转换为 DisplayMessage 列表 */
 function sessionToDisplayMessages(session: Session): DisplayMessage[] {
+  // 工具结果块位于独立的 user 消息中（loop 将工具结果作为 user 消息加入历史），
+  // 先全量收集 toolUseId → 结果 映射，再在助手消息里关联 tool-use 块，
+  // 否则重载历史时工具卡片永远拿不到结果（也无法区分成功/失败）。
+  const toolResults = new Map<string, { content: string; isError?: boolean }>();
+  for (const msg of session.messages) {
+    for (const block of msg.content) {
+      if (block.type === "tool-result") {
+        toolResults.set(block.toolUseId, {
+          content: block.content,
+          isError: block.isError,
+        });
+      }
+    }
+  }
+
   return session.messages.map((msg) => {
     let text = "";
     let thinking = "";
@@ -561,25 +626,20 @@ function sessionToDisplayMessages(session: Session): DisplayMessage[] {
       } else if (block.type === "thinking") {
         thinking += block.text;
       } else if (block.type === "tool-use") {
+        const result = toolResults.get(block.id);
         toolCalls.push({
           toolUseId: block.id,
           name: block.name,
           input: block.input,
-          status: "completed",
+          result,
+          // 有结果按结果定态；无结果（会话中断/终止，工具未返回）按失败处理
+          status:
+            result === undefined
+              ? "failed"
+              : result.isError
+                ? "failed"
+                : "completed",
         });
-      } else if (block.type === "tool-result") {
-        const idx = toolCalls.findIndex(
-          (c) => c.toolUseId === block.toolUseId,
-        );
-        if (idx !== -1) {
-          const tc = toolCalls[idx];
-          if (tc) {
-            tc.result = {
-              content: block.content,
-              isError: block.isError,
-            };
-          }
-        }
       }
     }
 

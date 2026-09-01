@@ -4,6 +4,17 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — task 缺参兜底 + 终止后工具卡片不再转圈（AGE-29 后续）
+
+### 修复
+
+- **task 工具缺参/空值兜底（推荐问题路径仍报 `subagent_type` 缺失，会话 277e9047 复现）** — AGE-29 的别名归一化只覆盖误拼键名（`subagentType` 等），模型**完全缺参或传空值**时仍返回错误并触发失败重试。现在缺参时按任务内容关键词**保守推断**（研究类 → `researcher`，编码类 → `coder`），推断不出回退通用 `default`；`task` 工具永不因缺参失败，推断/兜底来源写入结果备注与 `metadata.subagentTypeSource`，主 Agent 可自纠正（`packages/tools/src/builtin/task.ts`）
+- **loop 终止/出错后工具卡片「转圈」不消失（WebUI）** — 根因：loop 事件顺序是 `message-end` 之后才发 `tool-call-result`，前端 `currentMessageId` 已被置空导致结果永远匹配不到工具项。修复：① 用 `toolUseId → 消息` 映射关联工具结果（正常流与失败流都能正确落到卡片状态）；② loop 终止/出错/中断/超时（`turn-end`/`session-end`/`finally`/`interrupt`）统一把仍 `running` 的工具项复位为 `failed`，不再永久转圈；③ 会话重载时跨消息关联工具结果并正确区分成功/失败（`packages/web-ui/src/hooks/use-session.ts`）
+
+### 测试
+
+- `task.test.ts`：缺参/空值/空白兜底为 `default`、研究/编码关键词推断、显式优先于推断、execute 缺参不再报错且携带兜底备注
+
 ## [Unreleased] — 多 Agent 协作死循环修复 + 回放兜底（AGE-29）
 
 ### 修复
