@@ -8,6 +8,7 @@
  * 4. 深度限制防递归
  * 5. 未知 Agent 类型处理
  * 6. 子 Agent 工具过滤（task 工具被排除）
+ * 7. subagent_type 缺参/空值兜底（推断 → default，不再报错）
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
@@ -156,28 +157,98 @@ describe("taskTool — 基本属性", () => {
     expect(both.subagent_type).toBe("default");
   });
 
-  test("输入 schema 归一化：别名缺失时 subagent_type 为 undefined（execute 给出明确错误）", () => {
-    const parsed = taskTool.inputSchema.parse({
+  test("输入 schema 归一化：别名缺失/空值时兜底为 default（不再 undefined）", () => {
+    const missing = taskTool.inputSchema.parse({
       description: "d",
       prompt: "p",
     }) as { subagent_type?: string };
-    expect(parsed.subagent_type).toBeUndefined();
+    expect(missing.subagent_type).toBe("default");
+
+    const empty = taskTool.inputSchema.parse({
+      description: "d",
+      prompt: "p",
+      subagent_type: "",
+    }) as { subagent_type?: string };
+    expect(empty.subagent_type).toBe("default");
+
+    const whitespace = taskTool.inputSchema.parse({
+      description: "d",
+      prompt: "p",
+      subagentType: "   ",
+    }) as { subagent_type?: string };
+    expect(whitespace.subagent_type).toBe("default");
   });
 
-  test("execute 缺子 Agent 类型时返回可自纠正的错误信息", async () => {
+  test("输入 schema 兜底推断：研究类任务 → researcher，编码类任务 → coder", () => {
+    const research = taskTool.inputSchema.parse({
+      description: "调研 TUI 框架",
+      prompt: "请研究并总结 3 个开源 TUI 框架",
+    }) as { subagent_type?: string };
+    expect(research.subagent_type).toBe("researcher");
+
+    const code = taskTool.inputSchema.parse({
+      description: "实现登录模块",
+      prompt: "请写一个 Node.js CLI 工具并修复参数解析 bug",
+    }) as { subagent_type?: string };
+    expect(code.subagent_type).toBe("coder");
+
+    // 显式值优先于推断
+    const explicit = taskTool.inputSchema.parse({
+      description: "调研 TUI 框架",
+      prompt: "请研究并总结 3 个开源 TUI 框架",
+      subagent_type: "coder",
+    }) as { subagent_type?: string };
+    expect(explicit.subagent_type).toBe("coder");
+  });
+
+  test("execute 缺子 Agent 类型时不再报错，兜底为 default 并正常派遣", async () => {
+    let receivedType: string | undefined;
     const ctx: ToolContext = {
       workdir: TEST_WORKDIR,
       sessionId: "test-session",
       messageId: "test-msg",
-      spawnSubagent: createMockSpawnSubagent(),
+      spawnSubagent: async (params) => {
+        receivedType = params.subagentType;
+        return {
+          taskId: "mock-task-id",
+          sessionId: "mock-session-id",
+          state: "completed" as const,
+          text: "Subagent completed",
+        };
+      },
+    };
+    // 真实链路：loop 先经 inputSchema 解析模型输入（缺参 → 兜底 default + 来源标记），再执行
+    const parsed = taskTool.inputSchema.parse({ description: "d", prompt: "p" });
+    const result = await taskTool.execute(parsed, ctx);
+    expect(result.isError).toBe(false);
+    expect(receivedType).toBe("default");
+    // 兜底备注写入结果，主 Agent 可知晓并自纠正
+    expect(result.content).toContain("subagent_type 未显式提供");
+    expect((result.metadata as { subagentTypeSource?: string }).subagentTypeSource).toBe("default");
+  });
+
+  test("execute 缺参但内容含研究关键词时推断为 researcher", async () => {
+    let receivedType: string | undefined;
+    const ctx: ToolContext = {
+      workdir: TEST_WORKDIR,
+      sessionId: "test-session",
+      messageId: "test-msg",
+      spawnSubagent: async (params) => {
+        receivedType = params.subagentType;
+        return {
+          taskId: "mock-task-id",
+          sessionId: "mock-session-id",
+          state: "completed" as const,
+          text: "调研完成",
+        };
+      },
     };
     const result = await taskTool.execute(
-      { description: "d", prompt: "p", subagent_type: undefined },
+      { description: "调研 Textual", prompt: "请研究并总结 Textual 框架", subagent_type: "researcher" },
       ctx,
     );
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("subagent_type");
-    expect(result.content).toContain("researcher");
+    expect(result.isError).toBe(false);
+    expect(receivedType).toBe("researcher");
   });
 });
 
