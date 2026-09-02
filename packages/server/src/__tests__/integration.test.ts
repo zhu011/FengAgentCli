@@ -1067,6 +1067,75 @@ describe("集成测试：权限系统", () => {
     expect(toolResult!.result.isError).toBe(true);
   });
 
+  test("destructive 工具 → 权限请求 → 用户改参后批准 → 工具以修改后参数执行（human-in-the-loop）", async () => {
+    mockLLM = new MockLLMClient();
+    const { agent } = createTestAgent(mockLLM, {
+      autoApproveTools: false,
+    });
+
+    sessionManager = new SessionManager({
+      createAgent: () => agent,
+    });
+
+    mockLLM.setResponses([
+      // LLM 发起 destructive 工具调用（action: delete — 用户认为参数不对）
+      [toolCall("call-1", "danger", { action: "delete" }), finish("tool_use")],
+      // 工具以修改后参数执行成功后 LLM 正常回复
+      [textDelta("Renamed successfully."), finish("end_turn")],
+    ]);
+
+    const session = sessionManager.createSession("Permission HITL Test");
+
+    let permissionResolve: (req: { reqId: string; input: unknown }) => void;
+    const permissionPromise = new Promise<{ reqId: string; input: unknown }>(
+      (resolve) => {
+        permissionResolve = resolve;
+      },
+    );
+
+    sessionManager.subscribePermissions(session.id, (req) => {
+      permissionResolve({ reqId: req.reqId, input: req.input });
+    });
+
+    // 启动消息发送（后台收集事件）
+    const events: AgentEvent[] = [];
+    const collectPromise = (async () => {
+      for await (const event of sessionManager.sendMessage(session.id, "Do something")) {
+        events.push(event);
+      }
+    })();
+
+    // 等待权限请求
+    const permReq = await permissionPromise;
+    expect(permReq.input).toEqual({ action: "delete" });
+
+    // 用户在界面上把参数从 delete 改为 rename 后批准
+    const responded = sessionManager.respondPermission(session.id, permReq.reqId, {
+      decision: "allow",
+      input: { action: "rename" },
+    });
+    expect(responded).toBe(true);
+
+    // 等待事件流完成
+    await collectPromise;
+
+    // 工具以修改后的参数执行：danger 工具回显实际执行的 action
+    const toolResult = events.find(
+      (e): e is Extract<AgentEvent, { type: "tool-call-result" }> =>
+        e.type === "tool-call-result",
+    );
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.result.isError ?? false).toBe(false);
+    expect(toolResult!.result.content).toBe("Executed: rename");
+    // 事件携带实际执行入参（用户修正后的参数）
+    expect(toolResult!.input).toEqual({ action: "rename" });
+
+    // 会话历史：assistant 消息的 tool-use 块同步为实际执行入参（可溯源）
+    const assistantMsg = session.messages.find((m) => m.role === "assistant");
+    const toolUse = assistantMsg!.content.find((c) => c.type === "tool-use");
+    expect((toolUse as { input: unknown }).input).toEqual({ action: "rename" });
+  });
+
   test("GET /api/sessions/:id/permissions — 初始无权限请求", async () => {
     mockLLM = new MockLLMClient();
     const { agent } = createTestAgent(mockLLM);

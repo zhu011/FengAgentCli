@@ -54,8 +54,14 @@ export function GraphPanel({ graph, busy, onRollback }: GraphPanelProps) {
     const active = activeIds.has(node.id);
     const isHead = node.id === graph.activeHead?.id;
     const rolledBack = node.meta.rolledBack || activeIds.has(node.id) === false && node.type !== "branch-point";
+    // 可回退节点：assistant / tool（→ 回退到父节点，即该轮提问处）、user（→ 回退到自身）。
+    // 点击后走「回退并重答」：回退 + 截断 + 自动重新回答（与 CLI /rollback 语义一致）。
     const canRollback =
-      (node.type === "assistant" || node.type === "user") && active && !busy;
+      (node.type === "assistant" ||
+        node.type === "tool" ||
+        node.type === "user") &&
+      active &&
+      !busy;
 
     return (
       <div key={node.id}>
@@ -98,7 +104,7 @@ export function GraphPanel({ graph, busy, onRollback }: GraphPanelProps) {
               onClick={() => onRollback(node.id)}
             >
               <RotateCcw size={11} />
-              回退到父节点
+              回退并重答
             </button>
           )}
         </div>
@@ -142,7 +148,7 @@ export function GraphPanel({ graph, busy, onRollback }: GraphPanelProps) {
             <>
               {roots.map((node) => renderNode(node, 0))}
               <p className="graph-panel__hint">
-                💡 点击助手节点「回退到父节点」：回到该提问处重答，旧分支作废但保留，可随时溯源。
+                💡 点击节点「回退并重答」：回退到该轮提问处并自动重新回答，旧分支作废但保留，可随时溯源。
               </p>
             </>
           )}

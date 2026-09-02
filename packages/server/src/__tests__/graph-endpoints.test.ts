@@ -128,6 +128,31 @@ class GraphBackedAgent {
       truncatedToMessageId,
     };
   }
+
+  /** 回退并自动重答（假实现）— 复刻 RuntimeAgent.rollbackAndRetry 的事件序列 */
+  async *rollbackAndRetry(
+    session: Session,
+    nodeId?: string,
+    reason = "用户回退并重答",
+    _options?: {
+      requestPermission?: (
+        permission: { toolName: string; input: unknown; reason?: string },
+      ) => Promise<{ decision: "allow" | "deny"; reason?: string; input?: unknown }>;
+    },
+  ): AsyncGenerator<AgentEvent> {
+    const rb = this.rollback(session, nodeId, reason);
+    if (!rb.ok) {
+      yield { type: "error", error: { message: rb.message } };
+      return;
+    }
+    // 事件序列：session-start（携带回退截断后的会话）→ 重答轮次 → session-end
+    yield { type: "session-start", session };
+    yield { type: "message-start", messageId: "msg-retry-1", role: "assistant" };
+    yield { type: "text-delta", messageId: "msg-retry-1", text: "重答内容（自动）" };
+    yield { type: "message-end", messageId: "msg-retry-1" };
+    yield { type: "turn-end", reason: "end_turn" };
+    yield { type: "session-end" };
+  }
 }
 
 /** 通过 createApp 构造测试用 Hono app + SessionManager */
@@ -222,6 +247,40 @@ describe("对话图 / 回退 端点（Phase 3/4）", () => {
     expect(oldAssistant?.meta.active).toBe(false);
     // 活跃 head 是分支点
     expect(body.graph?.activeHead?.type).toBe("branch-point");
+  });
+
+  test("POST /api/sessions/:id/rollback-retry 回退并自动重答（SSE 流）", async () => {
+    const { app, sessionManager, store } = makeApp(session);
+    sessionManager.createSession("graph test");
+
+    const userMsg = createUserMessage("回答我");
+    session.messages.push(userMsg);
+    store.createRootNode(session.id, userMsg.id, "user");
+    const assistantNode = store.createNode(session.id, "msg-assistant-1", "assistant");
+
+    // 回退该 assistant 节点 → 截断到用户提问 → 自动重答
+    const res = await app.request(`/api/sessions/${session.id}/rollback-retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nodeId: assistantNode.id, reason: "回答不好" }),
+    });
+    expect(res.status).toBe(200);
+    const bodyText = await res.text();
+
+    // SSE 帧包含：session-start（截断后会话）→ message-start → text-delta → message-end → turn-end → session-end
+    expect(bodyText).toContain("event: session-start");
+    expect(bodyText).toContain('"type":"session-start"');
+    expect(bodyText).toContain("event: message-start");
+    expect(bodyText).toContain('"text":"重答内容（自动）"');
+    expect(bodyText).toContain("event: turn-end");
+    expect(bodyText).toContain("event: session-end");
+
+    // 会话已截断到用户提问（1 条消息）
+    expect(session.messages.length).toBe(1);
+    // 图中出现分支点，旧 assistant 作废保留
+    const graph = sessionManager.getGraph(session.id);
+    expect(graph?.nodes.some((n) => n.type === "branch-point")).toBe(true);
+    expect(graph?.activeHead?.type).toBe("branch-point");
   });
 
   test("普通 Agent（无 Graph 机制）→ graph 端点 404", async () => {

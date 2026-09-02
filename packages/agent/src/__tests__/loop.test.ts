@@ -565,6 +565,135 @@ describe("AgentLoop — 连续工具失败防护", () => {
 });
 
 // ──────────────────────────────────────────────
+// 测试：用户改参后执行（human-in-the-loop 入参修正）
+// ──────────────────────────────────────────────
+
+describe("AgentLoop — 用户改参后执行（tool-call-result 携带实际入参 + 历史同步）", () => {
+  test("executor 标记 userCorrectedInput → 事件带实际入参、历史 tool-use 块同步为新参数", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    // 第一轮 LLM 想以错误参数调用 echo；executor 经用户改参后以修正参数执行
+    mockLLM.setResponses([
+      [
+        toolCall("call-1", "echo", { text: "orig" }),
+        usageEvent(15, 10),
+        finish("tool_use"),
+      ],
+      [
+        textDelta("done"),
+        usageEvent(5, 3),
+        finish("end_turn"),
+      ],
+    ]);
+
+    // 桩 executor：模拟「用户把参数从 orig 改为 corrected 后放行」
+    const stubExecutor = {
+      async executeMany() {
+        return [
+          {
+            toolName: "echo",
+            input: { text: "corrected" },
+            result: {
+              content: "executed with corrected",
+              metadata: { userCorrectedInput: true },
+            },
+          },
+        ];
+      },
+      async execute() {
+        return { content: "x" };
+      },
+      getHookRegistry() {
+        return {
+          register: () => {},
+          unregister: () => false,
+          getHandlers: () => [],
+        };
+      },
+    } as unknown as typeof options.toolExecutor;
+    options.toolExecutor = stubExecutor;
+
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("echo something"));
+
+    const loop = new AgentLoop(options);
+    const events = await collectEvents(loop.run(session));
+
+    // tool-call-result 事件携带实际执行入参（用户修正后的参数）
+    const toolResult = events.find(
+      (e): e is Extract<AgentEvent, { type: "tool-call-result" }> =>
+        e.type === "tool-call-result",
+    );
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.input).toEqual({ text: "corrected" });
+
+    // 历史中 assistant 消息的 tool-use 块同步为实际执行入参
+    const assistantMsg = session.messages.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    const toolUse = assistantMsg!.content.find((c) => c.type === "tool-use");
+    expect(toolUse).toBeDefined();
+    expect((toolUse as { input: unknown }).input).toEqual({
+      text: "corrected",
+    });
+  });
+
+  test("无改参标记 → 事件不带 input、历史保持模型原始入参", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    mockLLM.setResponses([
+      [
+        toolCall("call-1", "echo", { text: "orig" }),
+        finish("tool_use"),
+      ],
+      [textDelta("done"), finish("end_turn")],
+    ]);
+
+    // 普通 executor 结果（无 userCorrectedInput 标记）
+    const stubExecutor = {
+      async executeMany() {
+        return [
+          {
+            toolName: "echo",
+            input: { text: "orig" },
+            result: { content: "ok" },
+          },
+        ];
+      },
+      async execute() {
+        return { content: "x" };
+      },
+      getHookRegistry() {
+        return {
+          register: () => {},
+          unregister: () => false,
+          getHandlers: () => [],
+        };
+      },
+    } as unknown as typeof options.toolExecutor;
+    options.toolExecutor = stubExecutor;
+
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("echo something"));
+
+    const loop = new AgentLoop(options);
+    const events = await collectEvents(loop.run(session));
+
+    const toolResult = events.find(
+      (e): e is Extract<AgentEvent, { type: "tool-call-result" }> =>
+        e.type === "tool-call-result",
+    );
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.input).toBeUndefined();
+
+    const assistantMsg = session.messages.find((m) => m.role === "assistant");
+    const toolUse = assistantMsg!.content.find((c) => c.type === "tool-use");
+    expect((toolUse as { input: unknown }).input).toEqual({ text: "orig" });
+  });
+});
+
+// ──────────────────────────────────────────────
 // 测试：会话持久化
 // ──────────────────────────────────────────────
 

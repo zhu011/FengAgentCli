@@ -96,6 +96,8 @@ export type AgentEvent =
       type: "tool-call-result";
       toolUseId: string;
       result: { content: string; isError?: boolean; metadata?: unknown };
+      /** 实际执行的入参 — 与模型原始入参不同时携带（用户改参后执行） */
+      input?: unknown;
     }
   | { type: "message-end"; messageId: string }
   | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }
@@ -132,7 +134,7 @@ export interface PermissionRequest {
 }
 
 export type PermissionResult =
-  | { decision: "allow" }
+  | { decision: "allow"; input?: unknown }
   | { decision: "deny"; reason?: string };
 
 // ──────────────────────────────────────────────

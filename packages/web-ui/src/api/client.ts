@@ -130,21 +130,49 @@ export class ApiClient {
    * 因为需要 POST + JSON body（EventSource 不支持 POST）。
    */
   async *sendMessage(req: SendMessageRequest): AsyncGenerator<AgentEvent> {
-    const res = await fetch(
-      `${this.baseUrl}/api/sessions/${req.sessionId}/messages`,
+    const body: Record<string, unknown> = { content: req.content };
+    if (req.model) body.model = req.model;
+    yield* this.postSSE(`/api/sessions/${req.sessionId}/messages`, body, req.signal);
+  }
+
+  /**
+   * POST /api/sessions/:id/rollback-retry — 回退到目标节点并自动重答（SSE 流）。
+   *
+   * 与 CLI /rollback <节点id> 同一语义：回退（旧分支作废保留）→ 截断 → 重答。
+   */
+  async *rollbackRetry(
+    sessionId: string,
+    nodeId?: string,
+    reason = "用户回退并重答",
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    yield* this.postSSE(
+      `/api/sessions/${sessionId}/rollback-retry`,
       {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          content: req.content,
-          ...(req.model ? { model: req.model } : {}),
-        }),
-        signal: req.signal,
+        ...(nodeId ? { nodeId } : {}),
+        ...(reason ? { reason } : {}),
       },
+      signal,
     );
+  }
+
+  /**
+   * 通用 SSE POST：发起 JSON POST 请求并解析 SSE 事件流。
+   */
+  private async *postSSE(
+    path: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
 
     if (!res.ok) {
-      throw await this.toApiError(res, "Failed to send message");
+      throw await this.toApiError(res, `POST ${path} failed`);
     }
 
     if (!res.body) {

@@ -357,6 +357,9 @@ export async function createRuntimeAgent(
           workdir,
           spawnSubagent: subagentRunner,
           agentDepth: 0,
+          // 工具执行走真实 executor（入参校验 / 权限审批 / hooks 生效），
+          // 与 main 分支 plain-Agent 路径一致；human-in-the-loop 改参依赖此路径
+          toolExecutor,
         },
       },
     ],

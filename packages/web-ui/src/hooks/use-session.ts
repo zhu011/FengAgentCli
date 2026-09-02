@@ -7,8 +7,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
-import { consumeSSEStream } from "./use-sse.ts";
 import type {
+  AgentEvent,
   GraphData,
   PermissionRequest,
   Session,
@@ -22,6 +22,8 @@ export interface ToolCallInfo {
   input: unknown;
   result?: { content: string; isError?: boolean };
   status: "running" | "completed" | "failed";
+  /** 入参是否被用户在审批环节人工修改后执行（human-in-the-loop） */
+  edited?: boolean;
 }
 
 /** 前端展示用的消息项（含工具调用列表） */
@@ -67,11 +69,13 @@ export interface UseSessionResult {
   interrupt: () => Promise<void>;
   respondPermission: (
     reqId: string,
-    result: { decision: "allow" } | { decision: "deny"; reason?: string },
+    result: { decision: "allow"; input?: unknown } | { decision: "deny"; reason?: string },
   ) => Promise<void>;
   refreshSession: () => Promise<void>;
   refreshGraph: () => Promise<void>;
   rollback: (nodeId?: string, reason?: string) => Promise<void>;
+  /** 回退到目标节点并自动重答（SSE 流；图面板「回退并重答」闭环） */
+  rollbackRetry: (nodeId?: string, reason?: string) => Promise<void>;
 }
 
 export function useSession(client: ApiClient): UseSessionResult {
@@ -350,7 +354,7 @@ export function useSession(client: ApiClient): UseSessionResult {
       };
       setDisplayMessages((prev) => [...prev, userMsg]);
 
-      // 流式状态（闭包内追踪）
+      // 流式状态（闭包内追踪；与 rollbackRetry 共用同一套 handleTurnEvent 渲染逻辑）
       const streamingText = new Map<string, string>();
       const streamingThinking = new Map<string, string>();
       const messageToolCalls = new Map<string, ToolCallInfo[]>();
@@ -359,195 +363,27 @@ export function useSession(client: ApiClient): UseSessionResult {
       // 届时 currentMessageId 已被 message-end 置空；必须用独立映射关联工具结果，
       // 否则 tool-call-result 永远匹配不到消息，工具卡片停留在 "running"（转圈）不消失。
       const toolUseToMessageId = new Map<string, string>();
-      let currentMessageId: string | null = null;
+      const streamCtx: TurnStreamCtx = {
+        streamingText,
+        streamingThinking,
+        messageToolCalls,
+        toolUseToMessageId,
+        currentMessageId: { value: null },
+        setDisplayMessages,
+        setError,
+        setSessionTokenStats,
+      };
 
       try {
-        await consumeSSEStream(client, sessionId, text, controller.signal, {
-          onEvent: (event) => {
-            firstEventReceived = true; // 收到任意事件，取消超时
-            switch (event.type) {
-              case "message-start": {
-                currentMessageId = event.messageId;
-                // 创建 assistant 消息占位
-                setDisplayMessages((prev) => {
-                  if (prev.some((m) => m.id === event.messageId)) return prev;
-                  return [
-                    ...prev,
-                    {
-                      id: event.messageId,
-                      role: event.role,
-                      text: "",
-                      thinking: "",
-                      toolCalls: [],
-                      streaming: true,
-                      createdAt: Date.now(),
-                    },
-                  ];
-                });
-                break;
-              }
-
-              case "text-delta": {
-                const id = event.messageId;
-                const accumulated = (streamingText.get(id) ?? "") + event.text;
-                streamingText.set(id, accumulated);
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === id ? { ...m, text: accumulated } : m,
-                  ),
-                );
-                break;
-              }
-
-              case "thinking-delta": {
-                // 思考过程内容 — 流式累积，前端可实时展示（展开/折叠）
-                const id = event.messageId;
-                const accumulated =
-                  (streamingThinking.get(id) ?? "") + event.text;
-                streamingThinking.set(id, accumulated);
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === id ? { ...m, thinking: accumulated } : m,
-                  ),
-                );
-                break;
-              }
-
-              case "tool-call-start": {
-                // 工具调用归属于当前正在生成的 assistant 消息
-                const msgId = currentMessageId;
-                if (!msgId) break;
-                toolUseToMessageId.set(event.toolUseId, msgId);
-                const calls = messageToolCalls.get(msgId) ?? [];
-                calls.push({
-                  toolUseId: event.toolUseId,
-                  name: event.name,
-                  input: event.input,
-                  status: "running",
-                });
-                messageToolCalls.set(msgId, calls);
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
-                  ),
-                );
-                break;
-              }
-
-              case "tool-call-result": {
-                // 按 toolUseId → 消息 映射定位归属（message-end 已把 currentMessageId 置空，
-                // 工具结果在其后到达，不能再用 currentMessageId 关联）
-                const msgId =
-                  toolUseToMessageId.get(event.toolUseId) ?? currentMessageId;
-                toolUseToMessageId.delete(event.toolUseId);
-                if (!msgId) break;
-                const calls = messageToolCalls.get(msgId) ?? [];
-                const idx = calls.findIndex(
-                  (c) => c.toolUseId === event.toolUseId,
-                );
-                if (idx !== -1) {
-                  const existing = calls[idx];
-                  if (existing) {
-                    calls[idx] = {
-                      toolUseId: existing.toolUseId,
-                      name: existing.name,
-                      input: existing.input,
-                      result: event.result,
-                      status: event.result.isError ? "failed" : "completed",
-                    };
-                    messageToolCalls.set(msgId, calls);
-                    setDisplayMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
-                      ),
-                    );
-                  }
-                }
-                break;
-              }
-
-              case "message-end": {
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === event.messageId
-                      ? { ...m, streaming: false }
-                      : m,
-                  ),
-                );
-                streamingText.delete(event.messageId);
-                streamingThinking.delete(event.messageId);
-                currentMessageId = null;
-                break;
-              }
-
-              case "error": {
-                setError(event.error.message);
-                break;
-              }
-
-              // turn-end / session-end — 兜底清理：确保所有消息标记为非流式
-              // （防止 message-end 未到达时 streaming: true 永不消除）；
-              // 同时复位仍处于 running 的工具调用（loop 终止/出错时不再转圈）
-              case "turn-end":
-              case "session-end": {
-                if (currentMessageId) {
-                  setDisplayMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === currentMessageId ? { ...m, streaming: false } : m,
-                    ),
-                  );
-                  streamingText.delete(currentMessageId);
-                  streamingThinking.delete(currentMessageId);
-                  currentMessageId = null;
-                }
-                // 安全清理：标记所有消息为非流式 + 复位 running 工具调用
-                setDisplayMessages((prev) => {
-                  const nonStreaming = prev.map((m) =>
-                    m.streaming ? { ...m, streaming: false } : m,
-                  );
-                  return markRunningToolCallsFailed(nonStreaming);
-                });
-                break;
-              }
-
-              case "session-start":
-              case "compaction-start":
-              case "compaction-end":
-                break;
-
-              case "usage": {
-                // 捕获 token 用量和缓存命中统计
-                const usageStats: TokenStats = {
-                  inputTokens: event.inputTokens,
-                  outputTokens: event.outputTokens,
-                  ...(event.cacheReadTokens ? { cacheReadTokens: event.cacheReadTokens } : {}),
-                  ...(event.cacheCreationTokens ? { cacheCreationTokens: event.cacheCreationTokens } : {}),
-                };
-                // 附加到当前 assistant 消息
-                if (currentMessageId) {
-                  setDisplayMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === currentMessageId
-                        ? { ...m, tokenStats: usageStats }
-                        : m,
-                    ),
-                  );
-                }
-                // 累加到会话级统计
-                setSessionTokenStats((prev) => ({
-                  inputTokens: (prev?.inputTokens ?? 0) + usageStats.inputTokens,
-                  outputTokens: (prev?.outputTokens ?? 0) + usageStats.outputTokens,
-                  cacheReadTokens: (prev?.cacheReadTokens ?? 0) + (usageStats.cacheReadTokens ?? 0),
-                  cacheCreationTokens: (prev?.cacheCreationTokens ?? 0) + (usageStats.cacheCreationTokens ?? 0),
-                }));
-                break;
-              }
-            }
-          },
-          onError: (err) => {
-            setError(err.message);
-          },
-        }, model);
+        for await (const event of client.sendMessage({
+          sessionId,
+          content: text,
+          ...(model ? { model } : {}),
+          signal: controller.signal,
+        })) {
+          firstEventReceived = true; // 收到任意事件，取消超时
+          handleTurnEvent(event, streamCtx);
+        }
       } catch (err) {
         if (!(err instanceof DOMException && err.name === "AbortError")) {
           setError(err instanceof Error ? err.message : "Streaming failed");
@@ -569,6 +405,85 @@ export function useSession(client: ApiClient): UseSessionResult {
       }
     },
     [client, refreshSessions],
+  );
+
+  /**
+   * 回退到目标节点并自动重答（WebUI 图面板「回退并重答」闭环）。
+   *
+   * 与 CLI /rollback <节点id> 语义一致：服务端回退（旧分支作废保留、会话截断）后
+   * 立即自动重新回答；SSE 流首帧 session-start 携带回退后的会话，客户端据此重建
+   * 消息列表，随后按常规轮次流式渲染新回答。
+   */
+  const rollbackRetry = useCallback(
+    async (nodeId?: string, reason = "用户回退并重答") => {
+      const sessionId = activeSessionIdRef.current;
+      // 已有流式任务在跑（sendMessage / 上一次 rollbackRetry）时拒绝重复操作
+      if (!sessionId || abortRef.current) return;
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setIsStreaming(true);
+      setError(null);
+
+      // 超时兜底：30s 无任何 SSE 事件 → abort（回退/重答服务不可用时防止永久挂起）
+      let firstEventReceived = false;
+      const timeoutTimer = setTimeout(() => {
+        if (!firstEventReceived) {
+          controller.abort();
+          setError("回退重答超时（30s 无响应），请检查后端服务是否正常启动。");
+        }
+      }, 30_000);
+
+      const streamingText = new Map<string, string>();
+      const streamingThinking = new Map<string, string>();
+      const messageToolCalls = new Map<string, ToolCallInfo[]>();
+      const toolUseToMessageId = new Map<string, string>();
+      const streamCtx: TurnStreamCtx = {
+        streamingText,
+        streamingThinking,
+        messageToolCalls,
+        toolUseToMessageId,
+        currentMessageId: { value: null },
+        setDisplayMessages,
+        setError,
+        setSessionTokenStats,
+        // 回退后的首帧 session-start：用截断后的会话重建消息列表（被回退的旧轮次消失）
+        onSessionStart: (sess) => {
+          setActiveSession(sess);
+          setDisplayMessages(sessionToDisplayMessages(sess));
+        },
+      };
+
+      try {
+        for await (const event of client.rollbackRetry(
+          sessionId,
+          nodeId,
+          reason,
+          controller.signal,
+        )) {
+          firstEventReceived = true;
+          handleTurnEvent(event, streamCtx);
+        }
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          setError(err instanceof Error ? err.message : "Rollback retry failed");
+        }
+      } finally {
+        clearTimeout(timeoutTimer);
+        setIsStreaming(false);
+        abortRef.current = null;
+        toolUseToMessageId.clear();
+        setDisplayMessages((prev) => {
+          const nonStreaming = prev.map((m) =>
+            m.streaming ? { ...m, streaming: false } : m,
+          );
+          return markRunningToolCallsFailed(nonStreaming);
+        });
+        void refreshSessions();
+        void refreshGraph();
+      }
+    },
+    [client, refreshSessions, refreshGraph],
   );
 
   const interrupt = useCallback(async () => {
@@ -595,7 +510,9 @@ export function useSession(client: ApiClient): UseSessionResult {
   const respondPermission = useCallback(
     async (
       reqId: string,
-      result: { decision: "allow" } | { decision: "deny"; reason?: string },
+      result:
+        | { decision: "allow"; input?: unknown }
+        | { decision: "deny"; reason?: string },
     ) => {
       const sessionId = activeSessionIdRef.current;
       if (!sessionId) return;
@@ -612,6 +529,36 @@ export function useSession(client: ApiClient): UseSessionResult {
     },
     [client],
   );
+
+  // 权限审批轮询：流式执行期间（工具 ask / 入参校验失败会阻塞 loop 等待人工决策）
+  // 周期拉取待处理权限请求，让人工审批卡片（含可编辑入参）实时出现在检查器面板。
+  useEffect(() => {
+    if (!activeSessionId || !isStreaming) return;
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const pending = await client.getPendingPermissions(activeSessionId);
+        if (cancelled) return;
+        setPendingPermissions((prev) => {
+          const known = new Set(prev.map((p) => p.reqId));
+          const merged = [...prev];
+          for (const req of pending) {
+            if (!known.has(req.reqId)) merged.push(req);
+          }
+          return merged;
+        });
+      } catch {
+        // 轮询失败静默（下次周期重试）
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [client, activeSessionId, isStreaming]);
 
   return {
     sessions,
@@ -634,12 +581,227 @@ export function useSession(client: ApiClient): UseSessionResult {
     refreshSession,
     refreshGraph,
     rollback,
+    rollbackRetry,
   };
 }
 
 // ──────────────────────────────────────────────
 // 辅助函数
 // ──────────────────────────────────────────────
+
+/**
+ * 单次 SSE 轮次（sendMessage / rollbackRetry 共用）的流式渲染上下文。
+ *
+ * 流式状态与消息列表更新被抽成 handleTurnEvent，两条链路（发送新消息 /
+ * 回退后自动重答）共用同一套「message-start → text-delta → tool-call → result →
+ * message-end」渲染逻辑，避免行为分叉。
+ */
+interface TurnStreamCtx {
+  streamingText: Map<string, string>;
+  streamingThinking: Map<string, string>;
+  messageToolCalls: Map<string, ToolCallInfo[]>;
+  toolUseToMessageId: Map<string, string>;
+  /** message-end 会把当前消息 id 置空；工具结果在 message-end 之后到达，须用独立映射关联 */
+  currentMessageId: { value: string | null };
+  /** session-start 处理（默认无操作；rollbackRetry 用它重建回退截断后的消息列表） */
+  onSessionStart?: (session: Session) => void;
+  setDisplayMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>;
+  setError: (message: string | null) => void;
+  setSessionTokenStats: React.Dispatch<React.SetStateAction<TokenStats | null>>;
+}
+
+/** 处理单个 AgentEvent — 流式渲染（sendMessage / rollbackRetry 共用） */
+function handleTurnEvent(event: AgentEvent, ctx: TurnStreamCtx): void {
+  const {
+    streamingText,
+    streamingThinking,
+    messageToolCalls,
+    toolUseToMessageId,
+    currentMessageId,
+    setDisplayMessages,
+    setError,
+    setSessionTokenStats,
+  } = ctx;
+
+  switch (event.type) {
+    case "session-start": {
+      // rollbackRetry：首帧 session-start 携带回退截断后的会话 → 重建消息列表
+      ctx.onSessionStart?.(event.session);
+      break;
+    }
+
+    case "message-start": {
+      currentMessageId.value = event.messageId;
+      // 创建 assistant 消息占位
+      setDisplayMessages((prev) => {
+        if (prev.some((m) => m.id === event.messageId)) return prev;
+        return [
+          ...prev,
+          {
+            id: event.messageId,
+            role: event.role,
+            text: "",
+            thinking: "",
+            toolCalls: [],
+            streaming: true,
+            createdAt: Date.now(),
+          },
+        ];
+      });
+      break;
+    }
+
+    case "text-delta": {
+      const id = event.messageId;
+      const accumulated = (streamingText.get(id) ?? "") + event.text;
+      streamingText.set(id, accumulated);
+      setDisplayMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, text: accumulated } : m)),
+      );
+      break;
+    }
+
+    case "thinking-delta": {
+      // 思考过程内容 — 流式累积，前端可实时展示（展开/折叠）
+      const id = event.messageId;
+      const accumulated =
+        (streamingThinking.get(id) ?? "") + event.text;
+      streamingThinking.set(id, accumulated);
+      setDisplayMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, thinking: accumulated } : m)),
+      );
+      break;
+    }
+
+    case "tool-call-start": {
+      // 工具调用归属于当前正在生成的 assistant 消息
+      const msgId = currentMessageId.value;
+      if (!msgId) break;
+      toolUseToMessageId.set(event.toolUseId, msgId);
+      const calls = messageToolCalls.get(msgId) ?? [];
+      calls.push({
+        toolUseId: event.toolUseId,
+        name: event.name,
+        input: event.input,
+        status: "running",
+      });
+      messageToolCalls.set(msgId, calls);
+      setDisplayMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
+        ),
+      );
+      break;
+    }
+
+    case "tool-call-result": {
+      // 按 toolUseId → 消息 映射定位归属（message-end 已把 currentMessageId 置空，
+      // 工具结果在其后到达，不能再用 currentMessageId 关联）
+      const msgId =
+        toolUseToMessageId.get(event.toolUseId) ?? currentMessageId.value;
+      toolUseToMessageId.delete(event.toolUseId);
+      if (!msgId) break;
+      const calls = messageToolCalls.get(msgId) ?? [];
+      const idx = calls.findIndex((c) => c.toolUseId === event.toolUseId);
+      if (idx !== -1) {
+        const existing = calls[idx];
+        if (existing) {
+          // 用户改参后执行：tool-call-result 携带实际执行入参 → 卡片输入同步为实际参数
+          const corrected = event.input !== undefined;
+          calls[idx] = {
+            toolUseId: existing.toolUseId,
+            name: existing.name,
+            input: corrected ? event.input : existing.input,
+            edited: corrected ? true : existing.edited,
+            result: event.result,
+            status: event.result.isError ? "failed" : "completed",
+          };
+          messageToolCalls.set(msgId, calls);
+          setDisplayMessages((prev) =>
+            prev.map((m) =>
+              m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
+            ),
+          );
+        }
+      }
+      break;
+    }
+
+    case "message-end": {
+      setDisplayMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.messageId ? { ...m, streaming: false } : m,
+        ),
+      );
+      streamingText.delete(event.messageId);
+      streamingThinking.delete(event.messageId);
+      currentMessageId.value = null;
+      break;
+    }
+
+    case "error": {
+      setError(event.error.message);
+      break;
+    }
+
+    // turn-end / session-end — 兜底清理：确保所有消息标记为非流式
+    // （防止 message-end 未到达时 streaming: true 永不消除）；
+    // 同时复位仍处于 running 的工具调用（loop 终止/出错时不再转圈）
+    case "turn-end":
+    case "session-end": {
+      if (currentMessageId.value) {
+        setDisplayMessages((prev) =>
+          prev.map((m) =>
+            m.id === currentMessageId.value ? { ...m, streaming: false } : m,
+          ),
+        );
+        streamingText.delete(currentMessageId.value);
+        streamingThinking.delete(currentMessageId.value);
+        currentMessageId.value = null;
+      }
+      // 安全清理：标记所有消息为非流式 + 复位 running 工具调用
+      setDisplayMessages((prev) => {
+        const nonStreaming = prev.map((m) =>
+          m.streaming ? { ...m, streaming: false } : m,
+        );
+        return markRunningToolCallsFailed(nonStreaming);
+      });
+      break;
+    }
+
+    case "compaction-start":
+    case "compaction-end":
+      break;
+
+    case "usage": {
+      // 捕获 token 用量和缓存命中统计
+      const usageStats: TokenStats = {
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
+        ...(event.cacheReadTokens ? { cacheReadTokens: event.cacheReadTokens } : {}),
+        ...(event.cacheCreationTokens ? { cacheCreationTokens: event.cacheCreationTokens } : {}),
+      };
+      // 附加到当前 assistant 消息
+      if (currentMessageId.value) {
+        setDisplayMessages((prev) =>
+          prev.map((m) =>
+            m.id === currentMessageId.value
+              ? { ...m, tokenStats: usageStats }
+              : m,
+          ),
+        );
+      }
+      // 累加到会话级统计
+      setSessionTokenStats((prev) => ({
+        inputTokens: (prev?.inputTokens ?? 0) + usageStats.inputTokens,
+        outputTokens: (prev?.outputTokens ?? 0) + usageStats.outputTokens,
+        cacheReadTokens: (prev?.cacheReadTokens ?? 0) + (usageStats.cacheReadTokens ?? 0),
+        cacheCreationTokens: (prev?.cacheCreationTokens ?? 0) + (usageStats.cacheCreationTokens ?? 0),
+      }));
+      break;
+    }
+  }
+}
 
 /**
  * 将仍处于 running 的工具调用复位为 failed。

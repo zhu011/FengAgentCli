@@ -396,6 +396,8 @@ export class LoopServiceImpl extends Service implements LoopService {
       workdir: string;
       spawnSubagent?: SubagentRunner;
       agentDepth?: number;
+      /** 真实工具执行器（含校验/权限/hooks）；缺省回退 ctx.tools.execute 直调 */
+      toolExecutor?: import("@fengagent/tools").ToolExecutor;
     },
   ) {
     super(ctx, "loop");
@@ -418,32 +420,40 @@ export class LoopServiceImpl extends Service implements LoopService {
       materialize: () => tools.materialize(),
       unregister: () => false,
     };
+    // 真实 executor 存在时工具执行走 executor（入参校验 / 权限审批 / hooks 生效，
+    // 与 main 分支 plain-Agent 路径一致，human-in-the-loop 改参依赖此路径）；
+    // 否则回退 ctx.tools.execute 直调（仅轻量测试运行时）。
+    const executor = this.options.toolExecutor ?? {
+      execute: async (tool: ToolDefinition, input: unknown, ctx: ToolContext) => {
+        const results = await tools.execute([{ tool, input }], ctx);
+        return results[0]!;
+      },
+      executeMany: async (
+        calls: Array<{ tool: ToolDefinition; input: unknown }>,
+        ctx: ToolContext,
+      ) => {
+        const results = await tools.execute(calls, ctx);
+        return calls.map((call, i) => ({
+          toolName: call.tool.name,
+          input: call.input,
+          result: results[i]!,
+        }));
+      },
+      getHookRegistry: () =>
+        ({
+          register: () => {},
+          unregister: () => false,
+          getHandlers: () => [],
+        }) as never,
+    };
+
     const loop = new AgentLoop({
       llmClient: {
         stream: (req) => model.stream(req),
         generate: (req) => model.generate(req),
       },
       toolRegistry: toolRegistryLike,
-      toolExecutor: {
-        execute: async (tool, input, ctx) => {
-          const results = await tools.execute([{ tool, input }], ctx);
-          return results[0]!;
-        },
-        executeMany: async (calls, ctx) => {
-          const results = await tools.execute(calls, ctx);
-          return calls.map((call, i) => ({
-            toolName: call.tool.name,
-            input: call.input,
-            result: results[i]!,
-          }));
-        },
-        getHookRegistry: () =>
-          ({
-            register: () => {},
-            unregister: () => false,
-            getHandlers: () => [],
-          }) as never,
-      },
+      toolExecutor: executor,
       contextManager: {
         assemble: (s) => context.assemble(s),
         shouldCompact: (c) => context.shouldCompact(c),

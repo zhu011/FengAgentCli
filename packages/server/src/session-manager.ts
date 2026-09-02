@@ -32,6 +32,21 @@ export interface GraphAgentLike {
     rollbackToNode?: import("@fengagent/graph").ConversationNode;
     truncatedToMessageId?: string;
   };
+  /** 回退并自动重答（SSE 流；RuntimeAgent 提供，普通 Agent 无此能力） */
+  rollbackAndRetry?(
+    session: Session,
+    nodeId?: string,
+    reason?: string,
+    options?: {
+      requestPermission?: (
+        permission: {
+          toolName: string;
+          input: unknown;
+          reason?: string;
+        },
+      ) => Promise<PermissionResult>;
+    },
+  ): AsyncGenerator<AgentEvent>;
 }
 
 /** 权限请求记录 */
@@ -558,6 +573,79 @@ export class SessionManager {
     // 同步内存缓存中的会话状态
     this.sessions.set(sessionId, session);
     return { ...result, graph: graphAgent.getGraphData(sessionId) };
+  }
+
+  /**
+   * 回退并自动重答（SSE 事件流）— WebUI 图面板「回退并重答」闭环。
+   *
+   * 语义与 CLI /rollback <节点id> 一致（agent.rollbackAndRetry）：
+   * 回退（旧分支作废保留）→ 会话截断 → 重新回答（新回答挂在分支点下）。
+   * 权限请求复用 sendMessage 的 requestPermission 桥接。
+   *
+   * @param sessionId - 会话 ID
+   * @param nodeId - 目标节点 id（缺省取活跃路径最后一个 assistant 节点）
+   * @param reason - 回退原因
+   * @returns AgentEvent 事件流（session-start 携带回退截断后的会话）
+   */
+  async *rollbackRetrySession(
+    sessionId: string,
+    nodeId?: string,
+    reason = "用户回退并重答",
+  ): AsyncGenerator<AgentEvent> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new SessionNotFoundError(sessionId);
+    }
+    const agent = this.agents.get(sessionId);
+    const graphAgent = agent as unknown as GraphAgentLike | undefined;
+    if (!graphAgent?.rollbackAndRetry) {
+      yield {
+        type: "error",
+        error: { message: "当前 Agent 未接入回退重答机制（非运行时装配）。" },
+      };
+      return;
+    }
+
+    // 并发防护：同一会话已有运行中的任务时拒绝再次启动
+    const running = this.runningTasks.get(sessionId);
+    if (running && !running.aborted) {
+      yield {
+        type: "error",
+        error: {
+          message: "该会话已有正在执行的任务，请等待完成或先中断后再回退重答。",
+        },
+      };
+      return;
+    }
+
+    // 权限回调（重答过程中工具可能请求审批）
+    const requestPermission: RequestPermission = async (permission) => {
+      return this.requestPermission(sessionId, permission);
+    };
+
+    const generator = graphAgent.rollbackAndRetry(session, nodeId, reason, {
+      requestPermission,
+    });
+    const task: RunningTask = {
+      aborted: false,
+      generator: generator as AsyncGenerator<AgentEvent>,
+    };
+    this.runningTasks.set(sessionId, task);
+
+    try {
+      for await (const event of generator) {
+        if (task.aborted) {
+          yield {
+            type: "error",
+            error: { message: "Interrupted by user" },
+          };
+          break;
+        }
+        yield event;
+      }
+    } finally {
+      this.runningTasks.delete(sessionId);
+    }
   }
 
   /**

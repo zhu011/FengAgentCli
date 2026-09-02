@@ -319,7 +319,7 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | Session Routes | `routes/sessions.ts` | 会话 CRUD + 消息 SSE + 权限 + 图/回退端点 |
 | Model Routes | `routes/models.ts` | 模型列表 |
 | SSE | `sse.ts` | AgentEvent → SSE 帧转换 |
-| SessionManager | `session-manager.ts` | RuntimeAgent 实例池、权限桥接、getGraph / rollbackSession / getAgent |
+| SessionManager | `session-manager.ts` | RuntimeAgent 实例池、权限桥接（含改参 allow）、getGraph / rollbackSession / rollbackRetrySession / getAgent |
 
 ### API 端点
 
@@ -330,12 +330,13 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | GET | `/api/sessions/:id` | 获取会话详情 |
 | POST | `/api/sessions/:id/messages` | 发送消息（返回 SSE 流） |
 | POST | `/api/sessions/:id/interrupt` | 中断当前运行 |
-| POST | `/api/sessions/:id/permissions/:reqId` | 权限响应 |
+| POST | `/api/sessions/:id/permissions/:reqId` | 权限响应（allow 可携带修改后的工具入参 — human-in-the-loop 改参） |
 | GET | `/api/sessions/:id/permissions` | 获取待处理权限请求 |
 | GET | `/api/sessions/:id/export` | 导出会话 |
 | DELETE | `/api/sessions/:id` | 销毁会话 |
 | GET | `/api/sessions/:id/graph` | 获取对话图（节点/活跃路径） |
-| POST | `/api/sessions/:id/rollback` | 回退到指定节点并重答 |
+| POST | `/api/sessions/:id/rollback` | 回退到目标节点（截断，旧分支保留） |
+| POST | `/api/sessions/:id/rollback-retry` | 回退并自动重答（SSE 流；WebUI 图面板「回退并重答」闭环） |
 | GET | `/api/models` | 获取可用模型列表 |
 
 ---
@@ -352,13 +353,13 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | Markdown Renderer | `components/markdown-renderer.tsx` | Markdown + 代码高亮 |
 | Model Selector | `components/model-selector.tsx` | 模型下拉选择 |
 | Session Sidebar | `components/session-sidebar.tsx` | 会话列表侧边栏 |
-| Graph Panel | `components/graph-panel.tsx` | ★ 对话图可视化（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显） |
+| Graph Panel | `components/graph-panel.tsx` | ★ 对话图可视化（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显；assistant/tool/user 节点均可「回退并重答」） |
 
 ### Hooks
 
 | Hook | 文件 | 职责 |
 |------|------|------|
-| `useSession` | `hooks/use-session.ts` | 会话 CRUD + 消息状态管理 + `graph` / `refreshGraph` / `rollback` / `refreshSession` |
+| `useSession` | `hooks/use-session.ts` | 会话 CRUD + 消息状态管理 + `graph` / `refreshGraph` / `rollback` / `rollbackRetry` / `refreshSession` + 权限轮询 |
 | `useSse` | `hooks/use-sse.ts` | SSE 事件流消费（含 usage 事件 → KV Cache 统计） |
 | `useModels` | `hooks/use-models.ts` | 模型列表加载 |
 

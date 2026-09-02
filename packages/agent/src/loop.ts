@@ -264,6 +264,9 @@ export class AgentLoop {
         }
 
         // 按原始工具调用顺序映射结果
+        // 同时记录「用户改参后执行」的调用（executor 在结果 metadata 打 userCorrectedInput 标记）：
+        // tool-call-result 事件携带实际执行入参，历史 tool-use 块同步为实际入参（可溯源）
+        const correctedToolUses = new Map<string, unknown>();
         for (let i = 0; i < toolCalls.length; i++) {
           const tc = toolCalls[i]!;
           const callIdx = callToToolCallIndex.indexOf(i);
@@ -283,6 +286,19 @@ export class AgentLoop {
               toolUseId: tc.id,
               result: execResult.result,
             });
+            const meta = execResult.result.metadata as
+              | Record<string, unknown>
+              | undefined;
+            if (meta?.userCorrectedInput === true) {
+              correctedToolUses.set(tc.id, execResult.input);
+              // 历史 tool-use 块同步为实际执行入参（用户改参后执行的是新参数）
+              const block = assistantContent.find(
+                (b) => b.type === "tool-use" && b.id === tc.id,
+              );
+              if (block && block.type === "tool-use") {
+                block.input = execResult.input;
+              }
+            }
           }
         }
 
@@ -297,6 +313,9 @@ export class AgentLoop {
             type: "tool-call-result",
             toolUseId,
             result,
+            ...(correctedToolUses.has(toolUseId)
+              ? { input: correctedToolUses.get(toolUseId) }
+              : {}),
           };
         }
 

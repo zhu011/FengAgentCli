@@ -4,6 +4,33 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 对话图节点级「回退并重答」闭环 + 工具入参人工改参重试（human-in-the-loop）
+
+### 新功能
+
+- **图节点回退补齐全链路（refactor/cordis）** — 确认现有对话图回退为**单节点粒度**（`RuntimeAgent.rollback`，非整会话）；补齐 WebUI 闭环：
+  - 对话图面板活跃节点（**user / assistant / tool**）均可点「**回退并重答**」：经新增 `POST /api/sessions/:id/rollback-retry`（SSE 流）回退截断后**自动重新回答**，新回答挂在分支点下，旧分支作废灰显保留可溯源（与 CLI `/rollback <节点id>` 语义一致；此前 WebUI 仅截断、需手动重发）；
+  - `SessionManager.rollbackRetrySession`：复用 `RuntimeAgent.rollbackAndRetry` + 权限桥接 + 并发防护/中断（`packages/server/src/session-manager.ts`、`routes/sessions.ts`）；
+  - WebUI `use-session.ts` 抽出 sendMessage / rollbackRetry 共用的事件渲染（`handleTurnEvent`），`session-start` 首帧重建回退后的消息列表。
+- **工具入参错误的人为干预（human-in-the-loop 改参重试）**：
+  - 权限审批卡片**入参 JSON 可编辑**：修改后点「以修改参数执行」= `allow` + 修改后入参（`PermissionResult` 新增 `{ decision: "allow"; input }`），工具以**修改后的参数**执行；不改参数直接 Allow = 原参数放行；Deny 不变（`packages/core/src/permission.ts`、`packages/web-ui/src/pages/chat.tsx`）；
+  - executor 支持改参执行：`ask` 放行携带入参时重新校验并以新参数执行；**入参校验失败**时（仅当权限策略会 ask，如破坏性工具 / ask 规则）把校验错误作为审批原因推给用户改参——autoApprove / 只读自动放行场景保持原行为不打扰（`packages/tools/src/executor.ts`）；
+  - 执行结果带 `userCorrectedInput` 标记 → loop 把**实际执行入参**同步进 `tool-call-result` 事件与会话历史 tool-use 块（可溯源，卡片标注「✏️ 已改参」）；
+  - WebUI 检查器新增**权限轮询**：工具 ask（含入参校验失败）时审批卡片实时出现（此前卡片从不展示）；
+  - **修复运行时工具执行旁路**：refactor 分支 RuntimeAgent 经 `ctx.loop` 的工具执行此前直调 `ctx.tools.execute`（绕过入参校验/权限/hooks，与 main 行为不一致）；现 LOOP 插件支持注入真实 executor，生产装配（`createRuntimeAgent`）已接通——权限审批/校验/hooks 恢复生效（`packages/cordis/src/adapters/loop.ts`、`services.ts`、`packages/server/src/create-runtime-agent.ts`）。
+
+### 测试
+
+- `packages/tools/src/__tests__/hitl-retry.test.ts`：ask 改参执行（新参数执行 / 仍校验失败不二次询问 / deny）、入参校验失败按权限策略决定是否打扰用户（9 断言场景）
+- `packages/agent/src/__tests__/loop.test.ts`：tool-call-result 携带实际入参 + 历史 tool-use 块同步；无改参标记不改写
+- `packages/server/src/__tests__/integration.test.ts`：destructive 工具 → 权限请求 → 用户改参后批准 → 工具以修改后参数执行（端到端）
+- `packages/server/src/__tests__/graph-endpoints.test.ts`：`POST /:id/rollback-retry` SSE 回退重答端点
+
+### 文档
+
+- `docs/GUIDE-CORDIS.md` §10/§11：WebUI「回退并重答」闭环 + 权限审批改参卡片用法
+- `docs/MODULES.md`、`docs/ARCHITECTURE-CORDIS.md`：新端点 `/rollback-retry`、`rollbackRetrySession`、权限 allow+input、executor 注入说明
+
 ## [Unreleased] — task 缺参兜底 + 终止后工具卡片不再转圈（AGE-29 后续）
 
 ### 修复

@@ -187,7 +187,9 @@ interface ConversationNode {
     [节点id]`（回退到父节点并自动重答，经 `RuntimeAgent.rollbackAndRetry`）；
     `/联想` 补全列表自动包含新命令。
   - WebUI：`components/graph-panel.tsx` 分支可视化（节点树 + 活跃高亮 + 回退按钮 +
-    作废分支灰显保留），一键回退后自动刷新会话与图。
+    作废分支灰显保留），assistant/tool/user 活跃节点均可点「回退并重答」——
+    经 `POST /:id/rollback-retry`（SSE）回退截断后**自动重新回答**并刷新会话与图
+    （与 CLI `/rollback <节点id>` 同一语义：旧分支作废保留、新回答挂分支点下）。
   - 回归：`RuntimeAgent` 单测（回退截断/重答分支/幂等/热切换）+ 服务端图端点单测全绿。
 - **Phase 5（规划中）**：用户插件热装载（`cordis.yml` 风格 profile），发布
   `docs/EXTENDING-CORDIS.md`。当前已支持在 `createRuntime` 配置中以「模块路径」加载用户插件

@@ -8,6 +8,7 @@
 
 import type { Context } from "@deepseek-ai/cordis";
 import type { Config, SubagentRunner } from "@fengagent/core";
+import type { ToolExecutor } from "@fengagent/tools";
 import { LoopServiceImpl } from "../services.ts";
 import type { LoopService } from "../types.ts";
 
@@ -16,6 +17,13 @@ export interface LoopPluginOptions {
   workdir: string;
   spawnSubagent?: SubagentRunner;
   agentDepth?: number;
+  /**
+   * 真实工具执行器（含入参校验 / 权限审批 / hooks）。
+   *
+   * 提供时 loop 的工具执行走 executor（human-in-the-loop 审批、校验、hook 生效）；
+   * 缺省时回退到 ctx.tools.execute 直调（仅用于不装配 executor 的轻量测试运行时）。
+   */
+  toolExecutor?: ToolExecutor;
 }
 
 /** Loop 插件 — 提供 ctx.loop */
@@ -41,6 +49,7 @@ export function loopPlugin(options: LoopPluginOptions) {
       workdir: options.workdir,
       spawnSubagent: options.spawnSubagent,
       agentDepth: options.agentDepth,
+      toolExecutor: options.toolExecutor,
     });
     return service as LoopService;
   }

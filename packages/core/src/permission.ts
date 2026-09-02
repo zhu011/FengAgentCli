@@ -2,6 +2,10 @@
  * @fengagent/core — 权限类型定义
  *
  * 工具执行前的权限审批类型。
+ *
+ * Human-in-the-loop：`allow` 决策可携带用户修改后的工具入参
+ * （`{ decision: "allow", input }`）——用户在界面上调整参数后放行时，
+ * 工具以修改后的参数执行。
  */
 
 /** 权限决策类型 */
@@ -19,7 +23,7 @@ export interface Permission {
 
 /** 权限决策结果 */
 export type PermissionResult =
-  | { decision: "allow" }
+  | { decision: "allow"; input?: unknown }
   | { decision: "deny"; reason?: string }
   | { decision: "ask"; message?: string };
 
@@ -35,6 +39,11 @@ export interface PermissionFilter {
 
 /** 快捷：允许 */
 export const ALLOW: PermissionResult = { decision: "allow" };
+
+/** 快捷：允许并携带用户修改后的工具入参（human-in-the-loop 改参重试） */
+export function allowWithInput(input: unknown): PermissionResult {
+  return { decision: "allow", input };
+}
 
 /** 快捷：拒绝 */
 export function deny(reason?: string): PermissionResult {

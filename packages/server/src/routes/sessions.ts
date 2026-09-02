@@ -152,7 +152,10 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     const result =
       decision === "deny"
         ? { decision: "deny" as const, reason: body.reason }
-        : { decision: "allow" as const };
+        : body.input !== undefined
+          ? // allow 携带用户修改后的工具入参（human-in-the-loop 改参重试）
+            { decision: "allow" as const, input: body.input }
+          : { decision: "allow" as const };
 
     const responded = sessionManager.respondPermission(id, reqId, result);
     log.info("respondPermission", `sessionId=${id}, reqId=${reqId}, responded=${responded}`);
@@ -177,7 +180,7 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     return c.json(graph);
   });
 
-  // POST /:id/rollback — 回退到目标节点（旧分支保留可溯源，Phase 4）
+  // POST /:id/rollback — 回退到目标节点（旧分支保留可溯源，Phase 4；仅截断不重答）
   app.post("/:id/rollback", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
@@ -188,6 +191,58 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     log.info("rollback", `sessionId=${id}, nodeId=${nodeId ?? "(last assistant)"}, reason=${reason}`);
     const result = sessionManager.rollbackSession(id, nodeId, reason);
     return c.json(result, result.ok ? 200 : 400);
+  });
+
+  // POST /:id/rollback-retry — 回退到目标节点并自动重答（SSE 流；WebUI 图面板「回退并重答」闭环）
+  // 与 CLI /rollback <节点id> 同一语义：回退（旧分支作废保留）→ 截断 → 重答（新回答挂在分支点下）
+  app.post("/:id/rollback-retry", (c) => {
+    const id = c.req.param("id");
+    log.info("rollbackRetry", `sessionId=${id}`);
+
+    // 设置 SSE 响应头（与 sendMessage 一致：禁用代理缓冲 / 缓存）
+    c.header("Cache-Control", "no-cache");
+    c.header("X-Accel-Buffering", "no");
+    c.header("Connection", "keep-alive");
+
+    return streamSSE(c, async (stream) => {
+      const body = await c.req.json().catch(() => ({}));
+      const nodeId =
+        typeof body.nodeId === "string" && body.nodeId ? body.nodeId : undefined;
+      const reason =
+        typeof body.reason === "string" && body.reason
+          ? body.reason
+          : "用户回退并重答";
+
+      try {
+        const events = sessionManager.rollbackRetrySession(id, nodeId, reason);
+        for await (const event of events) {
+          const frame = agentEventToSSE(event);
+          log.debug("rollbackRetry", `SSE event type=${frame.event}`);
+          await stream.writeSSE({
+            event: frame.event,
+            data: frame.data,
+          });
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : String(err);
+
+        log.error("rollbackRetry", `error: ${message}`);
+
+        if (err instanceof SessionNotFoundError) {
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({ error: { message }, code: "session_not_found" }),
+          });
+          return;
+        }
+
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify({ error: { message } }),
+        });
+      }
+    });
   });
 
   // GET /:id/export — 导出会话

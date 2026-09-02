@@ -7,7 +7,7 @@
  * - 对话流：居中窄栏（max-width 768px），助手带头像、用户右对齐气泡
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -434,12 +434,12 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
         )}
       </footer>
 
-      {/* 对话图面板（Phase 4：分支可视化 + 回退） */}
+      {/* 对话图面板（Phase 4：分支可视化 + 回退；点击节点 = 回退到该节点并自动重答） */}
       {showGraph && session.activeSession && session.graph && (
         <GraphPanel
           graph={session.graph}
           busy={session.isStreaming}
-          onRollback={(nodeId) => void session.rollback(nodeId)}
+          onRollback={(nodeId) => void session.rollbackRetry(nodeId)}
         />
       )}
       {showGraph && session.activeSession && !session.graph && (
@@ -464,9 +464,10 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
                 <PermissionCard
                   key={req.reqId}
                   request={req}
-                  onAllow={() =>
+                  onAllow={(input) =>
                     void session.respondPermission(req.reqId, {
                       decision: "allow",
+                      ...(input !== undefined ? { input } : {}),
                     })
                   }
                   onDeny={() =>
@@ -504,43 +505,148 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
   );
 }
 
-/** 权限请求卡片 */
+/**
+ * 权限请求卡片 — human-in-the-loop 改参审批。
+ *
+ * 入参 JSON 可编辑：修改后点「Allow 执行」会以修改后的参数提交（allow + input），
+ * 工具将按新参数执行；不改参数直接 Allow 等价于原参数放行。Deny 拒绝本次调用。
+ */
 function PermissionCard({
   request,
   onAllow,
   onDeny,
 }: {
   request: PermissionRequest;
-  onAllow: () => void;
+  /** input 为 undefined 表示未改参（原参数放行）；有值表示用户修改后的入参 */
+  onAllow: (input?: unknown) => void;
   onDeny: () => void;
 }) {
+  const originalStr = useMemo(
+    () => JSON.stringify(request.input ?? {}, null, 2),
+    [request.input],
+  );
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(originalStr);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // request 变化（新请求 / 重置）时同步草稿
+  useEffect(() => {
+    setDraft(originalStr);
+    setParseError(null);
+  }, [originalStr]);
+
+  const modified = draft.trim() !== originalStr.trim();
+
+  const submitAllow = () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      if (!modified) {
+        // 未修改参数 → 原参数放行
+        onAllow(undefined);
+        return;
+      }
+      const parsed: unknown = JSON.parse(draft);
+      setParseError(null);
+      onAllow(parsed);
+    } catch {
+      setParseError("JSON 格式无效 — 请修正后重试，或 Deny 拒绝本次调用");
+      setSubmitting(false);
+    }
+  };
+
+  const resetDraft = () => {
+    setDraft(originalStr);
+    setParseError(null);
+  };
+
   return (
     <div className="permission-card">
       <div className="permission-card__header">
         <span className="permission-card__tool">{request.toolName}</span>
+        {request.reason && <span className="permission-card__tool-reason">请求审批</span>}
       </div>
       {request.reason && (
         <p className="permission-card__reason">{request.reason}</p>
       )}
-      <pre className="permission-card__input">
-        {formatValue(request.input)}
-      </pre>
-      <div className="permission-card__actions">
-        <button
-          type="button"
-          className="permission-card__btn permission-card__btn--allow"
-          onClick={onAllow}
-        >
-          Allow
-        </button>
-        <button
-          type="button"
-          className="permission-card__btn permission-card__btn--deny"
-          onClick={onDeny}
-        >
-          Deny
-        </button>
-      </div>
+
+      {!editing ? (
+        <>
+          <pre className="permission-card__input">
+            {formatValue(request.input)}
+          </pre>
+          <div className="permission-card__actions">
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--ghost"
+              onClick={() => setEditing(true)}
+              title="在界面上调整工具入参后重试（human-in-the-loop）"
+            >
+              修改参数
+            </button>
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--allow"
+              onClick={submitAllow}
+            >
+              Allow
+            </button>
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--deny"
+              onClick={onDeny}
+            >
+              Deny
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <textarea
+            className={`permission-card__textarea ${parseError ? "permission-card__textarea--error" : ""}`}
+            value={draft}
+            spellCheck={false}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setParseError(null);
+            }}
+            rows={Math.min(12, Math.max(5, draft.split("\n").length))}
+            aria-label={`${request.toolName} 工具入参 JSON（可编辑）`}
+          />
+          {modified && !parseError && (
+            <p className="permission-card__hint">
+              ✏️ 已修改参数 — Allow 将以新参数执行
+            </p>
+          )}
+          {parseError && (
+            <p className="permission-card__error">{parseError}</p>
+          )}
+          <div className="permission-card__actions">
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--ghost"
+              onClick={resetDraft}
+            >
+              恢复原参数
+            </button>
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--allow"
+              onClick={submitAllow}
+            >
+              {modified ? "以修改参数执行" : "Allow 执行"}
+            </button>
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--deny"
+              onClick={onDeny}
+            >
+              Deny
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
