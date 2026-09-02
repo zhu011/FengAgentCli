@@ -21,6 +21,8 @@ export interface ToolCallInfo {
   input: unknown;
   result?: { content: string; isError?: boolean };
   status: "running" | "completed" | "failed";
+  /** 是否经过人工改参（HITL） */
+  edited?: boolean;
 }
 
 /** 前端展示用的消息项（含工具调用列表） */

@@ -29,7 +29,13 @@ export type AgentEvent =
       name: string;
       input: unknown;
     }
-  | { type: "tool-call-result"; toolUseId: string; result: ToolResult }
+  | {
+      type: "tool-call-result";
+      toolUseId: string;
+      result: ToolResult;
+      /** 实际执行的入参 — 与模型原始入参不同时携带（用户改参后执行，human-in-the-loop） */
+      input?: unknown;
+    }
   | { type: "message-end"; messageId: string }
   | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }
   | { type: "turn-end"; reason: FinishReason }

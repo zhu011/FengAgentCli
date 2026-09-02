@@ -52,6 +52,14 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         )}
         <Terminal size={14} className="tool-card__terminal-icon" aria-hidden="true" />
         <span className="tool-card__name">{toolCall.name}</span>
+        {toolCall.edited && (
+          <span
+            className="tool-card__edited"
+            title="工具入参已由用户在审批界面修改后执行（human-in-the-loop）"
+          >
+            ✏️ 已改参
+          </span>
+        )}
         <span className="tool-card__status">{statusIcon}</span>
       </button>
       {toolCall.status === "running" && (
