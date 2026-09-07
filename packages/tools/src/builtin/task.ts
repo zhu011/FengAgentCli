@@ -229,6 +229,7 @@ export const taskTool: ToolDefinition<TaskInput> = {
     "",
     "Parameters: description, prompt, subagent_type (the type of specialized agent; the exact key name is subagent_type with an underscore, NOT subagentType; pass it explicitly whenever possible — if omitted the runtime infers a sensible type from the task content, falling back to 'default'), task_id (optional, to resume).",
     "Available subagent types: default (general-purpose), coder (code writing), researcher (read-only research).",
+    "Concurrency: researcher subagents are read-only and run in parallel when dispatched together in one message (use researcher for research/summarize tasks to speed them up); coder/default subagents run one at a time because they may modify the file system.",
   ].join("\n"),
 
   inputSchema,
@@ -242,9 +243,18 @@ export const taskTool: ToolDefinition<TaskInput> = {
     return false;
   },
 
-  isConcurrencySafe(): boolean {
-    // 子 Agent 可能修改文件系统，不应并行
-    return false;
+  isConcurrencySafe(input: TaskInput): boolean {
+    // 并发安全按子 Agent 类型判定（AGE-29 多 Agent 提速）：
+    // - researcher 是只读 Agent（工具白名单仅 file-read/glob/grep，不会改文件），
+    //   同一批派发的多个 researcher 可安全并行 —— 「调研并总结 3 个框架」这类
+    //   任务不再串行排队（实测 3 个串行子 Agent 占用 ~60s，并行收敛到最慢一个）；
+    // - coder / default 可能修改文件系统，保持串行（文件安全优先）。
+    // 注意：executor 在 schema 解析前调用本方法，input 可能是模型原始入参
+    // （subagentType 别名 / 缺参），走 resolveSubagentType 的别名归一化 + 兜底推断。
+    const type = resolveSubagentType(
+      (input ?? {}) as unknown as Record<string, unknown>,
+    ).type;
+    return type === "researcher";
   },
 
   checkPermissions() {
