@@ -492,48 +492,54 @@ export class RuntimeAgent extends AgentClass {
     yield { type: "session-start", session: sess };
 
     // Agent Loop 本身是插件：经 ctx.loop.run（内部薄适配既有 AgentLoop + 对话即节点）
-    for await (const event of ctx.loop.run(sess, options)) {
-      if (event.type === "message-end") {
-        const assistantMsg = sess.messages.find((m) => m.id === event.messageId);
-        if (assistantMsg) {
-          const toolCalls = assistantMsg.content
-            .filter((b) => b.type === "tool-use")
-            .map((b): { name: string; input: unknown } => {
-              if (b.type === "tool-use") return { name: b.name, input: b.input };
-              return { name: "", input: null };
+    // 收尾（复位 idle + 持久化）放进 finally：无论正常跑完还是被中断（生成器被
+    // .return()，如用户 interrupt 后消费方 break），都复位会话状态并持久化 ——
+    // 避免中断后 status 停留在 "running"（侧栏运行点常驻、重进会话误触发订阅
+    // 而服务端已无运行任务 → 永不结束）（AGE-29 R2）。
+    try {
+      for await (const event of ctx.loop.run(sess, options)) {
+        if (event.type === "message-end") {
+          const assistantMsg = sess.messages.find((m) => m.id === event.messageId);
+          if (assistantMsg) {
+            const toolCalls = assistantMsg.content
+              .filter((b) => b.type === "tool-use")
+              .map((b): { name: string; input: unknown } => {
+                if (b.type === "tool-use") return { name: b.name, input: b.input };
+                return { name: "", input: null };
+              });
+            writeSessionLog({
+              timestamp: new Date().toISOString(),
+              sessionId: sess.id,
+              messageId: assistantMsg.id,
+              role: "assistant",
+              content: assistantMsg.content.map((b) => {
+                if (b.type === "text") return { type: "text", text: b.text.slice(0, 500) };
+                if (b.type === "tool-use") return { type: "tool-use", name: b.name };
+                if (b.type === "tool-result") return { type: "tool-result", toolUseId: b.toolUseId };
+                return { type: b.type };
+              }),
+              model: sess.model,
+              hasToolCalls: toolCalls.length > 0,
+              toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+              tokenCount: sess.tokenCount,
             });
-          writeSessionLog({
-            timestamp: new Date().toISOString(),
-            sessionId: sess.id,
-            messageId: assistantMsg.id,
-            role: "assistant",
-            content: assistantMsg.content.map((b) => {
-              if (b.type === "text") return { type: "text", text: b.text.slice(0, 500) };
-              if (b.type === "tool-use") return { type: "tool-use", name: b.name };
-              if (b.type === "tool-result") return { type: "tool-result", toolUseId: b.toolUseId };
-              return { type: b.type };
-            }),
-            model: sess.model,
-            hasToolCalls: toolCalls.length > 0,
-            toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-            tokenCount: sess.tokenCount,
-          });
+          }
         }
+        // 每个 loop 轮次结束即增量持久化消息（而非只等在 prompt() 收尾）
+        // —— 会话被中断（SSE 断开 / 服务被杀 / 死循环被终止）时，SQLite/事件日志
+        // 仍保留已完成的轮次，观测/评测回放不会只剩一条用户消息（AGE-29 回放失败根因）
+        if (event.type === "turn-end") {
+          ctx.storage.saveMessages?.(sess.id, sess.messages);
+        }
+        yield event as unknown as AgentEvent;
       }
-      // 每个 loop 轮次结束即增量持久化消息（而非只等在 prompt() 收尾）
-      // —— 会话被中断（SSE 断开 / 服务被杀 / 死循环被终止）时，SQLite/事件日志
-      // 仍保留已完成的轮次，观测/评测回放不会只剩一条用户消息（AGE-29 回放失败根因）
-      if (event.type === "turn-end") {
-        ctx.storage.saveMessages?.(sess.id, sess.messages);
-      }
-      yield event as unknown as AgentEvent;
+    } finally {
+      // 会话收尾：置 idle + 持久化（经 ctx.storage）——正常完成与中断共用
+      sess.status = "idle";
+      sess.updatedAt = Date.now();
+      ctx.storage.saveSession(sess);
+      ctx.storage.saveMessages?.(sess.id, sess.messages);
     }
-
-    // 会话收尾：置 idle + 持久化（经 ctx.storage）
-    sess.status = "idle";
-    sess.updatedAt = Date.now();
-    ctx.storage.saveSession(sess);
-    ctx.storage.saveMessages?.(sess.id, sess.messages);
 
     yield { type: "session-end" };
   }
@@ -735,14 +741,19 @@ export class RuntimeAgent extends AgentClass {
 
     yield { type: "session-start", session };
 
-    for await (const event of ctx.loop.run(session, options)) {
-      yield event as unknown as AgentEvent;
+    // 收尾（复位 idle + 持久化）放 finally：中断（生成器 .return()）时同样复位，
+    // 与 prompt() 语义一致（AGE-29 R2）
+    try {
+      for await (const event of ctx.loop.run(session, options)) {
+        yield event as unknown as AgentEvent;
+      }
+    } finally {
+      session.status = "idle";
+      session.updatedAt = Date.now();
+      ctx.storage.saveSession(session);
+      ctx.storage.saveMessages?.(session.id, session.messages);
     }
 
-    session.status = "idle";
-    session.updatedAt = Date.now();
-    ctx.storage.saveSession(session);
-    ctx.storage.saveMessages?.(session.id, session.messages);
     yield { type: "session-end" };
   }
 }

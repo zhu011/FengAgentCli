@@ -259,6 +259,62 @@ describe("RuntimeAgent — 经 createRuntime 装配", () => {
     await runtime.stop();
   });
 
+  test("prompt 中断（消费方 break → 生成器 .return()）→ 会话复位 idle（AGE-29 R2）", async () => {
+    const { agent, runtime, sessionStore } = makeRuntimeAgent();
+    await runtime.start();
+    const session = makeSession();
+
+    // 模拟 SessionManager 中断路径：消费到事件后 break —— for-await 会对生成器
+    // 调用 .return()。旧实现中 prompt() 的收尾（置 idle + 持久化）在 for-await
+    // 之后、无 try/finally，.return() 会跳过它 → 会话 status 卡 "running"。
+    const seen: string[] = [];
+    const gen = agent.prompt("你好", session);
+    for await (const event of gen) {
+      seen.push(event.type);
+      if (seen.length >= 2) break; // 首个事件后已进入 loop（session-start 先行）
+    }
+    expect(seen).toContain("session-start");
+
+    // 中断后会话立即复位 idle（不再有侧栏常驻运行点）
+    expect(session.status).toBe("idle");
+    // 持久化（ctx.storage）里的会话同样为 idle —— 重进会话不再误触发订阅
+    const persisted = sessionStore.loadSession(session.id);
+    expect(persisted).not.toBeNull();
+    expect(persisted!.status).toBe("idle");
+    // 生成器已正常结束（中断路径不产出 session-end，.return() 使迭代完成）
+    const last = await gen.next();
+    expect(last.done).toBe(true);
+
+    await runtime.stop();
+  });
+
+  test("rollbackAndRetry 中断（生成器 .return()）→ 会话复位 idle（AGE-29 R2）", async () => {
+    const { agent, runtime } = makeRuntimeAgent();
+    await runtime.start();
+    const session = makeSession();
+    for await (const _ of agent.prompt("第一次提问", session)) {
+      // 跑完一轮，产生可回退的 assistant 节点
+    }
+
+    const graph = agent.getGraphData(session.id);
+    const assistant = graph.nodes.find((n) => n.type === "assistant");
+    expect(assistant).toBeDefined();
+
+    // 回退重答中途中断（消费 2 个事件后 break → .return()）
+    const seen: string[] = [];
+    const gen = agent.rollbackAndRetry(session, assistant!.id, "用户不满意");
+    for await (const event of gen) {
+      seen.push(event.type);
+      if (seen.length >= 2) break;
+    }
+    expect(seen).toContain("session-start");
+    expect(session.status).toBe("idle");
+    const last = await gen.next();
+    expect(last.done).toBe(true);
+
+    await runtime.stop();
+  });
+
   test("reloadProvider 经 ctx.model.switchProvider 热切换（/model、/provider 底座）", async () => {
     const workdir = makeTempDir();
     const env = {

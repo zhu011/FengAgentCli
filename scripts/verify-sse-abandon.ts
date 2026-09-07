@@ -136,10 +136,12 @@ async function until(
   const manager = new SessionManager({ createAgent: createTestAgent });
   const sid = manager.createSession("A-disconnect").id;
 
-  // 订阅者收到 run-end 即代表整轮后台运行结束
+  // 观察者（服务端视角，始终在线）记录整轮事件并接收 run-end ——
+  // 「客户端」订阅者运行中会断开；run-end 的接收不依赖那个已断开的客户端，
+  // 否则断言与场景语义自相矛盾（断开后自然收不到广播，只能靠仍在线的观察者确认）。
   let runEnded = false;
   const got: SessionEvent[] = [];
-  const unsub = manager.subscribeSessionEvents(sid, (e) => {
+  const unsubObserver = manager.subscribeSessionEvents(sid, (e) => {
     got.push(e);
     if (e.type === "run-end") runEnded = true;
   });
@@ -148,21 +150,27 @@ async function until(
   check("A: 后台启动成功", started.ok === true);
   if (!started.ok) process.exit(1);
 
-  // 等待首个事件到达后「断开」订阅者（模拟客户端关闭页面 / 切换会话）
+  // 模拟客户端：订阅 → 收到首个事件后「断开」（只解除订阅，不中止后台运行）
+  const clientGot: SessionEvent[] = [];
+  const unsubClient = manager.subscribeSessionEvents(sid, (e) => {
+    clientGot.push(e);
+  });
   (async () => {
-    await until(() => got.some((e) => e.type === "session-start"), 3000, "session-start");
-    unsub(); // 客户端断开 —— 只解除订阅，不中止后台运行
-    console.log("  （订阅者已断开，后台运行继续…）");
+    await until(
+      () => clientGot.some((e) => e.type === "session-start"),
+      3000,
+      "session-start",
+    );
+    unsubClient(); // 客户端断开 —— 后台运行不受影响
+    console.log("  （客户端已断开，后台运行继续…）");
   })();
 
-  // 后台运行应照常结束（run-end 由 pumpRun finally 广播；订阅者已断开不影响）
-  (async () => {
-    await until(() => !manager.isRunning(sid), 3000, "run finished");
-    check("A: 断开后后台运行仍完成并自动清理（无悬挂任务）", !manager.isRunning(sid));
-    check("A: 事件按会话送达（运行期间收到过会话事件）", got.length > 0, got.length);
-  })();
-
+  // 后台运行应照常结束（run-end 由 pumpRun finally 广播；观察者仍在线可收到）
   await until(() => runEnded, 4000, "run-end received");
+  check("A: 断开后后台运行仍完成并自动清理（无悬挂任务）", !manager.isRunning(sid));
+  check("A: 事件按会话送达（运行期间收到过会话事件）", got.length > 0, got.length);
+  check("A: 客户端断开前收到过事件", clientGot.length > 0, clientGot.length);
+  unsubObserver();
 
   // 会话随后可再次发送：不再被「已有正在执行的任务」卡死
   const second = manager.sendMessage(sid, "第二问");
