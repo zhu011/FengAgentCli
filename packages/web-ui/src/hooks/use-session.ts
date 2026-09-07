@@ -25,6 +25,17 @@ export interface ToolCallInfo {
   edited?: boolean;
 }
 
+/** 助手回合内的一个步骤（对应一条真实 assistant 消息 / 一次 LLM 步骤） */
+export interface DisplayStep {
+  messageId: string;
+  text: string;
+  thinking: string;
+  toolCalls: ToolCallInfo[];
+  streaming: boolean;
+  createdAt: number;
+  tokenStats?: TokenStats;
+}
+
 /** 前端展示用的消息项（含工具调用列表） */
 /** Token 用量统计 */
 export interface TokenStats {
@@ -45,6 +56,8 @@ export interface DisplayMessage {
   createdAt: number;
   /** AI 消息的 token 用量统计 */
   tokenStats?: TokenStats;
+  /** 助手回合内按序的多段步骤（同一轮多次工具调用聚合进同一个回复） */
+  steps?: DisplayStep[];
 }
 
 export interface UseSessionResult {

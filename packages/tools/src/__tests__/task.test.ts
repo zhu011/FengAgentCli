@@ -18,6 +18,7 @@ import {
   registerBuiltinTools,
 } from "../index.ts";
 import { taskTool } from "../builtin/task.ts";
+import { createToolExecutor } from "../executor.ts";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -81,8 +82,38 @@ describe("taskTool — 基本属性", () => {
     expect(taskTool.isDestructive!(validInput)).toBe(false);
   });
 
-  test("不可并发安全", () => {
+  test("并发安全按子 Agent 类型判定：coder 串行、researcher 并行（AGE-29 多 Agent 提速）", () => {
+    // coder / default 可能改文件系统 → 串行
     expect(taskTool.isConcurrencySafe!(validInput)).toBe(false);
+    expect(
+      taskTool.isConcurrencySafe!({
+        description: "d",
+        prompt: "p",
+        subagent_type: "default",
+      } as never),
+    ).toBe(false);
+    // researcher 只读（file-read/glob/grep）→ 可并行
+    expect(
+      taskTool.isConcurrencySafe!({
+        description: "d",
+        prompt: "p",
+        subagent_type: "researcher",
+      } as never),
+    ).toBe(true);
+    // executor 传的是 schema 解析前的模型原始入参：别名 / 缺参走兜底推断
+    expect(
+      taskTool.isConcurrencySafe!({
+        description: "调研 Ratatui",
+        prompt: "请研究并总结",
+        subagentType: "researcher",
+      } as never),
+    ).toBe(true);
+    expect(
+      taskTool.isConcurrencySafe!({
+        description: "实现登录模块",
+        prompt: "请写 Node.js 代码",
+      } as never),
+    ).toBe(false);
   });
 
   test("权限默认允许", () => {
@@ -433,5 +464,65 @@ describe("registerBuiltinTools — 包含 task", () => {
       "skill",
       "task",
     ]);
+  });
+});
+
+// ──────────────────────────────────────────────
+// 多 Agent 提速：researcher 并行 / coder 串行（executor 级调度验证）
+// ──────────────────────────────────────────────
+
+describe("task 并发调度（executor executeMany）", () => {
+  test("同一批 researcher 任务并行执行；coder 任务串行执行", async () => {
+    const executor = createToolExecutor();
+
+    let active = 0;
+    let maxActive = 0;
+    const ctx: ToolContext = {
+      workdir: TEST_WORKDIR,
+      sessionId: "test-session",
+      messageId: "test-msg",
+      spawnSubagent: async (params) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        // 模拟子 Agent 运行耗时（延后 resolve，让并行/串行差异可观测）
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        active--;
+        return {
+          taskId: params.taskId ?? "mock-task-id",
+          sessionId: "mock-session-id",
+          state: "completed" as const,
+          text: "ok",
+          summary: `Task: ${params.description}`,
+        };
+      },
+    };
+
+    const mkCall = (description: string, subagentType: string) => ({
+      tool: taskTool,
+      input: { description, prompt: "do something", subagent_type: subagentType },
+    });
+
+    // 3 个 researcher 一起派发 → 并行（观察到同时活跃 >= 2）
+    const researchResults = await executor.executeMany(
+      [
+        mkCall("调研 Ratatui", "researcher"),
+        mkCall("调研 Textual", "researcher"),
+        mkCall("调研 Bubble Tea", "researcher"),
+      ],
+      ctx,
+    );
+    expect(researchResults).toHaveLength(3);
+    expect(researchResults.every((r) => !r.result.isError)).toBe(true);
+    expect(maxActive).toBeGreaterThanOrEqual(2);
+
+    // coder 一起派发 → 串行（同时活跃恒为 1）
+    maxActive = 0;
+    const codeResults = await executor.executeMany(
+      [mkCall("重构 auth", "coder"), mkCall("修复 bug", "coder")],
+      ctx,
+    );
+    expect(codeResults).toHaveLength(2);
+    expect(codeResults.every((r) => !r.result.isError)).toBe(true);
+    expect(maxActive).toBe(1);
   });
 });
