@@ -32,6 +32,16 @@ export interface UseSessionResult {
   pendingPermissions: PermissionRequest[];
   isStreaming: boolean;
   error: string | null;
+  /**
+   * 当前这轮生成的开始时间戳（App 级锚点）。
+   *
+   * 用于「正在生成… Ns」计时：锚点由 useSession（App 层，跨 view 切换存活）
+   * 持有，切到评测/观测页再回来不会归零；新的一轮生成（sendMessage /
+   * rollbackRetry 开始）才重置。null = 无进行中的生成。
+   */
+  runStartedAt: number | null;
+  /** 并发语义提示：切换/新建会话中断了进行中的生成（数秒后自动消失） */
+  interruptNotice: string | null;
   creatingSession: boolean;
   /** 会话级 token 用量统计 */
   sessionTokenStats: TokenStats | null;
@@ -65,6 +75,8 @@ export function useSession(client: ApiClient): UseSessionResult {
   >([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [interruptNotice, setInterruptNotice] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
   const [sessionTokenStats, setSessionTokenStats] = useState<TokenStats | null>(null);
   const [graph, setGraph] = useState<GraphData | null>(null);
@@ -77,6 +89,13 @@ export function useSession(client: ApiClient): UseSessionResult {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  // 并发中断提示数秒后自动消失（不打扰后续阅读）
+  useEffect(() => {
+    if (!interruptNotice) return;
+    const timer = setTimeout(() => setInterruptNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [interruptNotice]);
 
   // ──────────────────────────────────────────────
   // 初始化：加载会话列表
@@ -187,6 +206,15 @@ export function useSession(client: ApiClient): UseSessionResult {
   // ──────────────────────────────────────────────
   const createSession = useCallback(
     async (title?: string) => {
+      // 并发语义（AGE-29 明确）：同一时刻只允许一个前台生成。
+      // 生成进行中新建对话 → 先中断当前生成并给出提示（与 selectSession 一致），
+      // 避免旧会话流式事件污染新会话 UI / abortRef 被覆盖成双流。
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+        setIsStreaming(false);
+        setInterruptNotice("已新建对话，正在进行的生成已中断。");
+      }
       setCreatingSession(true);
       setError(null);
       try {
@@ -214,11 +242,16 @@ export function useSession(client: ApiClient): UseSessionResult {
   );
 
   const selectSession = useCallback(async (id: string) => {
-    // 切换会话时中止当前 SSE 流（如有），避免旧会话的流式事件污染新会话 UI
+    // 切换会话时中止当前 SSE 流（如有），避免旧会话的流式事件污染新会话 UI。
+    // 并发语义（AGE-29 明确）：同一时刻只允许一个前台生成，切换即中断并给出提示。
     if (id !== activeSessionIdRef.current) {
+      const wasStreaming = abortRef.current != null;
       abortRef.current?.abort();
       abortRef.current = null;
       setIsStreaming(false);
+      if (wasStreaming) {
+        setInterruptNotice("已切换到其他会话，正在进行的生成已中断。");
+      }
     }
     setActiveSessionId(id);
     setSessionTokenStats(null);
@@ -304,10 +337,18 @@ export function useSession(client: ApiClient): UseSessionResult {
 
       if (!sessionId || !text.trim()) return;
 
+      // 并发防护：已有进行中的生成（同/另一会话，或双开快速提交）时拒绝再次启动，
+      // 避免两个 SSE 流同时写入展示状态 / abortRef 被覆盖导致无法中断。
+      if (abortRef.current) {
+        setError("已有正在进行的生成，请等待完成或按 Esc 中断后再发送。");
+        return;
+      }
+
       const controller = new AbortController();
       abortRef.current = controller;
       setIsStreaming(true);
       setError(null);
+      setRunStartedAt(Date.now());
 
       // 超时兜底：30s 无任何 SSE 事件 → abort（防止后端未启动时永久挂起）
       let firstEventReceived = false;
@@ -376,6 +417,7 @@ export function useSession(client: ApiClient): UseSessionResult {
       } finally {
         clearTimeout(timeoutTimer);
         setIsStreaming(false);
+        setRunStartedAt(null);
         abortRef.current = null;
         toolUseToMessageId.clear();
         // 安全清理：关闭所有流式行/步骤 + 复位仍 running 的工具调用
@@ -406,6 +448,7 @@ export function useSession(client: ApiClient): UseSessionResult {
       abortRef.current = controller;
       setIsStreaming(true);
       setError(null);
+      setRunStartedAt(Date.now());
 
       // 超时兜底：30s 无任何 SSE 事件 → abort（回退/重答服务不可用时防止永久挂起）
       let firstEventReceived = false;
@@ -455,6 +498,7 @@ export function useSession(client: ApiClient): UseSessionResult {
       } finally {
         clearTimeout(timeoutTimer);
         setIsStreaming(false);
+        setRunStartedAt(null);
         abortRef.current = null;
         toolUseToMessageId.clear();
         setDisplayMessages((prev) =>
@@ -545,6 +589,8 @@ export function useSession(client: ApiClient): UseSessionResult {
     pendingPermissions,
     isStreaming,
     error,
+    runStartedAt,
+    interruptNotice,
     creatingSession,
     sessionTokenStats,
     graph,

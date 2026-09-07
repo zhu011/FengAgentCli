@@ -20,44 +20,45 @@ import { ToolCallCard } from "./tool-call-card.tsx";
 interface MessageListProps {
   messages: DisplayMessage[];
   isStreaming: boolean;
+  /**
+   * 本轮生成的开始时间戳（useSession.runStartedAt，App 级锚点）。
+   *
+   * 计时以「轮」为锚而非组件挂载：view 切换（如切到评测页再回来）会卸载/重挂
+   * MessageList，若锚点在组件内（ref/state）必然随卸载归零 → 计时「重启」假象。
+   * 锚点由 useSession 持有、跨 view 存活，这里只负责按 now - runStartedAt 跳动。
+   */
+  runStartedAt?: number | null;
   /** 查看该消息的调用链（deep-link 到观测页） */
   onViewCallChain?: (messageId: string) => void;
   /** 查看该消息的评测结果（deep-link 到评测页） */
   onViewEval?: (messageId: string) => void;
 }
 
-/** Round 3：生成中已用秒数计时（指示器消失时归零）
+/**
+ * 「正在生成… Ns」已用秒数。
  *
- * 修复：切换到评测页再回来时计时器不应重启 — 使用持久时间戳追踪，
- * 只在 isStreaming 从 false→true 时重置开始时间，view 切换不重置。
+ * 修复（AGE-29）：锚点 runStartedAt 由 useSession（App 层）持有，组件卸载/
+ * 重挂（切评测/观测页再回来）不重启；只有新的一轮生成（runStartedAt 更新）
+ * 才重新计时。组件内不保存任何开始时间。
  */
-function useElapsed(active: boolean): number {
+function useElapsed(active: boolean, since: number | null): number {
   const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef<number | null>(null);
-  const prevActiveRef = useRef(false);
   useEffect(() => {
-    // 仅在 active 从 false→true 时重置开始时间（新的一轮生成）
-    if (active && !prevActiveRef.current) {
-      startRef.current = Date.now();
-      setElapsed(0);
-    }
-    prevActiveRef.current = active;
-    if (!active) {
-      startRef.current = null;
+    if (!active || since === null) {
       setElapsed(0);
       return;
     }
-    const timer = setInterval(() => {
-      if (startRef.current) {
-        setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
-      }
-    }, 1000);
+    const tick = () => {
+      setElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)));
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [active, since]);
   return elapsed;
 }
 
-function MessageListImpl({ messages, isStreaming, onViewCallChain, onViewEval }: MessageListProps) {
+function MessageListImpl({ messages, isStreaming, runStartedAt, onViewCallChain, onViewEval }: MessageListProps) {
   if (messages.length === 0) {
     return (
       <div className="message-list__empty">
@@ -69,7 +70,7 @@ function MessageListImpl({ messages, isStreaming, onViewCallChain, onViewEval }:
   // 生成中指示器：正在流式输出且没有任何处于 streaming 的助手消息
   const hasActiveStreaming = messages.some((m) => m.streaming);
   const showGenerating = isStreaming && !hasActiveStreaming;
-  const elapsed = useElapsed(showGenerating);
+  const elapsed = useElapsed(showGenerating, runStartedAt ?? null);
 
   return (
     <div className="message-list">

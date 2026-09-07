@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Check,
   GitBranch,
+  Info,
   Loader2,
   PanelRightClose,
   PanelRightOpen,
@@ -308,6 +309,14 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
         </div>
       </header>
 
+      {/* 并发语义提示（非错误）：切换/新建会话中断了进行中的生成 */}
+      {session.interruptNotice && (
+        <div className="chat-page__notice-bar" role="status">
+          <Info size={15} />
+          <span>{session.interruptNotice}</span>
+        </div>
+      )}
+
       {/* 错误提示 */}
       {session.error && (
         <div className="chat-page__error-bar">
@@ -347,6 +356,7 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
             <MessageList
               messages={session.activeMessages}
               isStreaming={session.isStreaming}
+              runStartedAt={session.runStartedAt}
               onViewCallChain={(messageId) =>
                 onOpenObservability(session.activeSession!.id, messageId)
               }

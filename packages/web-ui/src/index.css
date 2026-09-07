@@ -570,6 +570,18 @@ body {
   font-size: 13px;
 }
 
+/* 并发语义提示条（信息态，非错误）：切换/新建会话中断生成时短暂提示 */
+.chat-page__notice-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-color);
+}
+
 .chat-page__messages {
   flex: 1;
   overflow-y: auto;
