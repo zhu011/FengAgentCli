@@ -434,10 +434,11 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
         )}
       </footer>
 
-      {/* 对话图面板（Phase 4：分支可视化 + 回退；点击节点 = 回退到该节点并自动重答） */}
+      {/* 对话图面板（Phase 4：分支可视化 + 回退；点击节点 = 回退到该轮提问并自动重答） */}
       {showGraph && session.activeSession && session.graph && (
         <GraphPanel
           graph={session.graph}
+          messages={session.activeSession.messages}
           busy={session.isStreaming}
           onRollback={(nodeId) => void session.rollbackRetry(nodeId)}
         />

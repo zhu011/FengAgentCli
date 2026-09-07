@@ -37,7 +37,7 @@ export const COMMANDS: CommandMeta[] = [
   { name: "export", description: "导出会话为 Markdown", usage: "/export [file]", category: "导出" },
   { name: "tool", description: "工具列表", usage: "/tool list", category: "工具" },
   { name: "graph", description: "查看对话图（节点/分支/溯源链）", usage: "/graph", category: "图" },
-  { name: "rollback", description: "回退到父节点并重答（旧分支保留）", usage: "/rollback [节点id]", category: "图" },
+  { name: "rollback", description: "回退到该轮提问处并重答（旧分支保留）", usage: "/rollback [节点id]", category: "图" },
 ];
 
 /** 命令处理结果 */
@@ -895,7 +895,7 @@ function handleGraphCommand(ctx: CommandContext): CommandResult {
   return { handled: true, message: graphAgent.formatGraph(ctx.currentSession.id) };
 }
 
-/** 处理 /rollback 命令 — 回退到父节点并重答（Phase 4，异步由 App 层执行） */
+/** 处理 /rollback 命令 — 回退到该轮提问处并重答（Phase 4，异步由 App 层执行） */
 function handleRollbackCommand(
   args: string[],
   ctx: CommandContext,

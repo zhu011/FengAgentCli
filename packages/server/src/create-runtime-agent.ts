@@ -595,7 +595,7 @@ export class RuntimeAgent extends AgentClass {
     }
     lines.push("");
     lines.push(
-      "提示: /rollback <节点id> 回退到该节点的父节点并重答（旧分支保留可溯源）。",
+      "提示: /rollback <节点id> 回退到该节点所属轮次的提问处并重答（旧分支保留可溯源）。",
     );
     return lines.join("\n");
   }
@@ -603,7 +603,13 @@ export class RuntimeAgent extends AgentClass {
   /**
    * 回退到目标节点（/rollback 底座，同步完成）。
    *
-   * 语义：assistant 节点 → 回退到其父节点（用户提问处）；user/branch-point → 回退到该节点。
+   * 语义（AGE-29 修复：按「轮」回退，而非按消息/步骤）：
+   * 事件溯源图里一轮对话会沉淀多个节点——提问 user 节点、工具步骤的 assistant
+   * 节点、工具结果的 user 节点、最终回答的 assistant 节点等。点任一节点回退时，
+   * 一律解析到「该节点所属那一轮的真实提问处」：
+   * - 点真实提问（user 且消息含文本）→ 回退到它本身，其后整段作废重答；
+   * - 点回答/工具步骤/工具结果/分支点 → 沿父链上溯到最近的真实提问节点
+   *   （跳过工具结果 user 节点与中间 assistant 节点），回退到该提问。
    * 旧分支作废但保留（不可变历史）；会话消息截断到回退点。
    *
    * @returns 回退结果；失败时 ok=false
@@ -635,11 +641,33 @@ export class RuntimeAgent extends AgentClass {
       }
     }
 
-    // 决定回退点：assistant/tool → 父节点（用户提问处）；user/branch-point → 自身
-    const rollbackTargetId =
-      target.type === "assistant" || target.type === "tool"
-        ? target.parentId
-        : target.id;
+    // 决定回退点：解析「被点击节点所属轮次」的真实提问节点。
+    // 事件溯源图中工具结果以 role=user 的 tool-result 消息落 user/message 事件，
+    // 会派生「工具结果 user 节点」——它不是真实提问，回退点必须跳过它继续上溯，
+    // 否则会截断到工具结果消息（上一版行为，导致重答不再重跑工具、粒度错乱）。
+    const isRealQuestion = (n: ConversationNode): boolean => {
+      if (n.type !== "user") return false;
+      const msg = session.messages.find((m) => m.id === n.messageId);
+      // 找不到消息（遗留/重建边界）时仅当它就是被点击节点本身才视为可回退的提问；
+      // 否则保守地沿链继续上溯（避免把工具结果当提问）。
+      if (!msg) return n.id === target?.id;
+      // 真实提问带文本；工具结果 user 消息只含 tool-result 块
+      return msg.content.some((b) => b.type === "text");
+    };
+    let rollbackTargetId: string | undefined;
+    let cursor: ConversationNode | undefined = target;
+    let questionFallback: string | undefined;
+    while (cursor) {
+      if (cursor.type === "user") {
+        questionFallback ??= cursor.id;
+        if (isRealQuestion(cursor)) {
+          rollbackTargetId = cursor.id;
+          break;
+        }
+      }
+      cursor = cursor.parentId ? ctx.graph.getNode(cursor.parentId) : undefined;
+    }
+    rollbackTargetId ??= questionFallback ?? target.id;
     if (!rollbackTargetId) {
       return { ok: false, message: "该节点没有父节点可回退。" };
     }

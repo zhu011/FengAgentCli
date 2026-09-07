@@ -2004,6 +2004,15 @@ body {
 .graph-node--head {
   border-color: var(--success);
   background: var(--success-light);
+  box-shadow:
+    0 0 0 1px var(--success),
+    0 0 12px var(--success-light);
+}
+
+/* 真实提问节点（第 N 问）更醒目 — 与工具结果/回答节点区分 */
+.graph-node--question {
+  border-color: var(--accent);
+  border-left-width: 3px;
 }
 
 .graph-node__label {
@@ -2336,6 +2345,51 @@ body {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-tertiary);
+}
+
+/* ── 同轮回复多段步骤（AGE-29 工具调用聚合）── */
+.message-bubble__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.message-step {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0 2px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.message-step:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.message-step__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+.message-step__label-index {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.message-step__label-tools {
+  color: var(--text-secondary);
+}
+
+.message-step__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
 }
 
 /* ── Composer（卡片式输入区）── */
