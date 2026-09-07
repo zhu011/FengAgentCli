@@ -169,6 +169,12 @@ export function useSession(client: ApiClient): UseSessionResult {
   );
 
   const selectSession = useCallback(async (id: string) => {
+    // 切换会话时中止当前 SSE 流（如有），避免旧会话的流式事件污染新会话 UI
+    if (id !== activeSessionIdRef.current) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setIsStreaming(false);
+    }
     setActiveSessionId(id);
     setSessionTokenStats(null);
     setPendingPermissions([]);

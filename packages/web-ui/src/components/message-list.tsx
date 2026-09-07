@@ -26,17 +26,31 @@ interface MessageListProps {
   onViewEval?: (messageId: string) => void;
 }
 
-/** Round 3：生成中已用秒数计时（指示器消失时归零） */
+/** Round 3：生成中已用秒数计时（指示器消失时归零）
+ *
+ * 修复：切换到评测页再回来时计时器不应重启 — 使用持久时间戳追踪，
+ * 只在 isStreaming 从 false→true 时重置开始时间，view 切换不重置。
+ */
 function useElapsed(active: boolean): number {
   const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef<number | null>(null);
+  const prevActiveRef = useRef(false);
   useEffect(() => {
+    // 仅在 active 从 false→true 时重置开始时间（新的一轮生成）
+    if (active && !prevActiveRef.current) {
+      startRef.current = Date.now();
+      setElapsed(0);
+    }
+    prevActiveRef.current = active;
     if (!active) {
+      startRef.current = null;
       setElapsed(0);
       return;
     }
-    const start = Date.now();
     const timer = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - start) / 1000));
+      if (startRef.current) {
+        setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+      }
     }, 1000);
     return () => clearInterval(timer);
   }, [active]);
