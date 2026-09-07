@@ -149,6 +149,7 @@ function App() {
             <SessionSidebar
               sessions={session.sessions}
               activeSessionId={session.activeSession?.id ?? null}
+              runningSessionIds={session.runningSessionIds}
               creatingSession={session.creatingSession}
               onCreateSession={() => void session.createSession()}
               onSelectSession={(id) => void session.selectSession(id)}

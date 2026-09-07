@@ -136,6 +136,28 @@ export class ApiClient {
   }
 
   /**
+   * GET /api/sessions/:id/events — 订阅某会话的事件流（SSE，按会话路由）。
+   *
+   * 真后台语义（AGE-29）：运行与单个连接解耦 —— 本订阅可随时连接/断开而不
+   * 影响后台运行；若订阅时该会话正在运行，服务端会先回放本次运行已产生的事件
+   * （补看进度），随后实时接收。流以内部 `run-end` 帧标记一轮运行结束
+   * （连接保持打开，可等待下一次运行）。
+   */
+  async *sessionEvents(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    const res = await fetch(
+      `${this.baseUrl}/api/sessions/${sessionId}/events`,
+      { signal },
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to subscribe session events");
+    }
+    yield* this.readSSEBody(res);
+  }
+
+  /**
    * POST /api/sessions/:id/rollback-retry — 回退到目标节点并自动重答（SSE 流）。
    *
    * 与 CLI /rollback <节点id> 同一语义：回退（旧分支作废保留）→ 截断 → 重答。
@@ -175,6 +197,13 @@ export class ApiClient {
       throw await this.toApiError(res, `POST ${path} failed`);
     }
 
+    yield* this.readSSEBody(res);
+  }
+
+  /**
+   * 从 SSE Response 中解析 AgentEvent 事件流（fetch + ReadableStream 手动解析）。
+   */
+  private async *readSSEBody(res: Response): AsyncGenerator<AgentEvent> {
     if (!res.body) {
       throw new Error("Response has no body");
     }

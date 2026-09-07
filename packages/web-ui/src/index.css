@@ -424,6 +424,32 @@ body {
   color: var(--text-tertiary);
 }
 
+/* 会话行「正在后台运行」指示点（AGE-29 真后台并发：切走不中止，行内可见） */
+.session-card__running {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+}
+.session-card__running-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent, #38bdf8);
+  animation: running-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes running-dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0);
+  }
+}
+
 .session-card__delete {
   flex-shrink: 0;
   width: 24px;

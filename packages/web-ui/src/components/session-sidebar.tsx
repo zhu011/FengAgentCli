@@ -17,6 +17,8 @@ import type { SessionMeta } from "../api/types.ts";
 interface SessionSidebarProps {
   sessions: SessionMeta[];
   activeSessionId: string | null;
+  /** 正在后台运行的会话 id 集合（行内显示运行指示点） */
+  runningSessionIds?: ReadonlySet<string>;
   creatingSession: boolean;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
@@ -51,6 +53,7 @@ interface Group {
 export function SessionSidebar({
   sessions,
   activeSessionId,
+  runningSessionIds,
   creatingSession,
   onCreateSession,
   onSelectSession,
@@ -197,6 +200,9 @@ export function SessionSidebar({
                 ) : (
                   <>
                     <span className="session-card__title">{session.title}</span>
+                    <RunningDot
+                      running={runningSessionIds?.has(session.id) ?? false}
+                    />
                     <span className="session-card__meta">
                       {session.tokenCount > 0
                         ? `${session.tokenCount.toLocaleString()} tokens`
@@ -301,6 +307,9 @@ export function SessionSidebar({
                     ) : (
                       <>
                         <span className="session-card__title">{session.title}</span>
+                        <RunningDot
+                          running={runningSessionIds?.has(session.id) ?? false}
+                        />
                         <span className="session-card__meta">
                           {session.tokenCount > 0
                             ? `${session.tokenCount.toLocaleString()} tokens`
@@ -389,4 +398,18 @@ function formatDate(ts: number): string {
     month: "short",
     day: "numeric",
   });
+}
+
+/** 会话行「正在后台运行」指示点（真后台并发：切走不中止，行内可见） */
+function RunningDot({ running }: { running: boolean }) {
+  if (!running) return null;
+  return (
+    <span
+      className="session-card__running"
+      title="正在后台运行"
+      aria-label="正在后台运行"
+    >
+      <span className="session-card__running-dot" aria-hidden="true" />
+    </span>
+  );
 }

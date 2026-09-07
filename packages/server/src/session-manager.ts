@@ -75,6 +75,20 @@ interface RunningTask {
   generator: AsyncGenerator<AgentEvent>;
 }
 
+/**
+ * 订阅者收到的事件 = AgentEvent 或内部运行结束标记。
+ *
+ * 运行结束标记（run-end）由后台泵送器在任务真正结束（正常完成 / 中断 /
+ * 异常）后广播，用于让「发送消息」这类一次性的 SSE 流知道何时关闭连接；
+ * 持久订阅（GET /:id/events）可忽略它并继续等待下一次运行。
+ */
+export type SessionEvent =
+  | AgentEvent
+  | { type: "run-end"; sessionId: string };
+
+/** 订阅取消函数 */
+export type SessionEventUnsubscribe = () => void;
+
 /** SessionManager 构造选项 */
 export interface SessionManagerOptions {
   /** Agent 工厂函数（每次创建会话时调用） */
@@ -110,6 +124,20 @@ export class SessionManager {
     string,
     (req: PermissionRequest) => void
   >();
+  /**
+   * sessionId → 会话事件订阅者集合。
+   *
+   * 事件按会话路由：某会话运行产生的 AgentEvent 只会推送给订阅了该会话的
+   * 客户端，其它会话的订阅者不会收到（消息隔离）。
+   */
+  private subscribers = new Map<string, Set<(e: SessionEvent) => void>>();
+  /**
+   * sessionId → 当前运行已产生的事件回放缓冲。
+   *
+   * 后台运行的 Loop 与 HTTP 消费端解耦后，晚加入的订阅者（如重新打开页面 /
+   * 切回会话）需要从头补看本次运行已产生的事件；运行结束即清空。
+   */
+  private runEventLogs = new Map<string, AgentEvent[]>();
 
   constructor(options: SessionManagerOptions) {
     this.createAgent = options.createAgent;
@@ -257,13 +285,20 @@ export class SessionManager {
     this.runningTasks.delete(sessionId);
     this.pendingPermissions.delete(sessionId);
     this.permissionListeners.delete(sessionId);
+    this.subscribers.delete(sessionId);
+    this.runEventLogs.delete(sessionId);
   }
 
   /**
-   * 发送消息并返回 AgentEvent 流。
+   * 发送消息并返回 AgentEvent 流（直接消费模式）。
    *
    * 从内存缓存中获取会话，启动 Agent Loop。
    * 权限请求通过 permissionRequest 回调转发到 SSE 监听器。
+   *
+   * 注意：此生成器的生命周期由调用方驱动（for-await / 手动 next / return）。
+   * HTTP 层不再直接消费它，而是使用 {@link startMessageRun}（后台泵送 +
+   * 按会话广播）；此方法保留给测试与直接调用方（语义与并发防护完全一致，
+   * 二者通过 runningTasks 互斥）。
    *
    * @param sessionId - 会话 ID
    * @param text - 用户消息
@@ -275,32 +310,88 @@ export class SessionManager {
     text: string,
     model?: string,
   ): AsyncGenerator<AgentEvent> {
-    const agent = this.agents.get(sessionId);
-    if (!agent) {
-      throw new SessionNotFoundError(sessionId);
-    }
-
-    // 从内存缓存获取会话
-    const existing = this.sessions.get(sessionId);
-    if (!existing) {
-      throw new SessionNotFoundError(sessionId);
-    }
-
-    // 并发防护：同一会话已有运行中的任务时拒绝再次启动（双开标签页 / 重复提交时，
-    // 两个 Loop 会同时读写同一 Session 并各自追加用户消息，造成调用链错乱与重复执行）
-    const running = this.runningTasks.get(sessionId);
-    if (running && !running.aborted) {
+    const created = this.createMessageTask(sessionId, text, model);
+    if (!created.ok) {
+      if (created.code === "session_not_found") {
+        throw new SessionNotFoundError(sessionId);
+      }
+      // 并发防护：同一会话已有运行中的任务时拒绝再次启动（双开标签页 / 重复
+      // 提交时，两个 Loop 会同时读写同一 Session 并各自追加用户消息，造成调用
+      // 链错乱与重复执行）——直接消费模式下以 error 事件返回。
       log.info(
         "sendMessage",
         `rejected concurrent run sessionId=${sessionId}, text preview=${text.slice(0, 50)}`,
       );
       yield {
         type: "error",
-        error: {
-          message: "该会话已有正在执行的任务，请等待完成或先中断后再发送新消息。",
-        },
+        error: { message: created.message },
       };
       return;
+    }
+    const task = created.task;
+
+    try {
+      for await (const event of task.generator) {
+        if (task.aborted) {
+          yield {
+            type: "error",
+            error: { message: "Interrupted by user" },
+          };
+          break;
+        }
+        yield event;
+        log.debug("sendMessage", `event type=${event.type}`);
+      }
+    } finally {
+      this.runningTasks.delete(sessionId);
+      log.info("sendMessage", `completed sessionId=${sessionId}`);
+    }
+  }
+
+  /**
+   * 构造「发送消息」运行任务（直接消费与后台泵送共用）。
+   *
+   * 统一完成会话存在性检查、同会话并发防护（runningTasks）、模型覆盖与
+   * Agent Loop 生成器创建。返回后任务已登记到 runningTasks。
+   */
+  private createMessageTask(
+    sessionId: string,
+    text: string,
+    model?: string,
+  ):
+    | { ok: true; task: RunningTask }
+    | {
+        ok: false;
+        code: "session_not_found" | "busy";
+        message: string;
+      } {
+    const agent = this.agents.get(sessionId);
+    if (!agent) {
+      return {
+        ok: false,
+        code: "session_not_found",
+        message: `Session "${sessionId}" not found`,
+      };
+    }
+
+    // 从内存缓存获取会话
+    const existing = this.sessions.get(sessionId);
+    if (!existing) {
+      return {
+        ok: false,
+        code: "session_not_found",
+        message: `Session "${sessionId}" not found`,
+      };
+    }
+
+    // 并发防护：同一会话已有运行中的任务时拒绝再次启动
+    const running = this.runningTasks.get(sessionId);
+    if (running && !running.aborted) {
+      return {
+        ok: false,
+        code: "busy",
+        message: "该会话已有正在执行的任务，请等待完成或先中断后再发送新消息。",
+      };
     }
 
     // 应用模型覆盖
@@ -308,8 +399,6 @@ export class SessionManager {
       existing.model = model;
       existing.updatedAt = Date.now();
     }
-
-    log.info("sendMessage", `sessionId=${sessionId}, text preview=${text.slice(0, 50)}, model=${existing.model}`);
 
     // 创建权限回调（将权限请求推送到 SSE 监听器）
     const requestPermission: RequestPermission = async (permission) => {
@@ -325,22 +414,158 @@ export class SessionManager {
       generator,
     };
     this.runningTasks.set(sessionId, task);
+    return { ok: true, task };
+  }
+
+  /**
+   * 后台启动「发送消息」运行并广播到该会话的订阅者（WebUI HTTP 层入口）。
+   *
+   * 与直接消费模式（sendMessage）的区别：Loop 的驱动（泵送）由 SessionManager
+   * 拥有，与任何单个 HTTP 连接解耦 —— 客户端断开/取消订阅不会中止后台运行
+   * （真后台语义），也不会遗留悬挂任务：任务在 Loop 真正结束时统一清理并
+   * 广播 run-end。
+   *
+   * 事件按会话路由：只推送给订阅了该会话的客户端。
+   *
+   * @param sessionId - 会话 ID
+   * @param text - 用户消息
+   * @param model - 可选模型覆盖
+   * @returns 启动结果（busy/session_not_found 时 ok=false）
+   */
+  startMessageRun(
+    sessionId: string,
+    text: string,
+    model?: string,
+  ):
+    | { ok: true }
+    | {
+        ok: false;
+        code: "session_not_found" | "busy";
+        message: string;
+      } {
+    const created = this.createMessageTask(sessionId, text, model);
+    if (!created.ok) {
+      log.info(
+        "startMessageRun",
+        `rejected ${created.code} sessionId=${sessionId}, text preview=${text.slice(0, 50)}`,
+      );
+      return created;
+    }
+    log.info(
+      "startMessageRun",
+      `started sessionId=${sessionId}, text preview=${text.slice(0, 50)}`,
+    );
+    void this.pumpRun(sessionId, created.task);
+    return { ok: true };
+  }
+
+  /**
+   * 后台泵送器：驱动运行任务直至结束，事件广播给该会话的订阅者。
+   *
+   * - 每个事件先追加到回放缓冲（供晚加入订阅者补看），再广播；
+   * - 中断（interrupt）在下一个事件边界生效；
+   * - 生成器抛错 → 广播 error 事件；
+   * - finally 里无条件清理 runningTasks 与回放缓冲，并广播 run-end ——
+   *   这是「客户端断开不再遗留悬挂任务」的关键：清理不依赖任何消费端。
+   */
+  private async pumpRun(
+    sessionId: string,
+    task: RunningTask,
+  ): Promise<void> {
+    const replay: AgentEvent[] = [];
+    this.runEventLogs.set(sessionId, replay);
 
     try {
-      for await (const event of generator) {
+      for await (const event of task.generator) {
         if (task.aborted) {
-          yield {
+          this.notifySession(sessionId, {
             type: "error",
             error: { message: "Interrupted by user" },
-          };
+          });
           break;
         }
-        yield event;
-        log.debug("sendMessage", `event type=${event.type}`);
+        replay.push(event);
+        this.notifySession(sessionId, event);
+        log.debug("pumpRun", `sessionId=${sessionId}, event type=${event.type}`);
       }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("pumpRun", `sessionId=${sessionId}, error: ${message}`);
+      this.notifySession(sessionId, {
+        type: "error",
+        error: { message },
+      });
     } finally {
+      if (this.runEventLogs.get(sessionId) === replay) {
+        this.runEventLogs.delete(sessionId);
+      }
       this.runningTasks.delete(sessionId);
-      log.info("sendMessage", `completed sessionId=${sessionId}`);
+      this.notifySession(sessionId, { type: "run-end", sessionId });
+      log.info("pumpRun", `completed sessionId=${sessionId}`);
+    }
+  }
+
+  /**
+   * 会话是否正在运行（有未中断的任务）。
+   *
+   * @param sessionId - 会话 ID
+   */
+  isRunning(sessionId: string): boolean {
+    const task = this.runningTasks.get(sessionId);
+    return !!task && !task.aborted;
+  }
+
+  /**
+   * 订阅某会话的事件流（按会话路由）。
+   *
+   * 订阅时会同步回放当前运行已产生的事件（若该会话正在运行），随后实时接收。
+   * 返回取消订阅函数。
+   *
+   * @param sessionId - 会话 ID
+   * @param listener - 事件回调
+   */
+  subscribeSessionEvents(
+    sessionId: string,
+    listener: (e: SessionEvent) => void,
+  ): SessionEventUnsubscribe {
+    let set = this.subscribers.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.subscribers.set(sessionId, set);
+    }
+    // 先同步回放正在运行的任务已产生的事件，再登记监听 —— 单线程内两步之间
+    // 不会有新事件插入，不存在回放与实时之间的漏事件窗口。
+    const replay = this.runEventLogs.get(sessionId);
+    if (replay) {
+      for (const event of replay) {
+        listener(event);
+      }
+    }
+    set.add(listener);
+
+    return () => {
+      const current = this.subscribers.get(sessionId);
+      if (!current) return;
+      current.delete(listener);
+      if (current.size === 0) {
+        this.subscribers.delete(sessionId);
+      }
+    };
+  }
+
+  /** 通知某会话的全部订阅者（事件按会话路由的核心） */
+  private notifySession(sessionId: string, event: SessionEvent): void {
+    const set = this.subscribers.get(sessionId);
+    if (!set || set.size === 0) return;
+    for (const listener of [...set]) {
+      try {
+        listener(event);
+      } catch (err) {
+        log.error(
+          "notifySession",
+          `listener error sessionId=${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
@@ -592,30 +817,78 @@ export class SessionManager {
     nodeId?: string,
     reason = "用户回退并重答",
   ): AsyncGenerator<AgentEvent> {
+    const created = this.createRollbackRetryTask(sessionId, nodeId, reason);
+    if (!created.ok) {
+      if (created.code === "session_not_found") {
+        throw new SessionNotFoundError(sessionId);
+      }
+      yield {
+        type: "error",
+        error: { message: created.message },
+      };
+      return;
+    }
+    const task = created.task;
+
+    try {
+      for await (const event of task.generator) {
+        if (task.aborted) {
+          yield {
+            type: "error",
+            error: { message: "Interrupted by user" },
+          };
+          break;
+        }
+        yield event;
+      }
+    } finally {
+      this.runningTasks.delete(sessionId);
+    }
+  }
+
+  /**
+   * 构造「回退并重答」运行任务（直接消费与后台泵送共用）。
+   *
+   * 统一完成会话存在性 / 并发防护 / 图能力检查与生成器创建，返回后任务已
+   * 登记到 runningTasks（与 sendMessage 路径互斥）。
+   */
+  private createRollbackRetryTask(
+    sessionId: string,
+    nodeId?: string,
+    reason = "用户回退并重答",
+  ):
+    | { ok: true; task: RunningTask }
+    | {
+        ok: false;
+        code: "session_not_found" | "no_graph" | "busy";
+        message: string;
+      } {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw new SessionNotFoundError(sessionId);
+      return {
+        ok: false,
+        code: "session_not_found",
+        message: `Session "${sessionId}" not found`,
+      };
     }
     const agent = this.agents.get(sessionId);
     const graphAgent = agent as unknown as GraphAgentLike | undefined;
     if (!graphAgent?.rollbackAndRetry) {
-      yield {
-        type: "error",
-        error: { message: "当前 Agent 未接入回退重答机制（非运行时装配）。" },
+      return {
+        ok: false,
+        code: "no_graph",
+        message: "当前 Agent 未接入回退重答机制（非运行时装配）。",
       };
-      return;
     }
 
     // 并发防护：同一会话已有运行中的任务时拒绝再次启动
     const running = this.runningTasks.get(sessionId);
     if (running && !running.aborted) {
-      yield {
-        type: "error",
-        error: {
-          message: "该会话已有正在执行的任务，请等待完成或先中断后再回退重答。",
-        },
+      return {
+        ok: false,
+        code: "busy",
+        message: "该会话已有正在执行的任务，请等待完成或先中断后再回退重答。",
       };
-      return;
     }
 
     // 权限回调（重答过程中工具可能请求审批）
@@ -631,21 +904,41 @@ export class SessionManager {
       generator: generator as AsyncGenerator<AgentEvent>,
     };
     this.runningTasks.set(sessionId, task);
+    return { ok: true, task };
+  }
 
-    try {
-      for await (const event of generator) {
-        if (task.aborted) {
-          yield {
-            type: "error",
-            error: { message: "Interrupted by user" },
-          };
-          break;
-        }
-        yield event;
-      }
-    } finally {
-      this.runningTasks.delete(sessionId);
+  /**
+   * 后台启动「回退并自动重答」运行并广播到该会话的订阅者（WebUI HTTP 层入口）。
+   *
+   * 语义与 {@link startMessageRun} 一致：Loop 泵送由 SessionManager 拥有，
+   * 与单个 HTTP 连接解耦，事件按会话路由。
+   *
+   * @param sessionId - 会话 ID
+   * @param nodeId - 目标节点 id（缺省取活跃路径最后一个 assistant 节点）
+   * @param reason - 回退原因
+   */
+  startRollbackRetryRun(
+    sessionId: string,
+    nodeId?: string,
+    reason = "用户回退并重答",
+  ):
+    | { ok: true }
+    | {
+        ok: false;
+        code: "session_not_found" | "no_graph" | "busy";
+        message: string;
+      } {
+    const created = this.createRollbackRetryTask(sessionId, nodeId, reason);
+    if (!created.ok) {
+      log.info(
+        "startRollbackRetryRun",
+        `rejected ${created.code} sessionId=${sessionId}`,
+      );
+      return created;
     }
+    log.info("startRollbackRetryRun", `started sessionId=${sessionId}`);
+    void this.pumpRun(sessionId, created.task);
+    return { ok: true };
   }
 
   /**
