@@ -118,52 +118,54 @@ export class Agent {
     // 发出 session-start 事件
     yield { type: "session-start", session: sess };
 
-    // 运行 Agent Loop
-    for await (const event of this.loop.run(sess, options)) {
-      // 会话 JSONL 日志：message-end 时记录助手消息
-      if (event.type === "message-end") {
-        const assistantMsg = sess.messages.find((m) => m.id === event.messageId);
-        if (assistantMsg) {
-          const toolCalls = assistantMsg.content
-            .filter((b) => b.type === "tool-use")
-            .map((b): { name: string; input: unknown } => {
-              if (b.type === "tool-use") return { name: b.name, input: b.input };
-              return { name: "", input: null };
+    // 运行 Agent Loop（try/finally 确保中断路径也复位 idle 并持久化，AGE-29 R2）
+    try {
+      for await (const event of this.loop.run(sess, options)) {
+        // 会话 JSONL 日志：message-end 时记录助手消息
+        if (event.type === "message-end") {
+          const assistantMsg = sess.messages.find((m) => m.id === event.messageId);
+          if (assistantMsg) {
+            const toolCalls = assistantMsg.content
+              .filter((b) => b.type === "tool-use")
+              .map((b): { name: string; input: unknown } => {
+                if (b.type === "tool-use") return { name: b.name, input: b.input };
+                return { name: "", input: null };
+              });
+            writeSessionLog({
+              timestamp: new Date().toISOString(),
+              sessionId: sess.id,
+              messageId: assistantMsg.id,
+              role: "assistant",
+              content: assistantMsg.content.map((b) => {
+                if (b.type === "text") return { type: "text", text: b.text.slice(0, 500) };
+                if (b.type === "tool-use") return { type: "tool-use", name: b.name };
+                if (b.type === "tool-result") return { type: "tool-result", toolUseId: b.toolUseId };
+                return { type: b.type };
+              }),
+              model: sess.model,
+              hasToolCalls: toolCalls.length > 0,
+              toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+              tokenCount: sess.tokenCount,
             });
-          writeSessionLog({
-            timestamp: new Date().toISOString(),
-            sessionId: sess.id,
-            messageId: assistantMsg.id,
-            role: "assistant",
-            content: assistantMsg.content.map((b) => {
-              if (b.type === "text") return { type: "text", text: b.text.slice(0, 500) };
-              if (b.type === "tool-use") return { type: "tool-use", name: b.name };
-              if (b.type === "tool-result") return { type: "tool-result", toolUseId: b.toolUseId };
-              return { type: b.type };
-            }),
-            model: sess.model,
-            hasToolCalls: toolCalls.length > 0,
-            toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-            tokenCount: sess.tokenCount,
-          });
+          }
         }
+        // 每个 loop 轮次结束即增量持久化消息（而非只等在 prompt() 收尾）
+        // —— 会话被中断（SSE 断开 / 服务被杀 / 死循环被终止）时，SQLite
+        // 仍保留已完成的轮次，观测/评测回放不会只剩一条用户消息（AGE-29 回放失败根因）
+        if (event.type === "turn-end" && this.sessionStore) {
+          this.sessionStore.saveMessages(sess.id, sess.messages);
+        }
+        yield event;
       }
-      // 每个 loop 轮次结束即增量持久化消息（而非只等在 prompt() 收尾）
-      // —— 会话被中断（SSE 断开 / 服务被杀 / 死循环被终止）时，SQLite
-      // 仍保留已完成的轮次，观测/评测回放不会只剩一条用户消息（AGE-29 回放失败根因）
-      if (event.type === "turn-end" && this.sessionStore) {
+    } finally {
+      // 持久化最终状态（中断路径也走这里 — 复位 idle 并落库，不卡 running）
+      sess.status = "idle";
+      sess.updatedAt = Date.now();
+      if (this.sessionStore) {
+        this.sessionStore.saveSession(sess);
+        // 保存所有新消息（已保存的会被 INSERT OR REPLACE）
         this.sessionStore.saveMessages(sess.id, sess.messages);
       }
-      yield event;
-    }
-
-    // 持久化最终状态
-    sess.status = "idle";
-    sess.updatedAt = Date.now();
-    if (this.sessionStore) {
-      this.sessionStore.saveSession(sess);
-      // 保存所有新消息（已保存的会被 INSERT OR REPLACE）
-      this.sessionStore.saveMessages(sess.id, sess.messages);
     }
 
     yield { type: "session-end" };
