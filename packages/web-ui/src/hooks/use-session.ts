@@ -14,39 +14,16 @@ import type {
   Session,
   SessionMeta,
 } from "../api/types.ts";
+import {
+  sessionToTurnMessages,
+  type DisplayMessage,
+  type DisplayStep,
+  type TokenStats,
+  type ToolCallInfo,
+} from "../lib/turn-messages.ts";
 
-/** 前端展示用的工具调用信息 */
-export interface ToolCallInfo {
-  toolUseId: string;
-  name: string;
-  input: unknown;
-  result?: { content: string; isError?: boolean };
-  status: "running" | "completed" | "failed";
-  /** 入参是否被用户在审批环节人工修改后执行（human-in-the-loop） */
-  edited?: boolean;
-}
-
-/** 前端展示用的消息项（含工具调用列表） */
-/** Token 用量统计 */
-export interface TokenStats {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens?: number;
-  cacheCreationTokens?: number;
-}
-
-export interface DisplayMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  text: string;
-  /** 思考过程内容（流式增量累积；历史消息从 thinking 块提取） */
-  thinking: string;
-  toolCalls: ToolCallInfo[];
-  streaming: boolean;
-  createdAt: number;
-  /** AI 消息的 token 用量统计 */
-  tokenStats?: TokenStats;
-}
+// 兼容导出：展示类型统一定义在 lib/turn-messages.ts（纯函数层，可单测）
+export type { DisplayMessage, DisplayStep, TokenStats, ToolCallInfo };
 
 export interface UseSessionResult {
   sessions: SessionMeta[];
@@ -135,7 +112,7 @@ export function useSession(client: ApiClient): UseSessionResult {
       .then((session) => {
         if (cancelled) return;
         setActiveSession(session);
-        setDisplayMessages(sessionToDisplayMessages(session));
+        setDisplayMessages(sessionToTurnMessages(session.messages));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -179,7 +156,7 @@ export function useSession(client: ApiClient): UseSessionResult {
     try {
       const session = await client.getSession(sessionId);
       setActiveSession(session);
-      setDisplayMessages(sessionToDisplayMessages(session));
+      setDisplayMessages(sessionToTurnMessages(session.messages));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reload session");
     }
@@ -237,6 +214,12 @@ export function useSession(client: ApiClient): UseSessionResult {
   );
 
   const selectSession = useCallback(async (id: string) => {
+    // 切换会话时中止当前 SSE 流（如有），避免旧会话的流式事件污染新会话 UI
+    if (id !== activeSessionIdRef.current) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setIsStreaming(false);
+    }
     setActiveSessionId(id);
     setSessionTokenStats(null);
     setPendingPermissions([]);
@@ -369,6 +352,8 @@ export function useSession(client: ApiClient): UseSessionResult {
         messageToolCalls,
         toolUseToMessageId,
         currentMessageId: { value: null },
+        // AGE-29：同一轮提问的多段助手步骤聚合进同一个回复气泡
+        turnRowId: { value: null },
         setDisplayMessages,
         setError,
         setSessionTokenStats,
@@ -393,14 +378,11 @@ export function useSession(client: ApiClient): UseSessionResult {
         setIsStreaming(false);
         abortRef.current = null;
         toolUseToMessageId.clear();
-        // 安全清理：标记所有消息为非流式 + 复位仍 running 的工具调用
+        // 安全清理：关闭所有流式行/步骤 + 复位仍 running 的工具调用
         // （覆盖中断/超时/流异常终止：未收到 tool-call-result 的子项不再转圈）
-        setDisplayMessages((prev) => {
-          const nonStreaming = prev.map((m) =>
-            m.streaming ? { ...m, streaming: false } : m,
-          );
-          return markRunningToolCallsFailed(nonStreaming);
-        });
+        setDisplayMessages((prev) =>
+          markRunningToolCallsFailed(closeOpenTurns(prev)),
+        );
         void refreshSessions();
       }
     },
@@ -444,13 +426,15 @@ export function useSession(client: ApiClient): UseSessionResult {
         messageToolCalls,
         toolUseToMessageId,
         currentMessageId: { value: null },
+        // AGE-29：同一轮提问的多段助手步骤聚合进同一个回复气泡
+        turnRowId: { value: null },
         setDisplayMessages,
         setError,
         setSessionTokenStats,
         // 回退后的首帧 session-start：用截断后的会话重建消息列表（被回退的旧轮次消失）
         onSessionStart: (sess) => {
           setActiveSession(sess);
-          setDisplayMessages(sessionToDisplayMessages(sess));
+          setDisplayMessages(sessionToTurnMessages(sess.messages));
         },
       };
 
@@ -473,12 +457,9 @@ export function useSession(client: ApiClient): UseSessionResult {
         setIsStreaming(false);
         abortRef.current = null;
         toolUseToMessageId.clear();
-        setDisplayMessages((prev) => {
-          const nonStreaming = prev.map((m) =>
-            m.streaming ? { ...m, streaming: false } : m,
-          );
-          return markRunningToolCallsFailed(nonStreaming);
-        });
+        setDisplayMessages((prev) =>
+          markRunningToolCallsFailed(closeOpenTurns(prev)),
+        );
         void refreshSessions();
         void refreshGraph();
       }
@@ -490,13 +471,10 @@ export function useSession(client: ApiClient): UseSessionResult {
     // 始终清除 streaming 状态，不依赖 abort 副作用
     abortRef.current?.abort();
     setIsStreaming(false);
-    // 安全清理：标记所有消息为非流式 + 复位 running 工具调用（中断后不再转圈）
-    setDisplayMessages((prev) => {
-      const nonStreaming = prev.map((m) =>
-        m.streaming ? { ...m, streaming: false } : m,
-      );
-      return markRunningToolCallsFailed(nonStreaming);
-    });
+    // 安全清理：关闭所有流式行/步骤 + 复位 running 工具调用（中断后不再转圈）
+    setDisplayMessages((prev) =>
+      markRunningToolCallsFailed(closeOpenTurns(prev)),
+    );
     // 使用 ref 读取最新 sessionId
     const sessionId = activeSessionIdRef.current;
     if (!sessionId) return;
@@ -595,14 +573,27 @@ export function useSession(client: ApiClient): UseSessionResult {
  * 流式状态与消息列表更新被抽成 handleTurnEvent，两条链路（发送新消息 /
  * 回退后自动重答）共用同一套「message-start → text-delta → tool-call → result →
  * message-end」渲染逻辑，避免行为分叉。
+ *
+ * AGE-29：一次提问在底层消息里会包含多段助手步骤（工具调用步骤 + 最终文字），
+ * 这些步骤被聚合进同一个助手气泡（turnRowId 指向该聚合行；每步以 messageId
+ * 定位更新），工具结果不产生独立气泡。
  */
 interface TurnStreamCtx {
+  /** 步骤 id → 已累积文本（读后写，避免 setState 内副作用） */
   streamingText: Map<string, string>;
+  /** 步骤 id → 已累积思考文本 */
   streamingThinking: Map<string, string>;
+  /** 步骤 id → 已收集工具卡片（读后写） */
   messageToolCalls: Map<string, ToolCallInfo[]>;
+  /** toolUseId → 所属步骤消息 id（message-end 之后结果才到，须独立关联） */
   toolUseToMessageId: Map<string, string>;
-  /** message-end 会把当前消息 id 置空；工具结果在 message-end 之后到达，须用独立映射关联 */
+  /** 当前正在流式输出的步骤消息 id（message-end 后置空） */
   currentMessageId: { value: string | null };
+  /**
+   * 当前轮次的聚合助手行 id（= 本轮首个 message-start 的消息 id）。
+   * 同一轮后续步骤追加进该行（不新建气泡）；session-start 重建后置空。
+   */
+  turnRowId: { value: string | null };
   /** session-start 处理（默认无操作；rollbackRetry 用它重建回退截断后的消息列表） */
   onSessionStart?: (session: Session) => void;
   setDisplayMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>;
@@ -622,86 +613,127 @@ function handleTurnEvent(event: AgentEvent, ctx: TurnStreamCtx): void {
     setError,
     setSessionTokenStats,
   } = ctx;
+  const rowIdOf = () => ctx.turnRowId.value;
 
   switch (event.type) {
     case "session-start": {
-      // rollbackRetry：首帧 session-start 携带回退截断后的会话 → 重建消息列表
+      // rollbackRetry：首帧 session-start 携带回退截断后的会话 → 重建消息列表。
+      // 重建后本轮聚合行从零开始（旧 turnRowId 已随旧列表作废）。
       ctx.onSessionStart?.(event.session);
+      ctx.turnRowId.value = null;
+      currentMessageId.value = null;
+      streamingText.clear();
+      streamingThinking.clear();
+      messageToolCalls.clear();
+      toolUseToMessageId.clear();
       break;
     }
 
     case "message-start": {
       currentMessageId.value = event.messageId;
-      // 创建 assistant 消息占位
-      setDisplayMessages((prev) => {
-        if (prev.some((m) => m.id === event.messageId)) return prev;
-        return [
+      const stepId = event.messageId;
+      const step: DisplayStep = {
+        messageId: stepId,
+        text: "",
+        thinking: "",
+        toolCalls: [],
+        streaming: true,
+        createdAt: Date.now(),
+      };
+      const rowId = rowIdOf();
+      if (rowId) {
+        // 同一轮提问的后续 LLM 步骤 → 并入既有聚合行（不拆成新气泡）
+        setDisplayMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== rowId || !m.steps) return m;
+            const steps = [...m.steps, step];
+            return { ...m, steps, ...recomputeAggregates(steps, m) };
+          }),
+        );
+      } else {
+        // 本轮首个助手步骤 → 新建聚合行（行 id = 首步骤 id）
+        ctx.turnRowId.value = stepId;
+        setDisplayMessages((prev) => [
           ...prev,
           {
-            id: event.messageId,
+            id: stepId,
             role: event.role,
             text: "",
             thinking: "",
             toolCalls: [],
             streaming: true,
             createdAt: Date.now(),
+            steps: [step],
           },
-        ];
-      });
+        ]);
+      }
       break;
     }
 
     case "text-delta": {
-      const id = event.messageId;
-      const accumulated = (streamingText.get(id) ?? "") + event.text;
-      streamingText.set(id, accumulated);
+      const stepId = event.messageId;
+      const rowId = rowIdOf();
+      if (!rowId) break;
+      const accumulated = (streamingText.get(stepId) ?? "") + event.text;
+      streamingText.set(stepId, accumulated);
       setDisplayMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, text: accumulated } : m)),
+        updateStepInRow(prev, rowId, stepId, (s) => ({
+          ...s,
+          text: accumulated,
+        })),
       );
       break;
     }
 
     case "thinking-delta": {
       // 思考过程内容 — 流式累积，前端可实时展示（展开/折叠）
-      const id = event.messageId;
+      const stepId = event.messageId;
+      const rowId = rowIdOf();
+      if (!rowId) break;
       const accumulated =
-        (streamingThinking.get(id) ?? "") + event.text;
-      streamingThinking.set(id, accumulated);
+        (streamingThinking.get(stepId) ?? "") + event.text;
+      streamingThinking.set(stepId, accumulated);
       setDisplayMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, thinking: accumulated } : m)),
+        updateStepInRow(prev, rowId, stepId, (s) => ({
+          ...s,
+          thinking: accumulated,
+        })),
       );
       break;
     }
 
     case "tool-call-start": {
-      // 工具调用归属于当前正在生成的 assistant 消息
-      const msgId = currentMessageId.value;
-      if (!msgId) break;
-      toolUseToMessageId.set(event.toolUseId, msgId);
-      const calls = messageToolCalls.get(msgId) ?? [];
+      // 工具调用归属于当前正在生成的助手步骤
+      const stepId = currentMessageId.value;
+      const rowId = rowIdOf();
+      if (!stepId || !rowId) break;
+      toolUseToMessageId.set(event.toolUseId, stepId);
+      const calls = messageToolCalls.get(stepId) ?? [];
       calls.push({
         toolUseId: event.toolUseId,
         name: event.name,
         input: event.input,
         status: "running",
       });
-      messageToolCalls.set(msgId, calls);
+      messageToolCalls.set(stepId, calls);
       setDisplayMessages((prev) =>
-        prev.map((m) =>
-          m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
-        ),
+        updateStepInRow(prev, rowId, stepId, (s) => ({
+          ...s,
+          toolCalls: [...calls],
+        })),
       );
       break;
     }
 
     case "tool-call-result": {
-      // 按 toolUseId → 消息 映射定位归属（message-end 已把 currentMessageId 置空，
-      // 工具结果在其后到达，不能再用 currentMessageId 关联）
-      const msgId =
+      // 按 toolUseId → 步骤消息 映射定位归属（message-end 已把 currentMessageId
+      // 置空，工具结果在其后到达，不能再用 currentMessageId 关联）
+      const stepId =
         toolUseToMessageId.get(event.toolUseId) ?? currentMessageId.value;
+      const rowId = rowIdOf();
       toolUseToMessageId.delete(event.toolUseId);
-      if (!msgId) break;
-      const calls = messageToolCalls.get(msgId) ?? [];
+      if (!stepId || !rowId) break;
+      const calls = messageToolCalls.get(stepId) ?? [];
       const idx = calls.findIndex((c) => c.toolUseId === event.toolUseId);
       if (idx !== -1) {
         const existing = calls[idx];
@@ -716,11 +748,12 @@ function handleTurnEvent(event: AgentEvent, ctx: TurnStreamCtx): void {
             result: event.result,
             status: event.result.isError ? "failed" : "completed",
           };
-          messageToolCalls.set(msgId, calls);
+          messageToolCalls.set(stepId, calls);
           setDisplayMessages((prev) =>
-            prev.map((m) =>
-              m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
-            ),
+            updateStepInRow(prev, rowId, stepId, (s) => ({
+              ...s,
+              toolCalls: [...calls],
+            })),
           );
         }
       }
@@ -728,14 +761,19 @@ function handleTurnEvent(event: AgentEvent, ctx: TurnStreamCtx): void {
     }
 
     case "message-end": {
-      setDisplayMessages((prev) =>
-        prev.map((m) =>
-          m.id === event.messageId ? { ...m, streaming: false } : m,
-        ),
-      );
-      streamingText.delete(event.messageId);
-      streamingThinking.delete(event.messageId);
+      const stepId = event.messageId;
+      streamingText.delete(stepId);
+      streamingThinking.delete(stepId);
       currentMessageId.value = null;
+      const rowId = rowIdOf();
+      if (!rowId) break;
+      // 该步骤流式结束（行是否仍 streaming 由 recompute 按剩余步骤推导）
+      setDisplayMessages((prev) =>
+        updateStepInRow(prev, rowId, stepId, (s) => ({
+          ...s,
+          streaming: false,
+        })),
+      );
       break;
     }
 
@@ -746,26 +784,30 @@ function handleTurnEvent(event: AgentEvent, ctx: TurnStreamCtx): void {
 
     // turn-end / session-end — 兜底清理：确保所有消息标记为非流式
     // （防止 message-end 未到达时 streaming: true 永不消除）；
-    // 同时复位仍处于 running 的工具调用（loop 终止/出错时不再转圈）
-    case "turn-end":
-    case "session-end": {
+    // 同时复位仍处于 running 的工具调用（loop 终止/出错时不再转圈）。
+    // 注意：turn-end(tool_use) 出现在同轮步骤之间，不能关闭聚合行；
+    // 行的最终关闭由 session-end 与客户端 finally 兜底完成。
+    case "turn-end": {
       if (currentMessageId.value) {
-        setDisplayMessages((prev) =>
-          prev.map((m) =>
-            m.id === currentMessageId.value ? { ...m, streaming: false } : m,
-          ),
-        );
         streamingText.delete(currentMessageId.value);
         streamingThinking.delete(currentMessageId.value);
         currentMessageId.value = null;
       }
-      // 安全清理：标记所有消息为非流式 + 复位 running 工具调用
-      setDisplayMessages((prev) => {
-        const nonStreaming = prev.map((m) =>
-          m.streaming ? { ...m, streaming: false } : m,
-        );
-        return markRunningToolCallsFailed(nonStreaming);
-      });
+      setDisplayMessages((prev) => markRunningToolCallsFailed(prev));
+      break;
+    }
+
+    case "session-end": {
+      if (currentMessageId.value) {
+        streamingText.delete(currentMessageId.value);
+        streamingThinking.delete(currentMessageId.value);
+        currentMessageId.value = null;
+      }
+      ctx.turnRowId.value = null;
+      // 安全清理：关闭所有流式行/步骤 + 复位 running 工具调用
+      setDisplayMessages((prev) =>
+        markRunningToolCallsFailed(closeOpenTurns(prev)),
+      );
       break;
     }
 
@@ -781,14 +823,15 @@ function handleTurnEvent(event: AgentEvent, ctx: TurnStreamCtx): void {
         ...(event.cacheReadTokens ? { cacheReadTokens: event.cacheReadTokens } : {}),
         ...(event.cacheCreationTokens ? { cacheCreationTokens: event.cacheCreationTokens } : {}),
       };
-      // 附加到当前 assistant 消息
-      if (currentMessageId.value) {
+      // 附加到当前 assistant 步骤
+      const stepId = currentMessageId.value;
+      const rowId = rowIdOf();
+      if (stepId && rowId) {
         setDisplayMessages((prev) =>
-          prev.map((m) =>
-            m.id === currentMessageId.value
-              ? { ...m, tokenStats: usageStats }
-              : m,
-          ),
+          updateStepInRow(prev, rowId, stepId, (s) => ({
+            ...s,
+            tokenStats: usageStats,
+          })),
         );
       }
       // 累加到会话级统计
@@ -804,86 +847,108 @@ function handleTurnEvent(event: AgentEvent, ctx: TurnStreamCtx): void {
 }
 
 /**
- * 将仍处于 running 的工具调用复位为 failed。
+ * 将仍处于 running 的工具调用复位为 failed（含分步步骤内的工具卡片）。
  *
  * loop 正常收尾时每个 tool-call-start 都有对应的 tool-call-result（completed/failed），
  * 不会有 running 残留；running 残留只出现在异常终止路径（死循环防护/LLM 错误/中断/
  * 超时/连接断开），此时把子项从「转圈」复位为明确的失败态。
  */
 function markRunningToolCallsFailed(messages: DisplayMessage[]): DisplayMessage[] {
+  const failCards = (cards: ToolCallInfo[]): ToolCallInfo[] =>
+    cards.map((tc) =>
+      tc.status === "running"
+        ? {
+            ...tc,
+            status: "failed",
+            result: {
+              content: "工具调用未完成（对话已终止或中断）",
+              isError: true,
+            },
+          }
+        : tc,
+    );
   return messages.map((m) => {
-    if (!m.toolCalls.some((tc) => tc.status === "running")) return m;
+    const steps = m.steps;
+    const changed =
+      m.toolCalls.some((tc) => tc.status === "running") ||
+      (steps?.some((s) => s.toolCalls.some((tc) => tc.status === "running")) ??
+        false);
+    if (!changed) return m;
     return {
       ...m,
-      toolCalls: m.toolCalls.map((tc) =>
-        tc.status === "running"
-          ? {
-              ...tc,
-              status: "failed",
-              result: {
-                content: "工具调用未完成（对话已终止或中断）",
-                isError: true,
-              },
-            }
-          : tc,
-      ),
+      toolCalls: failCards(m.toolCalls),
+      ...(steps
+        ? {
+            steps: steps.map((s) =>
+              s.toolCalls.some((tc) => tc.status === "running")
+                ? { ...s, toolCalls: failCards(s.toolCalls) }
+                : s,
+            ),
+          }
+        : {}),
     };
   });
 }
 
-/** 将 Session 转换为 DisplayMessage 列表 */
-function sessionToDisplayMessages(session: Session): DisplayMessage[] {
-  // 工具结果块位于独立的 user 消息中（loop 将工具结果作为 user 消息加入历史），
-  // 先全量收集 toolUseId → 结果 映射，再在助手消息里关联 tool-use 块，
-  // 否则重载历史时工具卡片永远拿不到结果（也无法区分成功/失败）。
-  const toolResults = new Map<string, { content: string; isError?: boolean }>();
-  for (const msg of session.messages) {
-    for (const block of msg.content) {
-      if (block.type === "tool-result") {
-        toolResults.set(block.toolUseId, {
-          content: block.content,
-          isError: block.isError,
-        });
-      }
-    }
-  }
-
-  return session.messages.map((msg) => {
-    let text = "";
-    let thinking = "";
-    const toolCalls: ToolCallInfo[] = [];
-
-    for (const block of msg.content) {
-      if (block.type === "text") {
-        text += block.text;
-      } else if (block.type === "thinking") {
-        thinking += block.text;
-      } else if (block.type === "tool-use") {
-        const result = toolResults.get(block.id);
-        toolCalls.push({
-          toolUseId: block.id,
-          name: block.name,
-          input: block.input,
-          result,
-          // 有结果按结果定态；无结果（会话中断/终止，工具未返回）按失败处理
-          status:
-            result === undefined
-              ? "failed"
-              : result.isError
-                ? "failed"
-                : "completed",
-        });
-      }
-    }
-
+/**
+ * 关闭仍在流式状态的「轮」（行 + 其分步）：
+ * 消息列表重建 / 会话切换 / 中断兜底时，把 streaming 行与 streaming 步骤复位。
+ */
+function closeOpenTurns(messages: DisplayMessage[]): DisplayMessage[] {
+  return messages.map((m) => {
+    const steps = m.steps;
+    const stepOpen = steps?.some((s) => s.streaming) ?? false;
+    if (!m.streaming && !stepOpen) return m;
     return {
-      id: msg.id,
-      role: msg.role,
-      text,
-      thinking,
-      toolCalls,
+      ...m,
       streaming: false,
-      createdAt: msg.createdAt,
+      ...(steps
+        ? {
+            steps: steps.map((s) =>
+              s.streaming ? { ...s, streaming: false } : s,
+            ),
+          }
+        : {}),
     };
+  });
+}
+
+/** 由步骤数组重算聚合行字段（text/thinking/toolCalls/streaming） */
+function recomputeAggregates(
+  steps: DisplayStep[],
+  base?: Pick<DisplayMessage, "tokenStats">,
+): Pick<DisplayMessage, "text" | "thinking" | "toolCalls" | "streaming" | "tokenStats"> {
+  return {
+    text: steps
+      .map((s) => s.text)
+      .filter((t) => t.length > 0)
+      .join("\n\n"),
+    thinking: steps
+      .map((s) => s.thinking)
+      .filter((t) => t.length > 0)
+      .join("\n\n"),
+    toolCalls: steps.flatMap((s) => s.toolCalls),
+    streaming: steps.some((s) => s.streaming),
+    tokenStats: base?.tokenStats,
+  };
+}
+
+/** 更新指定行内指定步骤（按步骤 messageId 定位）；找不到行/步骤返回原数组 */
+function updateStepInRow(
+  prev: DisplayMessage[],
+  rowId: string,
+  stepMessageId: string,
+  update: (step: DisplayStep) => DisplayStep,
+): DisplayMessage[] {
+  return prev.map((m) => {
+    if (m.id !== rowId || !m.steps) return m;
+    let touched = false;
+    const steps = m.steps.map((s) => {
+      if (s.messageId !== stepMessageId) return s;
+      touched = true;
+      return update(s);
+    });
+    if (!touched) return m;
+    return { ...m, ...recomputeAggregates(steps, m), steps };
   });
 }
