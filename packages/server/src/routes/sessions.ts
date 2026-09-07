@@ -10,6 +10,7 @@ import type { SessionManager } from "../session-manager.ts";
 import { SessionNotFoundError } from "../session-manager.ts";
 import { agentEventToSSE } from "../sse.ts";
 import { createLogger } from "@fengagent/shared";
+import type { AgentEvent } from "@fengagent/core";
 
 /** 创建会话路由 */
 export function createSessionRoutes(sessionManager: SessionManager): Hono {
@@ -62,19 +63,16 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     return c.json(session);
   });
 
-  // POST /:id/messages — 发送消息（返回 SSE 流）
+  // POST /:id/messages — 发送消息（订阅 + 后台启动，客户端断开仅解除订阅、后台继续）
   app.post("/:id/messages", (c) => {
     const id = c.req.param("id");
     log.info("sendMessage", `entry method=POST, path=/sessions/${id}/messages, sessionId=${id}`);
 
-    // 设置 SSE 响应头：禁用代理缓冲 + 禁用缓存
-    // 这些头确保 Vite proxy / nginx 等中间代理层不缓冲流式响应
     c.header("Cache-Control", "no-cache");
     c.header("X-Accel-Buffering", "no");
     c.header("Connection", "keep-alive");
 
     return streamSSE(c, async (stream) => {
-      // 解析请求体
       const body = await c.req.json().catch(() => ({}));
       const content =
         typeof body.content === "string"
@@ -98,23 +96,37 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
 
       log.info("sendMessage", `content preview=${String(content).slice(0, 50)}, model=${model ?? "(default)"}`);
 
-      try {
-        const events = sessionManager.sendMessage(id, content, model);
-
-        for await (const event of events) {
-          const frame = agentEventToSSE(event);
-          log.debug("sendMessage", `SSE event type=${frame.event}`);
-          await stream.writeSSE({
-            event: frame.event,
-            data: frame.data,
-          });
+      // 先订阅（回放 + 实时），再后台启动 — 客户端断开仅解除订阅
+      const unsub = sessionManager.subscribeSessionEvents(id, async (e) => {
+        const frame = agentEventToSSE(e as AgentEvent);
+        try {
+          await stream.writeSSE({ event: frame.event, data: frame.data });
+        } catch { /* 客户端已断开 */ }
+        if (e.type === "run-end") {
+          await stream.close();
         }
+      });
+
+      try {
+        stream.onAbort(() => {
+          unsub();
+          log.info("sendMessage", `client disconnected, sessionId=${id}, background continues`);
+        });
+
+        sessionManager.startMessageRun(id, content, model);
+        // 等待 run-end（后台泵送完成后订阅者收到 run-end → stream.close）
+        // 如果客户端先断开，unsub 已调用，后台继续
+        await new Promise<void>((resolve) => {
+          const checkEnd = () => {
+            if (stream.aborted) { resolve(); return; }
+            setTimeout(checkEnd, 100);
+          };
+          checkEnd();
+        });
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : String(err);
-
+        unsub();
+        const message = err instanceof Error ? err.message : String(err);
         log.error("sendMessage", `error: ${message}`);
-
         if (err instanceof SessionNotFoundError) {
           await stream.writeSSE({
             event: "error",
@@ -122,11 +134,49 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
           });
           return;
         }
-
         await stream.writeSSE({
           event: "error",
           data: JSON.stringify({ error: { message } }),
         });
+      }
+    });
+  });
+
+  // GET /:id/events — 纯订阅通道（回放 + 实时 + 心跳，供重连/多客户端附加）
+  app.get("/:id/events", (c) => {
+    const id = c.req.param("id");
+    c.header("Cache-Control", "no-cache");
+    c.header("X-Accel-Buffering", "no");
+    c.header("Connection", "keep-alive");
+
+    return streamSSE(c, async (stream) => {
+      const unsub = sessionManager.subscribeSessionEvents(id, async (e) => {
+        const frame = agentEventToSSE(e as AgentEvent);
+        try {
+          await stream.writeSSE({ event: frame.event, data: frame.data });
+        } catch { /* 客户端已断开 */ }
+        if (e.type === "run-end") {
+          // run-end 不关闭持久订阅流（客户端可能想等下一次运行）
+        }
+      });
+
+      stream.onAbort(() => {
+        unsub();
+        log.info("sessionEvents", `unsubscribe sessionId=${id}`);
+      });
+
+      // 心跳（每 15s）+ 等待断开
+      const heartbeat = setInterval(() => {
+        stream.writeSSE({ event: "ping", data: "{}" }).catch(() => {});
+      }, 15_000);
+
+      try {
+        await new Promise<void>((resolve) => {
+          stream.onAbort(() => resolve());
+        });
+      } finally {
+        clearInterval(heartbeat);
+        unsub();
       }
     });
   });

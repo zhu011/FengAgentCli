@@ -39,6 +39,14 @@ interface RunningTask {
   generator: AsyncGenerator<AgentEvent>;
 }
 
+/** 订阅者收到的事件 = AgentEvent 或内部运行结束标记。 */
+export type SessionEvent =
+  | AgentEvent
+  | { type: "run-end"; sessionId: string };
+
+/** 订阅取消函数 */
+export type SessionEventUnsubscribe = () => void;
+
 /** SessionManager 构造选项 */
 export interface SessionManagerOptions {
   /** Agent 工厂函数（每次创建会话时调用） */
@@ -74,6 +82,10 @@ export class SessionManager {
     string,
     (req: PermissionRequest) => void
   >();
+  /** sessionId → 会话事件订阅者集合（事件按会话路由，消息隔离） */
+  private subscribers = new Map<string, Set<(e: SessionEvent) => void>>();
+  /** sessionId → 当前运行已产生的事件回放缓冲（晚加入订阅者补看） */
+  private runEventLogs = new Map<string, AgentEvent[]>();
 
   constructor(options: SessionManagerOptions) {
     this.createAgent = options.createAgent;
@@ -221,6 +233,96 @@ export class SessionManager {
     this.runningTasks.delete(sessionId);
     this.pendingPermissions.delete(sessionId);
     this.permissionListeners.delete(sessionId);
+  }
+
+  /**
+   * 订阅会话事件（按会话路由，消息隔离）。
+   * 订阅后立即收到回放缓冲中已有的事件（如有），随后实时接收。
+   * 返回取消订阅函数。
+   */
+  subscribeSessionEvents(
+    sessionId: string,
+    cb: (e: SessionEvent) => void,
+  ): SessionEventUnsubscribe {
+    let set = this.subscribers.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.subscribers.set(sessionId, set);
+    }
+    set.add(cb);
+    // 回放已有事件
+    const logBuf = this.runEventLogs.get(sessionId);
+    if (logBuf) {
+      for (const e of logBuf) cb(e);
+    }
+    return () => {
+      set!.delete(cb);
+      if (set!.size === 0) this.subscribers.delete(sessionId);
+    };
+  }
+
+  /** 向会话的所有订阅者推送事件 */
+  private notifySession(sessionId: string, event: SessionEvent): void {
+    const set = this.subscribers.get(sessionId);
+    if (!set) return;
+    for (const cb of set) {
+      try { cb(event); } catch { /* 订阅者已关闭 */ }
+    }
+  }
+
+  /**
+   * 后台泵送：运行 Loop 生成器，事件推给订阅者，finally 清理任务。
+   * 与 HTTP 连接解耦——客户端断开只解除订阅，后台继续跑完。
+   */
+  private async pumpRun(
+    sessionId: string,
+    generator: AsyncGenerator<AgentEvent>,
+    task: RunningTask,
+  ): Promise<void> {
+    try {
+      for await (const event of generator) {
+        if (task.aborted) break;
+        let logBuf = this.runEventLogs.get(sessionId);
+        if (!logBuf) { logBuf = []; this.runEventLogs.set(sessionId, logBuf); }
+        logBuf.push(event);
+        this.notifySession(sessionId, event);
+      }
+    } catch (err) {
+      this.notifySession(sessionId, { type: "error", error: { message: String(err) } });
+    } finally {
+      this.runningTasks.delete(sessionId);
+      this.pendingPermissions.delete(sessionId);
+      this.permissionListeners.delete(sessionId);
+      this.runEventLogs.delete(sessionId);
+      this.notifySession(sessionId, { type: "run-end", sessionId });
+      log.info("pumpRun", `completed sessionId=${sessionId}`);
+    }
+  }
+
+  /**
+   * 后台启动消息运行（与 HTTP 连接解耦）。
+   * 客户端通过 subscribeSessionEvents 接收事件，断开仅解除订阅。
+   */
+  startMessageRun(sessionId: string, text: string, model?: string): void {
+    const agent = this.agents.get(sessionId);
+    if (!agent) throw new SessionNotFoundError(sessionId);
+    const existing = this.sessions.get(sessionId);
+    if (!existing) throw new SessionNotFoundError(sessionId);
+    if (this.runningTasks.has(sessionId)) {
+      throw new Error("该会话正在处理中，请等待当前任务完成或中断后再发送");
+    }
+    if (model && model !== existing.model) {
+      existing.model = model;
+      existing.updatedAt = Date.now();
+    }
+    log.info("startMessageRun", `sessionId=${sessionId}, text preview=${text.slice(0, 50)}`);
+    const requestPermission: RequestPermission = async (permission) => {
+      return this.requestPermission(sessionId, permission);
+    };
+    const generator = agent.prompt(text, existing, { requestPermission });
+    const task: RunningTask = { aborted: false, generator };
+    this.runningTasks.set(sessionId, task);
+    void this.pumpRun(sessionId, generator, task);
   }
 
   /**
