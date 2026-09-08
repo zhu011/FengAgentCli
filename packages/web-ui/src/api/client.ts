@@ -175,6 +175,45 @@ export class ApiClient {
     }
   }
 
+  /**
+   * GET /api/sessions/:id/events — 订阅某会话的事件流（SSE，按会话路由）。
+   *
+   * 真后台语义：运行与单个连接解耦 — 本订阅可随时连接/断开而不影响后台运行；
+   * 若订阅时该会话正在运行，服务端会先回放本次运行已产生的事件（补看进度），随后实时接收。
+   */
+  async *sessionEvents(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    const res = await fetch(
+      `${this.baseUrl}/api/sessions/${sessionId}/events`,
+      { signal },
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to subscribe session events");
+    }
+    if (!res.body) {
+      throw new Error("Response has no body");
+    }
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += value;
+      while (true) {
+        const idx = buffer.indexOf("\n\n");
+        if (idx === -1) break;
+        const rawEvent = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const parsed = this.parseSSEChunk(rawEvent);
+        if (parsed) {
+          yield parsed;
+        }
+      }
+    }
+  }
+
   /** POST /api/sessions/:id/interrupt — 中断当前运行 */
   async interrupt(sessionId: string): Promise<boolean> {
     const res = await fetch(

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { consumeSSEStream } from "./use-sse.ts";
 import type {
+  AgentEvent,
   PermissionRequest,
   Session,
   SessionMeta,
@@ -97,11 +98,111 @@ export function useSession(client: ApiClient): UseSessionResult {
 
   const abortRef = useRef<AbortController | null>(null);
 
+  // ── 真后台并发：per-session 状态切片 ──
+  // 每个会话独立维护流式状态，切换会话不 abort 旧会话
+  /** sessionId → 该会话是否正在后台运行 */
+  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
+  /** sessionId → AbortController（只中断该会话） */
+  const sessionAbortRefs = useRef<Map<string, AbortController>>(new Map());
+  /** sessionId → SSE 事件消费（后台持续消费、写入该会话专属状态） */
+  const sessionEventConsumers = useRef<Map<string, boolean>>(new Map());
+
   // 用 ref 存储最新 activeSessionId，避免闭包陈旧问题
   const activeSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  // ref 镜像 runningSessionIds，供回调中读取最新值
+  const runningSessionIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    runningSessionIdsRef.current = runningSessionIds;
+  }, [runningSessionIds]);
+
+  /**
+   * 附加到正在后台运行的会话（rejoin）。
+   * 订阅 GET /:id/events，接收回放 + 实时事件，更新 UI。
+   * 切回该会话时自动调用，看到最新进度。
+   */
+  const attachToRunningSession = useCallback(async (sessionId: string) => {
+    if (sessionEventConsumers.current.get(sessionId)) return; // 已在消费
+    sessionEventConsumers.current.set(sessionId, true);
+
+    const controller = new AbortController();
+    sessionAbortRefs.current.set(sessionId, controller);
+
+    // 如果是当前活跃会话，更新 isStreaming
+    if (sessionId === activeSessionIdRef.current) {
+      setIsStreaming(true);
+    }
+
+    try {
+      // 先加载当前会话快照（含已完成轮次）
+      const session = await client.getSession(sessionId);
+      if (sessionId === activeSessionIdRef.current) {
+        setActiveSession(session);
+        setDisplayMessages(sessionToDisplayMessages(session));
+      }
+
+      // 订阅事件流（回放 + 实时）
+      for await (const event of client.sessionEvents(sessionId, controller.signal)) {
+        const evtType = (event as { type: string }).type;
+        if (evtType === "run-end" || evtType === "error") {
+          // 后台运行结束
+          setRunningSessionIds((prev) => {
+            const next = new Set(prev);
+            next.delete(sessionId);
+            return next;
+          });
+          sessionEventConsumers.current.delete(sessionId);
+          sessionAbortRefs.current.delete(sessionId);
+          if (sessionId === activeSessionIdRef.current) {
+            setIsStreaming(false);
+            // 刷新会话以获取最终消息
+            try {
+              const updated = await client.getSession(sessionId);
+              setActiveSession(updated);
+              setDisplayMessages(sessionToDisplayMessages(updated));
+            } catch { /* ignore */ }
+          }
+          break;
+        }
+        // 只更新当前活跃会话的 UI（消息隔离）
+        if (sessionId === activeSessionIdRef.current) {
+          handleBackgroundEvent(event, sessionId);
+        }
+      }
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        if (sessionId === activeSessionIdRef.current) {
+          setError(err instanceof Error ? err.message : "Rejoin failed");
+        }
+      }
+    } finally {
+      sessionEventConsumers.current.delete(sessionId);
+      sessionAbortRefs.current.delete(sessionId);
+      if (sessionId === activeSessionIdRef.current) {
+        setIsStreaming(false);
+      }
+    }
+  }, [client]);
+
+  /** 处理后台事件（只更新当前活跃会话 UI） */
+  const handleBackgroundEvent = useCallback((event: AgentEvent, sessionId: string) => {
+    // 简化处理：收到 session-start 时刷新会话，收到 message-end 时刷新消息
+    if (event.type === "session-start") {
+      setActiveSession(event.session);
+      setDisplayMessages(sessionToDisplayMessages(event.session));
+    } else if (event.type === "text-delta" || event.type === "message-end" || event.type === "turn-end") {
+      // 实时更新：重新加载会话消息（简化实现，refactor 有更精细的流式渲染）
+      void client.getSession(sessionId).then((sess) => {
+        if (sessionId === activeSessionIdRef.current) {
+          setActiveSession(sess);
+          setDisplayMessages(sessionToDisplayMessages(sess));
+        }
+      }).catch(() => {});
+    }
+  }, [client]);
 
   // ──────────────────────────────────────────────
   // 初始化：加载会话列表
@@ -182,16 +283,26 @@ export function useSession(client: ApiClient): UseSessionResult {
   );
 
   const selectSession = useCallback(async (id: string) => {
-    // 切换会话时中止当前 SSE 流（如有），避免旧会话的流式事件污染新会话 UI
-    if (id !== activeSessionIdRef.current) {
-      abortRef.current?.abort();
-      abortRef.current = null;
-      setIsStreaming(false);
-    }
+    // 真后台：切换会话不中止旧会话的后台运行
+    // 如果旧会话正在运行，它的 SSE 事件继续在后台消费（per-session 状态切片）
     setActiveSessionId(id);
     setSessionTokenStats(null);
     setPendingPermissions([]);
-  }, []);
+
+    // 如果新选中的会话正在后台运行，重新订阅以获取最新进度（rejoin）
+    if (runningSessionIdsRef.current.has(id) && !sessionEventConsumers.current.get(id)) {
+      void attachToRunningSession(id);
+    } else {
+      // 非运行中：正常加载会话详情
+      try {
+        const session = await client.getSession(id);
+        setActiveSession(session);
+        setDisplayMessages(sessionToDisplayMessages(session));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load session");
+      }
+    }
+  }, [client]);
 
   const deleteSession = useCallback(
     async (id: string) => {
