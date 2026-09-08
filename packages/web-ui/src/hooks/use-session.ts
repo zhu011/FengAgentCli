@@ -2,64 +2,88 @@
  * @fengagent/web-ui — use-session hook
  *
  * 会话管理：创建、切换、列表、消息发送、中断、权限响应。
- * 内部组合 use-sse 的 consumeSSEStream 进行 SSE 流消费。
+ * 内部组合 ApiClient 的 SSE 流消费。
+ *
+ * 并发模型（AGE-29 真后台重做）：**会话间真并发 + 消息隔离**。
+ * - 每个会话拥有独立的展示状态（消息列表 / streaming 标志 / 计时锚点 /
+ *   权限请求 / 流 AbortController），互不覆盖；
+ * - 会话 A 生成中切换/新建会话 B：A 的后台运行**不中止**，其 SSE 流在 App 层
+ *   继续消费并写入 A 自己的状态 —— 切回 A 即可看到最新进度；
+ * - SSE 事件按会话路由：A 的事件只进 A 的状态，绝不写入 B（隔离）；
+ * - 中止只发生在用户显式中断（Esc / 停止按钮）：仅中止「当前会话」的流并
+ *   通知服务端中断该会话的后台任务；
+ * - 服务端运行与连接解耦：本页刷新 / 断线后，重新进入仍在运行的会话会自动
+ *   订阅其事件流（GET /:id/events，含回放），继续看到进度。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
-import { consumeSSEStream } from "./use-sse.ts";
 import type {
   AgentEvent,
+
   PermissionRequest,
   Session,
   SessionMeta,
 } from "../api/types.ts";
+import {
+  sessionToTurnMessages,
+  type DisplayMessage,
+  type TokenStats,
+} from "../lib/turn-messages.ts";
+// 流式渲染状态机（纯函数层，可单测）— 兼容导出见文件底部
+import {
+  closeOpenTurns,
+  createTurnStreamCtx,
+  handleTurnEvent,
+  markRunningToolCallsFailed,
+} from "../lib/turn-stream.ts";
 
-/** 前端展示用的工具调用信息 */
-export interface ToolCallInfo {
-  toolUseId: string;
-  name: string;
-  input: unknown;
-  result?: { content: string; isError?: boolean };
-  status: "running" | "completed" | "failed";
-  /** 是否经过人工改参（HITL） */
-  edited?: boolean;
+// 兼容导出：展示类型统一定义在 lib/turn-messages.ts（纯函数层，可单测）
+export type {
+  DisplayMessage,
+  DisplayStep,
+  TokenStats,
+  ToolCallInfo,
+} from "../lib/turn-messages.ts";
+export type {
+  SetDisplayMessages,
+  TurnStreamCtx,
+} from "../lib/turn-stream.ts";
+
+/** 单个会话的独立展示状态（会话间并发 + 隔离的核心数据结构） */
+interface SessionViewData {
+  /** 最新会话快照（含持久化消息） */
+  session: Session | null;
+  /** 该会话的展示消息（流式渲染 / 持久化消息均可） */
+  messages: DisplayMessage[];
+  /** 该会话是否正在生成（后台会话同样为 true） */
+  isStreaming: boolean;
+  /** 该会话当前这轮生成的开始时间戳（App 级锚点，跨 view/切换存活） */
+  runStartedAt: number | null;
+  /** 该会话的 token 用量统计 */
+  sessionTokenStats: TokenStats | null;
+  /** 该会话的待处理权限请求 */
+  pendingPermissions: PermissionRequest[];
+  /** 该会话当前流的 AbortController（null = 无活跃流） */
+  controller: AbortController | null;
+  /** 后台运行期间产生的错误（切回该会话时展示） */
+  lastError: string | null;
 }
 
-/** 助手回合内的一个步骤（对应一条真实 assistant 消息 / 一次 LLM 步骤） */
-export interface DisplayStep {
-  messageId: string;
-  text: string;
-  thinking: string;
-  toolCalls: ToolCallInfo[];
-  streaming: boolean;
-  createdAt: number;
-  tokenStats?: TokenStats;
-}
+const EMPTY_VIEW: SessionViewData = {
+  session: null,
+  messages: [],
+  isStreaming: false,
+  runStartedAt: null,
+  sessionTokenStats: null,
+  pendingPermissions: [],
+  controller: null,
+  lastError: null,
+};
 
-/** 前端展示用的消息项（含工具调用列表） */
-/** Token 用量统计 */
-export interface TokenStats {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens?: number;
-  cacheCreationTokens?: number;
-}
-
-export interface DisplayMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  text: string;
-  /** 思考过程内容（流式增量累积；历史消息从 thinking 块提取） */
-  thinking: string;
-  toolCalls: ToolCallInfo[];
-  streaming: boolean;
-  createdAt: number;
-  /** AI 消息的 token 用量统计 */
-  tokenStats?: TokenStats;
-  /** 助手回合内按序的多段步骤（同一轮多次工具调用聚合进同一个回复） */
-  steps?: DisplayStep[];
-}
+/** 内部 run-end 帧（服务端后台泵送结束标记；非 AgentEvent 成员） */
+const isRunEnd = (ev: AgentEvent): boolean =>
+  (ev as { type?: string }).type === "run-end";
 
 export interface UseSessionResult {
   sessions: SessionMeta[];
@@ -68,141 +92,109 @@ export interface UseSessionResult {
   pendingPermissions: PermissionRequest[];
   isStreaming: boolean;
   error: string | null;
+  /**
+   * 当前（活跃）会话这轮生成的开始时间戳（App 级锚点）。
+   *
+   * 锚点存在每个会话自己的状态里：切换会话 / 切到评测观测页再回来不会归零；
+   * 新的一轮生成（sendMessage）开始才重置。
+   */
+  runStartedAt: number | null;
+  /** 后台继续提示（切换/新建会话时告知原会话仍在后台运行，数秒后消失） */
+  interruptNotice: string | null;
+  /** 正在后台运行的会话 id 集合（侧边栏显示运行指示） */
+  runningSessionIds: ReadonlySet<string>;
   creatingSession: boolean;
-  /** 会话级 token 用量统计 */
+  /** 活跃会话的 token 用量统计 */
   sessionTokenStats: TokenStats | null;
+  /** 活跃会话的对话图数据（Phase 3/4 分支可视化） */
   createSession: (title?: string) => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
+  /** 向当前活跃会话发送消息（不影响其它会话的后台运行） */
   sendMessage: (text: string, model?: string) => Promise<void>;
+  /** 中止当前活跃会话的生成（Esc / 停止按钮） */
   interrupt: () => Promise<void>;
   respondPermission: (
     reqId: string,
-    result: { decision: "allow" } | { decision: "deny"; reason?: string },
+    result: { decision: "allow"; input?: unknown } | { decision: "deny"; reason?: string },
   ) => Promise<void>;
+  refreshSession: () => Promise<void>;
+  /** 回退到目标节点并自动重答（SSE 流；图面板「回退并重答」闭环） */
 }
 
 export function useSession(client: ApiClient): UseSessionResult {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [activeSession, setActiveSession] = useState<Session | null>(null);
-  const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
-  const [pendingPermissions, setPendingPermissions] = useState<
-    PermissionRequest[]
-  >([]);
-  const [isStreaming, setIsStreaming] = useState(false);
+  /** sessionId → 会话独立状态（并发运行的核心：各会话互不覆盖） */
+  const [views, setViews] = useState<Record<string, SessionViewData>>({});
   const [error, setError] = useState<string | null>(null);
+  const [interruptNotice, setInterruptNotice] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
-  const [sessionTokenStats, setSessionTokenStats] = useState<TokenStats | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
-
-  // ── 真后台并发：per-session 状态切片 ──
-  // 每个会话独立维护流式状态，切换会话不 abort 旧会话
-  /** sessionId → 该会话是否正在后台运行 */
-  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
-  /** sessionId → AbortController（只中断该会话） */
-  const sessionAbortRefs = useRef<Map<string, AbortController>>(new Map());
-  /** sessionId → SSE 事件消费（后台持续消费、写入该会话专属状态） */
-  const sessionEventConsumers = useRef<Map<string, boolean>>(new Map());
-
+  // views 的同步镜像（事件回调在渲染外读写，需立即可见的当前值）
+  const viewsRef = useRef<Record<string, SessionViewData>>({});
   // 用 ref 存储最新 activeSessionId，避免闭包陈旧问题
   const activeSessionIdRef = useRef<string | null>(null);
+
+  const activeView: SessionViewData = activeSessionId
+    ? (views[activeSessionId] ?? EMPTY_VIEW)
+    : EMPTY_VIEW;
+  const activeSession = activeView.session;
+  const activeMessages = activeView.messages;
+  const isStreaming = activeView.isStreaming;
+  const runStartedAt = activeView.runStartedAt;
+  const sessionTokenStats = activeView.sessionTokenStats;
+  const pendingPermissions = activeView.pendingPermissions;
+
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
-  // ref 镜像 runningSessionIds，供回调中读取最新值
-  const runningSessionIdsRef = useRef<Set<string>>(new Set());
+  /** 更新某会话的独立状态（同步更新 ref 镜像，供无渲染上下文读取） */
+  const patchView = useCallback(
+    (
+      sessionId: string,
+      patch:
+        | Partial<SessionViewData>
+        | ((prev: SessionViewData) => SessionViewData),
+    ) => {
+      const cur = viewsRef.current[sessionId] ?? EMPTY_VIEW;
+      const next =
+        typeof patch === "function" ? patch(cur) : { ...cur, ...patch };
+      if (cur === next) return;
+      const out = { ...viewsRef.current, [sessionId]: next };
+      viewsRef.current = out;
+      setViews(out);
+    },
+    [],
+  );
+
+  /** 更新某会话的消息列表（SetStateAction 风格，兼容 handleTurnEvent） */
+  const patchViewMessages = useCallback(
+    (
+      sessionId: string,
+      updater:
+        | DisplayMessage[]
+        | ((prev: DisplayMessage[]) => DisplayMessage[]),
+    ) => {
+      patchView(sessionId, (v) => ({
+        ...v,
+        messages:
+          typeof updater === "function"
+            ? updater(v.messages)
+            : updater,
+      }));
+    },
+    [patchView],
+  );
+
+  // 并发中断提示数秒后自动消失（不打扰后续阅读）
   useEffect(() => {
-    runningSessionIdsRef.current = runningSessionIds;
-  }, [runningSessionIds]);
-
-  /**
-   * 附加到正在后台运行的会话（rejoin）。
-   * 订阅 GET /:id/events，接收回放 + 实时事件，更新 UI。
-   * 切回该会话时自动调用，看到最新进度。
-   */
-  const attachToRunningSession = useCallback(async (sessionId: string) => {
-    if (sessionEventConsumers.current.get(sessionId)) return; // 已在消费
-    sessionEventConsumers.current.set(sessionId, true);
-
-    const controller = new AbortController();
-    sessionAbortRefs.current.set(sessionId, controller);
-
-    // 如果是当前活跃会话，更新 isStreaming
-    if (sessionId === activeSessionIdRef.current) {
-      setIsStreaming(true);
-    }
-
-    try {
-      // 先加载当前会话快照（含已完成轮次）
-      const session = await client.getSession(sessionId);
-      if (sessionId === activeSessionIdRef.current) {
-        setActiveSession(session);
-        setDisplayMessages(sessionToDisplayMessages(session));
-      }
-
-      // 订阅事件流（回放 + 实时）
-      for await (const event of client.sessionEvents(sessionId, controller.signal)) {
-        const evtType = (event as { type: string }).type;
-        if (evtType === "run-end" || evtType === "error") {
-          // 后台运行结束
-          setRunningSessionIds((prev) => {
-            const next = new Set(prev);
-            next.delete(sessionId);
-            return next;
-          });
-          sessionEventConsumers.current.delete(sessionId);
-          sessionAbortRefs.current.delete(sessionId);
-          if (sessionId === activeSessionIdRef.current) {
-            setIsStreaming(false);
-            // 刷新会话以获取最终消息
-            try {
-              const updated = await client.getSession(sessionId);
-              setActiveSession(updated);
-              setDisplayMessages(sessionToDisplayMessages(updated));
-            } catch { /* ignore */ }
-          }
-          break;
-        }
-        // 只更新当前活跃会话的 UI（消息隔离）
-        if (sessionId === activeSessionIdRef.current) {
-          handleBackgroundEvent(event, sessionId);
-        }
-      }
-    } catch (err) {
-      if (!(err instanceof DOMException && err.name === "AbortError")) {
-        if (sessionId === activeSessionIdRef.current) {
-          setError(err instanceof Error ? err.message : "Rejoin failed");
-        }
-      }
-    } finally {
-      sessionEventConsumers.current.delete(sessionId);
-      sessionAbortRefs.current.delete(sessionId);
-      if (sessionId === activeSessionIdRef.current) {
-        setIsStreaming(false);
-      }
-    }
-  }, [client]);
-
-  /** 处理后台事件（只更新当前活跃会话 UI） */
-  const handleBackgroundEvent = useCallback((event: AgentEvent, sessionId: string) => {
-    // 简化处理：收到 session-start 时刷新会话，收到 message-end 时刷新消息
-    if (event.type === "session-start") {
-      setActiveSession(event.session);
-      setDisplayMessages(sessionToDisplayMessages(event.session));
-    } else if (event.type === "text-delta" || event.type === "message-end" || event.type === "turn-end") {
-      // 实时更新：重新加载会话消息（简化实现，refactor 有更精细的流式渲染）
-      void client.getSession(sessionId).then((sess) => {
-        if (sessionId === activeSessionIdRef.current) {
-          setActiveSession(sess);
-          setDisplayMessages(sessionToDisplayMessages(sess));
-        }
-      }).catch(() => {});
-    }
-  }, [client]);
+    if (!interruptNotice) return;
+    const timer = setTimeout(() => setInterruptNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [interruptNotice]);
 
   // ──────────────────────────────────────────────
   // 初始化：加载会话列表
@@ -221,45 +213,205 @@ export function useSession(client: ApiClient): UseSessionResult {
     void refreshSessions();
   }, [refreshSessions]);
 
+  /** 正在后台运行的会话 id 集合（本端活跃流 + 服务端运行态并集） */
+  const runningSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [id, v] of Object.entries(views)) {
+      if (v.isStreaming) ids.add(id);
+    }
+    for (const s of sessions) {
+      if (s.status === "running") ids.add(s.id);
+    }
+    return ids;
+  }, [views, sessions]);
+
+  /** 用服务端快照初始化/更新某会话的展示状态 */
+  const applyLoadedSession = useCallback(
+    (sessionId: string, session: Session) => {
+      patchView(sessionId, {
+        session,
+        messages: sessionToTurnMessages(session.messages),
+      });
+    },
+    [patchView],
+  );
+
+  /**
+   * 订阅某会话的事件流（GET /:id/events，含回放）—— 页面刷新 / 断线重连后
+   * 重新进入仍在后台运行的会话时，用它在后台继续接收该会话的进度。
+   *
+   * 事件全部写入该会话自己的状态（按会话路由，不污染其它会话）。
+   */
+  const attachToRunningSession = useCallback(
+    async (sessionId: string): Promise<void> => {
+      const cur = viewsRef.current[sessionId];
+      if (!cur?.session) return;
+      // 已有活跃流（本地 sendMessage / 已附加）时不再重复附加
+      if (cur.controller || cur.isStreaming) return;
+
+      const controller = new AbortController();
+      patchView(sessionId, {
+        controller,
+        isStreaming: true,
+        runStartedAt: Date.now(),
+      });
+
+      // 附加用独立的流式上下文（与 sendMessage 的渲染逻辑一致）
+      const streamCtx = createTurnStreamCtx({
+        setDisplayMessages: (updater) =>
+          patchViewMessages(sessionId, updater),
+        // 回放去重：读取该会话当前展示列表，定位既有行/步骤（R1）
+        readMessages: () => viewsRef.current[sessionId]?.messages ?? [],
+        setError: (message) => {
+          if (sessionId === activeSessionIdRef.current) setError(message);
+          else patchView(sessionId, { lastError: message });
+        },
+        setSessionTokenStats: (updater) =>
+          patchView(sessionId, (v) => ({
+            ...v,
+            sessionTokenStats:
+              typeof updater === "function"
+                ? updater(v.sessionTokenStats)
+                : updater,
+          })),
+      });
+
+      let naturalEnd = false;
+      try {
+        for await (const event of client.sessionEvents(
+          sessionId,
+          controller.signal,
+        )) {
+          if (isRunEnd(event)) {
+            naturalEnd = true;
+            break;
+          }
+          handleTurnEvent(event, streamCtx);
+        }
+      } catch (err) {
+        // AbortError（用户显式中断）不视为错误
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          if (sessionId === activeSessionIdRef.current) {
+            setError(
+              err instanceof Error ? err.message : "Session events failed",
+            );
+          } else {
+            patchView(sessionId, {
+              lastError:
+                err instanceof Error ? err.message : "Session events failed",
+            });
+          }
+        }
+      } finally {
+        patchView(sessionId, (v) => {
+          if (v.controller !== controller) return v;
+          return {
+            ...v,
+            controller: null,
+            isStreaming: false,
+            runStartedAt: null,
+            // 安全清理：关闭所有流式行/步骤 + 复位 running 工具调用
+            messages: markRunningToolCallsFailed(closeOpenTurns(v.messages)),
+          };
+        });
+        if (naturalEnd) {
+          // 运行自然结束：拉取最终会话快照与服务端持久化对齐
+          void refreshSessionView(sessionId);
+        }
+        void refreshSessions();
+      }
+    },
+    [client, patchView, patchViewMessages],
+  );
+
+  /** 重新拉取某会话详情（运行结束后对齐持久化状态；流式期间跳过） */
+  const refreshSessionView = useCallback(
+    async (sessionId: string): Promise<void> => {
+      const cur = viewsRef.current[sessionId];
+      if (!cur?.session) return;
+      if (cur.isStreaming || cur.controller) return; // 流式进行中不覆盖
+      try {
+        const session = await client.getSession(sessionId);
+        patchView(sessionId, {
+          session,
+          messages: sessionToTurnMessages(session.messages),
+        });
+      } catch {
+        // 静默：下次进入会话时会重新加载
+      }
+    },
+    [client, patchView],
+  );
+
   // ──────────────────────────────────────────────
-  // 加载活跃会话详情
+  // 加载活跃会话详情（切换会话 / 页面刷新后首次进入）
   // ──────────────────────────────────────────────
   useEffect(() => {
     if (!activeSessionId) {
-      setActiveSession(null);
-      setDisplayMessages([]);
       return;
     }
-
+    const sessionId = activeSessionId;
     let cancelled = false;
-    client
-      .getSession(activeSessionId)
-      .then((session) => {
-        if (cancelled) return;
-        setActiveSession(session);
-        setDisplayMessages(sessionToDisplayMessages(session));
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(
-          err instanceof Error ? err.message : "Failed to load session",
-        );
-      });
+
+    const cur = viewsRef.current[sessionId];
+    if (!cur?.session) {
+      client
+        .getSession(sessionId)
+        .then((session) => {
+          if (cancelled) return;
+          applyLoadedSession(sessionId, session);
+          // 该会话在服务端仍处于运行中 → 订阅其事件流（回放 + 实时进度）
+          if (session.status === "running") {
+            void attachToRunningSession(sessionId);
+          }
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setError(
+            err instanceof Error ? err.message : "Failed to load session",
+          );
+        });
+    } else if (cur.session.status === "running" && !cur.controller) {
+      void attachToRunningSession(sessionId);
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [client, activeSessionId]);
+  }, [client, activeSessionId, applyLoadedSession, attachToRunningSession]);
+
+  // 重新拉取活跃会话详情
+  const refreshSession = useCallback(async () => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    await refreshSessionView(sessionId);
+  }, [refreshSessionView]);
 
   // ──────────────────────────────────────────────
-  // 创建会话
+
+  // 创建会话（不中止任何后台运行）
   // ──────────────────────────────────────────────
   const createSession = useCallback(
     async (title?: string) => {
+      // 真后台语义：新建对话不中止其它会话的后台生成，仅提示其仍在运行
+      const prevId = activeSessionIdRef.current;
+      const prevStreaming = prevId
+        ? viewsRef.current[prevId]?.isStreaming
+        : false;
       setCreatingSession(true);
       setError(null);
       try {
         const session = await client.createSession({ title });
+        patchView(session.id, {
+          session,
+          messages: [],
+          isStreaming: false,
+          runStartedAt: null,
+          sessionTokenStats: null,
+          pendingPermissions: [],
+          controller: null,
+          lastError: null,
+        });
         setSessions((prev) => [
           {
             id: session.id,
@@ -273,42 +425,57 @@ export function useSession(client: ApiClient): UseSessionResult {
           ...prev,
         ]);
         setActiveSessionId(session.id);
+        if (prevStreaming) {
+          setInterruptNotice("已新建对话 —— 原对话的生成已在后台继续运行。");
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
       } finally {
         setCreatingSession(false);
       }
     },
-    [client],
+    [client, patchView],
   );
-
-  const selectSession = useCallback(async (id: string) => {
-    // 真后台：切换会话不中止旧会话的后台运行
-    // 如果旧会话正在运行，它的 SSE 事件继续在后台消费（per-session 状态切片）
-    setActiveSessionId(id);
-    setSessionTokenStats(null);
-    setPendingPermissions([]);
-
-    // 如果新选中的会话正在后台运行，重新订阅以获取最新进度（rejoin）
-    if (runningSessionIdsRef.current.has(id) && !sessionEventConsumers.current.get(id)) {
-      void attachToRunningSession(id);
-    } else {
-      // 非运行中：正常加载会话详情
-      try {
-        const session = await client.getSession(id);
-        setActiveSession(session);
-        setDisplayMessages(sessionToDisplayMessages(session));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load session");
+  const selectSession = useCallback(
+    async (id: string) => {
+      if (id === activeSessionIdRef.current) return;
+      // 真后台语义：切换会话不中止原会话的后台生成
+      const prevId = activeSessionIdRef.current;
+      if (prevId && viewsRef.current[prevId]?.isStreaming) {
+        setInterruptNotice(
+          "已切换到其他会话 —— 原会话的生成已在后台继续运行，可随时切回查看最新进度。",
+        );
       }
-    }
-  }, [client]);
-
+      setError(null);
+      setActiveSessionId(id);
+      // 该会话后台运行期间产生的错误，切回时展示
+      const target = viewsRef.current[id];
+      if (target?.lastError) {
+        setError(target.lastError);
+        patchView(id, { lastError: null });
+      }
+    },
+    [patchView],
+  );
   const deleteSession = useCallback(
     async (id: string) => {
+      // 删除运行中的会话：先中断其后台任务再删除
+      const cur = viewsRef.current[id];
+      if (cur?.controller) {
+        cur.controller.abort();
+        try {
+          await client.interrupt(id);
+        } catch {
+          // ignore
+        }
+      }
       try {
         await client.deleteSession(id);
         setSessions((prev) => prev.filter((s) => s.id !== id));
+        const out = { ...viewsRef.current };
+        delete out[id];
+        viewsRef.current = out;
+        setViews(out);
         if (activeSessionIdRef.current === id) {
           setActiveSessionId(null);
         }
@@ -316,10 +483,9 @@ export function useSession(client: ApiClient): UseSessionResult {
         setError(err instanceof Error ? err.message : "Failed to delete session");
       }
     },
-    [client],
+    [client, patchView],
   );
-
-  // 重命名会话：同步更新列表与活跃会话标题（侧边栏双击 / 顶栏编辑）
+  // 重命名会话：同步更新列表与会话标题（侧边栏双击 / 顶栏编辑）
   const renameSession = useCallback(
     async (id: string, title: string) => {
       const trimmed = title.trim();
@@ -331,30 +497,47 @@ export function useSession(client: ApiClient): UseSessionResult {
             s.id === id ? { ...s, title: updated.title, updatedAt: updated.updatedAt } : s,
           ),
         );
-        setActiveSession((prev) =>
-          prev && prev.id === id ? { ...prev, title: updated.title, updatedAt: updated.updatedAt } : prev,
+        patchView(id, (v) =>
+          v.session && v.session.id === id
+            ? {
+                ...v,
+                session: {
+                  ...v.session,
+                  title: updated.title,
+                  updatedAt: updated.updatedAt,
+                },
+              }
+            : v,
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to rename session");
       }
     },
-    [client],
+    [client, patchView],
   );
-
   // ──────────────────────────────────────────────
-  // 发送消息（SSE 流消费）
+  // 发送消息（SSE 流消费；目标 = 当前活跃会话）
   // ──────────────────────────────────────────────
   const sendMessage = useCallback(
     async (text: string, model?: string) => {
       // 使用 ref 读取最新 activeSessionId，避免闭包陈旧
       let sessionId = activeSessionIdRef.current;
-
       // 无活跃会话时自动创建
       if (!sessionId) {
         setCreatingSession(true);
         setError(null);
         try {
           const newSession = await client.createSession({});
+          patchView(newSession.id, {
+            session: newSession,
+            messages: [],
+            isStreaming: false,
+            runStartedAt: null,
+            sessionTokenStats: null,
+            pendingPermissions: [],
+            controller: null,
+            lastError: null,
+          });
           setSessions((prev) => [
             {
               id: newSession.id,
@@ -370,9 +553,6 @@ export function useSession(client: ApiClient): UseSessionResult {
           setActiveSessionId(newSession.id);
           activeSessionIdRef.current = newSession.id;
           sessionId = newSession.id;
-
-          // 设置 activeSession 以让 UI 立即显示输入框
-          setActiveSession(newSession);
         } catch (err) {
           setError(err instanceof Error ? err.message : "Failed to create session");
           setCreatingSession(false);
@@ -380,25 +560,32 @@ export function useSession(client: ApiClient): UseSessionResult {
         }
         setCreatingSession(false);
       }
-
       if (!sessionId || !text.trim()) return;
-
+      // 同会话并发防护：该会话已有进行中的生成时拒绝重复发送。
+      // 其它会话的后台运行不受影响（会话间真并发）。
+      const current = viewsRef.current[sessionId];
+      if (current?.controller || current?.isStreaming) {
+        setError("该会话已有正在进行的生成，请等待完成或按 Esc 中断后再发送。");
+        return;
+      }
       const controller = new AbortController();
-      abortRef.current = controller;
-      setIsStreaming(true);
+      patchView(sessionId, {
+        controller,
+        isStreaming: true,
+        runStartedAt: Date.now(),
+      });
       setError(null);
-
       // 超时兜底：30s 无任何 SSE 事件 → abort（防止后端未启动时永久挂起）
       let firstEventReceived = false;
       const timeoutTimer = setTimeout(() => {
-        if (!firstEventReceived) {
+        if (!firstEventReceived && viewsRef.current[sessionId]?.controller === controller) {
           controller.abort();
-          setError("请求超时（30s 无响应），请检查后端服务是否正常启动。");
+          if (sessionId === activeSessionIdRef.current) {
+            setError("请求超时（30s 无响应），请检查后端服务是否正常启动。");
+          }
         }
       }, 30_000);
-
-      // 立即添加用户消息到 UI
-      // crypto.randomUUID 在非安全上下文（http://192.168.x.x）下不可用，需要 fallback
+      // 立即添加用户消息到该会话 UI
       const genId = () => {
         if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
           return crypto.randomUUID();
@@ -414,260 +601,107 @@ export function useSession(client: ApiClient): UseSessionResult {
         streaming: false,
         createdAt: Date.now(),
       };
-      setDisplayMessages((prev) => [...prev, userMsg]);
-
-      // 流式状态（闭包内追踪）
-      const streamingText = new Map<string, string>();
-      const streamingThinking = new Map<string, string>();
-      const messageToolCalls = new Map<string, ToolCallInfo[]>();
-      // toolUseId → 所属 assistant 消息 id。
-      // 关键：loop 的事件顺序是 message-end 之后才执行工具并发出 tool-call-result，
-      // 届时 currentMessageId 已被 message-end 置空；必须用独立映射关联工具结果，
-      // 否则 tool-call-result 永远匹配不到消息，工具卡片停留在 "running"（转圈）不消失。
-      const toolUseToMessageId = new Map<string, string>();
-      let currentMessageId: string | null = null;
-
+      patchView(sessionId, (v) => ({ ...v, messages: [...v.messages, userMsg] }));
+      // 该会话本次运行的流式渲染上下文
+      const streamCtx = createTurnStreamCtx({
+        setDisplayMessages: (updater) =>
+          patchViewMessages(sessionId, updater),
+        // 回放去重：读取该会话当前展示列表，定位既有行/步骤（R1）
+        readMessages: () => viewsRef.current[sessionId]?.messages ?? [],
+        setError: (message) => {
+          if (sessionId === activeSessionIdRef.current) setError(message);
+          else patchView(sessionId, { lastError: message });
+        },
+        setSessionTokenStats: (updater) =>
+          patchView(sessionId, (v) => ({
+            ...v,
+            sessionTokenStats:
+              typeof updater === "function"
+                ? updater(v.sessionTokenStats)
+                : updater,
+          })),
+      });
       try {
-        await consumeSSEStream(client, sessionId, text, controller.signal, {
-          onEvent: (event) => {
-            firstEventReceived = true; // 收到任意事件，取消超时
-            switch (event.type) {
-              case "message-start": {
-                currentMessageId = event.messageId;
-                // 创建 assistant 消息占位
-                setDisplayMessages((prev) => {
-                  if (prev.some((m) => m.id === event.messageId)) return prev;
-                  return [
-                    ...prev,
-                    {
-                      id: event.messageId,
-                      role: event.role,
-                      text: "",
-                      thinking: "",
-                      toolCalls: [],
-                      streaming: true,
-                      createdAt: Date.now(),
-                    },
-                  ];
-                });
-                break;
-              }
-
-              case "text-delta": {
-                const id = event.messageId;
-                const accumulated = (streamingText.get(id) ?? "") + event.text;
-                streamingText.set(id, accumulated);
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === id ? { ...m, text: accumulated } : m,
-                  ),
-                );
-                break;
-              }
-
-              case "thinking-delta": {
-                // 思考过程内容 — 流式累积，前端可实时展示（展开/折叠）
-                const id = event.messageId;
-                const accumulated =
-                  (streamingThinking.get(id) ?? "") + event.text;
-                streamingThinking.set(id, accumulated);
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === id ? { ...m, thinking: accumulated } : m,
-                  ),
-                );
-                break;
-              }
-
-              case "tool-call-start": {
-                // 工具调用归属于当前正在生成的 assistant 消息
-                const msgId = currentMessageId;
-                if (!msgId) break;
-                toolUseToMessageId.set(event.toolUseId, msgId);
-                const calls = messageToolCalls.get(msgId) ?? [];
-                calls.push({
-                  toolUseId: event.toolUseId,
-                  name: event.name,
-                  input: event.input,
-                  status: "running",
-                });
-                messageToolCalls.set(msgId, calls);
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
-                  ),
-                );
-                break;
-              }
-
-              case "tool-call-result": {
-                // 按 toolUseId → 消息 映射定位归属（message-end 已把 currentMessageId 置空，
-                // 工具结果在其后到达，不能再用 currentMessageId 关联）
-                const msgId =
-                  toolUseToMessageId.get(event.toolUseId) ?? currentMessageId;
-                toolUseToMessageId.delete(event.toolUseId);
-                if (!msgId) break;
-                const calls = messageToolCalls.get(msgId) ?? [];
-                const idx = calls.findIndex(
-                  (c) => c.toolUseId === event.toolUseId,
-                );
-                if (idx !== -1) {
-                  const existing = calls[idx];
-                  if (existing) {
-                    calls[idx] = {
-                      toolUseId: existing.toolUseId,
-                      name: existing.name,
-                      input: existing.input,
-                      result: event.result,
-                      status: event.result.isError ? "failed" : "completed",
-                    };
-                    messageToolCalls.set(msgId, calls);
-                    setDisplayMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === msgId ? { ...m, toolCalls: [...calls] } : m,
-                      ),
-                    );
-                  }
-                }
-                break;
-              }
-
-              case "message-end": {
-                setDisplayMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === event.messageId
-                      ? { ...m, streaming: false }
-                      : m,
-                  ),
-                );
-                streamingText.delete(event.messageId);
-                streamingThinking.delete(event.messageId);
-                currentMessageId = null;
-                break;
-              }
-
-              case "error": {
-                setError(event.error.message);
-                break;
-              }
-
-              // turn-end / session-end — 兜底清理：确保所有消息标记为非流式
-              // （防止 message-end 未到达时 streaming: true 永不消除）；
-              // 同时复位仍处于 running 的工具调用（loop 终止/出错时不再转圈）
-              case "turn-end":
-              case "session-end": {
-                if (currentMessageId) {
-                  setDisplayMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === currentMessageId ? { ...m, streaming: false } : m,
-                    ),
-                  );
-                  streamingText.delete(currentMessageId);
-                  streamingThinking.delete(currentMessageId);
-                  currentMessageId = null;
-                }
-                // 安全清理：标记所有消息为非流式 + 复位 running 工具调用
-                setDisplayMessages((prev) => {
-                  const nonStreaming = prev.map((m) =>
-                    m.streaming ? { ...m, streaming: false } : m,
-                  );
-                  return markRunningToolCallsFailed(nonStreaming);
-                });
-                break;
-              }
-
-              case "session-start":
-              case "compaction-start":
-              case "compaction-end":
-                break;
-
-              case "usage": {
-                // 捕获 token 用量和缓存命中统计
-                const usageStats: TokenStats = {
-                  inputTokens: event.inputTokens,
-                  outputTokens: event.outputTokens,
-                  ...(event.cacheReadTokens ? { cacheReadTokens: event.cacheReadTokens } : {}),
-                  ...(event.cacheCreationTokens ? { cacheCreationTokens: event.cacheCreationTokens } : {}),
-                };
-                // 附加到当前 assistant 消息
-                if (currentMessageId) {
-                  setDisplayMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === currentMessageId
-                        ? { ...m, tokenStats: usageStats }
-                        : m,
-                    ),
-                  );
-                }
-                // 累加到会话级统计
-                setSessionTokenStats((prev) => ({
-                  inputTokens: (prev?.inputTokens ?? 0) + usageStats.inputTokens,
-                  outputTokens: (prev?.outputTokens ?? 0) + usageStats.outputTokens,
-                  cacheReadTokens: (prev?.cacheReadTokens ?? 0) + (usageStats.cacheReadTokens ?? 0),
-                  cacheCreationTokens: (prev?.cacheCreationTokens ?? 0) + (usageStats.cacheCreationTokens ?? 0),
-                }));
-                break;
-              }
-            }
-          },
-          onError: (err) => {
-            setError(err.message);
-          },
-        }, model);
+        for await (const event of client.sendMessage({
+          sessionId,
+          content: text,
+          ...(model ? { model } : {}),
+          signal: controller.signal,
+        })) {
+          firstEventReceived = true; // 收到任意事件，取消超时
+          if (isRunEnd(event)) break;
+          handleTurnEvent(event, streamCtx);
+        }
       } catch (err) {
         if (!(err instanceof DOMException && err.name === "AbortError")) {
-          setError(err instanceof Error ? err.message : "Streaming failed");
+          if (sessionId === activeSessionIdRef.current) {
+            setError(err instanceof Error ? err.message : "Streaming failed");
+          } else {
+            patchView(sessionId, {
+              lastError: err instanceof Error ? err.message : "Streaming failed",
+            });
+          }
         }
       } finally {
         clearTimeout(timeoutTimer);
-        setIsStreaming(false);
-        abortRef.current = null;
-        toolUseToMessageId.clear();
-        // 安全清理：标记所有消息为非流式 + 复位仍 running 的工具调用
-        // （覆盖中断/超时/流异常终止：未收到 tool-call-result 的子项不再转圈）
-        setDisplayMessages((prev) => {
-          const nonStreaming = prev.map((m) =>
-            m.streaming ? { ...m, streaming: false } : m,
-          );
-          return markRunningToolCallsFailed(nonStreaming);
+        patchView(sessionId, (v) => {
+          // 只清理自己这条流（避免覆盖用户在中断后立即发起的新流）
+          if (v.controller !== controller) return v;
+          return {
+            ...v,
+            controller: null,
+            isStreaming: false,
+            runStartedAt: null,
+            // 安全清理：关闭所有流式行/步骤 + 复位仍 running 的工具调用
+            // （覆盖中断/超时/流异常终止：未收到 tool-call-result 的子项不再转圈）
+            messages: markRunningToolCallsFailed(closeOpenTurns(v.messages)),
+          };
         });
         void refreshSessions();
       }
     },
-    [client, refreshSessions],
+    [client, patchView, patchViewMessages, refreshSessions],
   );
 
   const interrupt = useCallback(async () => {
-    // 始终清除 streaming 状态，不依赖 abort 副作用
-    abortRef.current?.abort();
-    setIsStreaming(false);
-    // 安全清理：标记所有消息为非流式 + 复位 running 工具调用（中断后不再转圈）
-    setDisplayMessages((prev) => {
-      const nonStreaming = prev.map((m) =>
-        m.streaming ? { ...m, streaming: false } : m,
-      );
-      return markRunningToolCallsFailed(nonStreaming);
-    });
-    // 使用 ref 读取最新 sessionId
+    // 中止「当前活跃会话」的生成（Esc / 停止按钮；其它会话后台运行不受影响）
     const sessionId = activeSessionIdRef.current;
     if (!sessionId) return;
+    const cur = viewsRef.current[sessionId];
+    if (!cur?.controller && !cur?.isStreaming) return;
+    cur.controller?.abort();
+    patchView(sessionId, (v) => ({
+      ...v,
+      isStreaming: false,
+      runStartedAt: null,
+      // 服务端中断处理后会话将回落 idle：先同步本端会话副本，避免陈旧的
+      // status="running" 在切回该会话时误触发 attach（服务端已无运行任务、
+      // run-end 早已广播 → 订阅永不结束）（AGE-29 R2 客户端侧）
+      session: v.session ? { ...v.session, status: "idle" } : v.session,
+      // 安全清理：关闭所有流式行/步骤 + 复位 running 工具调用（中断后不再转圈）
+      messages: markRunningToolCallsFailed(closeOpenTurns(v.messages)),
+    }));
     try {
       await client.interrupt(sessionId);
     } catch {
       // 忽略中断错误
     }
-  }, [client]);
-
+  }, [client, patchView]);
   const respondPermission = useCallback(
     async (
       reqId: string,
-      result: { decision: "allow" } | { decision: "deny"; reason?: string },
+      result:
+        | { decision: "allow"; input?: unknown }
+        | { decision: "deny"; reason?: string },
     ) => {
       const sessionId = activeSessionIdRef.current;
       if (!sessionId) return;
-      setPendingPermissions((prev) =>
-        prev.filter((p) => p.reqId !== reqId),
-      );
+      patchView(sessionId, (v) => ({
+        ...v,
+        pendingPermissions: v.pendingPermissions.filter(
+          (p) => p.reqId !== reqId,
+        ),
+      }));
       try {
         await client.respondPermission(sessionId, reqId, result);
       } catch (err) {
@@ -676,16 +710,56 @@ export function useSession(client: ApiClient): UseSessionResult {
         );
       }
     },
-    [client],
+    [client, patchView],
   );
-
+  // 权限审批轮询：对所有正在生成的会话轮询待处理权限请求
+  // （后台会话的请求挂起时同样会被发现；切回该会话即可审批）
+  const runningKey = Object.entries(views)
+    .filter(([, v]) => v.isStreaming)
+    .map(([id]) => id)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!runningKey) return;
+    const runningIds = runningKey.split(",").filter(Boolean);
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      for (const sid of runningIds) {
+        try {
+          const pending = await client.getPendingPermissions(sid);
+          if (cancelled) return;
+          patchView(sid, (v) => {
+            if (!v.isStreaming) return v;
+            const known = new Set(v.pendingPermissions.map((p) => p.reqId));
+            const merged = [...v.pendingPermissions];
+            for (const req of pending) {
+              if (!known.has(req.reqId)) merged.push(req);
+            }
+            return { ...v, pendingPermissions: merged };
+          });
+        } catch {
+          // 轮询失败静默（下次周期重试）
+        }
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [client, patchView, runningKey]);
   return {
     sessions,
     activeSession,
-    activeMessages: displayMessages,
+    activeMessages,
     pendingPermissions,
     isStreaming,
     error,
+    runStartedAt,
+    interruptNotice,
+    runningSessionIds,
     creatingSession,
     sessionTokenStats,
     createSession,
@@ -695,94 +769,6 @@ export function useSession(client: ApiClient): UseSessionResult {
     sendMessage,
     interrupt,
     respondPermission,
+    refreshSession,
   };
-}
-
-// ──────────────────────────────────────────────
-// 辅助函数
-// ──────────────────────────────────────────────
-
-/**
- * 将仍处于 running 的工具调用复位为 failed。
- *
- * loop 正常收尾时每个 tool-call-start 都有对应的 tool-call-result（completed/failed），
- * 不会有 running 残留；running 残留只出现在异常终止路径（死循环防护/LLM 错误/中断/
- * 超时/连接断开），此时把子项从「转圈」复位为明确的失败态。
- */
-function markRunningToolCallsFailed(messages: DisplayMessage[]): DisplayMessage[] {
-  return messages.map((m) => {
-    if (!m.toolCalls.some((tc) => tc.status === "running")) return m;
-    return {
-      ...m,
-      toolCalls: m.toolCalls.map((tc) =>
-        tc.status === "running"
-          ? {
-              ...tc,
-              status: "failed",
-              result: {
-                content: "工具调用未完成（对话已终止或中断）",
-                isError: true,
-              },
-            }
-          : tc,
-      ),
-    };
-  });
-}
-
-/** 将 Session 转换为 DisplayMessage 列表 */
-function sessionToDisplayMessages(session: Session): DisplayMessage[] {
-  // 工具结果块位于独立的 user 消息中（loop 将工具结果作为 user 消息加入历史），
-  // 先全量收集 toolUseId → 结果 映射，再在助手消息里关联 tool-use 块，
-  // 否则重载历史时工具卡片永远拿不到结果（也无法区分成功/失败）。
-  const toolResults = new Map<string, { content: string; isError?: boolean }>();
-  for (const msg of session.messages) {
-    for (const block of msg.content) {
-      if (block.type === "tool-result") {
-        toolResults.set(block.toolUseId, {
-          content: block.content,
-          isError: block.isError,
-        });
-      }
-    }
-  }
-
-  return session.messages.map((msg) => {
-    let text = "";
-    let thinking = "";
-    const toolCalls: ToolCallInfo[] = [];
-
-    for (const block of msg.content) {
-      if (block.type === "text") {
-        text += block.text;
-      } else if (block.type === "thinking") {
-        thinking += block.text;
-      } else if (block.type === "tool-use") {
-        const result = toolResults.get(block.id);
-        toolCalls.push({
-          toolUseId: block.id,
-          name: block.name,
-          input: block.input,
-          result,
-          // 有结果按结果定态；无结果（会话中断/终止，工具未返回）按失败处理
-          status:
-            result === undefined
-              ? "failed"
-              : result.isError
-                ? "failed"
-                : "completed",
-        });
-      }
-    }
-
-    return {
-      id: msg.id,
-      role: msg.role,
-      text,
-      thinking,
-      toolCalls,
-      streaming: false,
-      createdAt: msg.createdAt,
-    };
-  });
 }
