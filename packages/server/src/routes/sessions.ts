@@ -72,6 +72,16 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     c.header("X-Accel-Buffering", "no");
     c.header("Connection", "keep-alive");
 
+    // 同会话并发防护：先检查是否已有运行中任务，拒绝时不进 SSE 流
+    if (sessionManager.isRunning(id)) {
+      log.info("sendMessage", `session ${id} already running, rejecting concurrent request`);
+      return c.body(
+        JSON.stringify({ error: { message: "该会话已有正在执行的任务，请等待当前任务完成或中断后再发送" } }),
+        409,
+        { "content-type": "application/json" },
+      );
+    }
+
     return streamSSE(c, async (stream) => {
       const body = await c.req.json().catch(() => ({}));
       const content =
@@ -98,11 +108,12 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
 
       // 先订阅（回放 + 实时），再后台启动 — 客户端断开仅解除订阅
       const unsub = sessionManager.subscribeSessionEvents(id, async (e) => {
+        const evtType = (e as { type: string }).type;
         const frame = agentEventToSSE(e as AgentEvent);
         try {
           await stream.writeSSE({ event: frame.event, data: frame.data });
         } catch { /* 客户端已断开 */ }
-        if (e.type === "run-end") {
+        if (evtType === "run-end") {
           await stream.close();
         }
       });
@@ -113,9 +124,18 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
           log.info("sendMessage", `client disconnected, sessionId=${id}, background continues`);
         });
 
-        sessionManager.startMessageRun(id, content, model);
+        const result = sessionManager.startMessageRun(id, content, model);
+        if (!result.ok) {
+          // 同会话并发拒绝：返回 JSON 错误（非 SSE）
+          unsub();
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({ error: { message: result.error ?? "已有正在执行的任务" } }),
+          });
+          await stream.close();
+          return;
+        }
         // 等待 run-end（后台泵送完成后订阅者收到 run-end → stream.close）
-        // 如果客户端先断开，unsub 已调用，后台继续
         await new Promise<void>((resolve) => {
           const checkEnd = () => {
             if (stream.aborted) { resolve(); return; }

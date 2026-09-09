@@ -303,13 +303,13 @@ export class SessionManager {
    * 后台启动消息运行（与 HTTP 连接解耦）。
    * 客户端通过 subscribeSessionEvents 接收事件，断开仅解除订阅。
    */
-  startMessageRun(sessionId: string, text: string, model?: string): void {
+  startMessageRun(sessionId: string, text: string, model?: string): { ok: boolean; error?: string } {
     const agent = this.agents.get(sessionId);
     if (!agent) throw new SessionNotFoundError(sessionId);
     const existing = this.sessions.get(sessionId);
     if (!existing) throw new SessionNotFoundError(sessionId);
     if (this.runningTasks.has(sessionId)) {
-      throw new Error("该会话正在处理中，请等待当前任务完成或中断后再发送");
+      return { ok: false, error: "该会话正在处理中，请等待当前任务完成或中断后再发送" };
     }
     if (model && model !== existing.model) {
       existing.model = model;
@@ -323,6 +323,7 @@ export class SessionManager {
     const task: RunningTask = { aborted: false, generator };
     this.runningTasks.set(sessionId, task);
     void this.pumpRun(sessionId, generator, task);
+    return { ok: true };
   }
 
   /**
@@ -571,6 +572,11 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     return JSON.stringify(session, null, 2);
+  }
+
+  /** 检查指定会话是否正在运行（测试用访问器） */
+  isRunning(sessionId: string): boolean {
+    return this.runningTasks.has(sessionId);
   }
 }
 
