@@ -325,7 +325,8 @@ describe("上下文管理器", () => {
     manager.invalidateSystemPrompt();
     const ctx2 = await manager.assemble(session);
 
-    // 系统提示应相同（内容未变）
-    expect(ctx2.system).toBe(ctx1.system);
+    // 系统提示应相同（内容未变）— 归一化时间戳行避免毫秒级竞态 flake
+    const normalize = (s: string) => s.replace(/Current date and time: .*/g, "Current date and time: <normalized>");
+    expect(normalize(ctx2.system)).toBe(normalize(ctx1.system));
   });
 });
