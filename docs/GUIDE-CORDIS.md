@@ -113,8 +113,8 @@ git clone https://github.com/zhu011/FengAgentCli.git
 cd FengAgentCli
 git checkout refactor/cordis-graph-architecture
 git log --oneline -1
-# 预期输出（commit 会随开发更新，分支 HEAD 即最新）:
-# db18dd8 docs(cordis): 小白保姆级操作手册(GUIDE-CORDIS) + 事件溯源迁移CLI + 在线文档站同步
+# 预期输出（commit 会随开发持续更新，分支 HEAD 即最新，不必与下面的示例一致）:
+# abcbd24 fix(server+webui): 中断后会话回落 idle + rejoin 回放按 messageId 去重（AGE-29 R1/R2）
 ```
 
 > 提示：不切分支直接用 `main` 也可以跑，但**本手册讲的新功能（对话图/回退/事件溯源）只在 cordis 分支有**。
@@ -126,7 +126,7 @@ git log --oneline -1
 不想每次 `bun run` 源码的话，可以全局安装：
 
 ```bash
-# 方式一：npm 全局安装（需要已发布 npm 包或本地打包产物）
+# 方式一：本地打包安装（注意：npm 上的 fengagent 尚未发布，`npm install -g fengagent` 会返回 404）
 bun run pack                       # 项目根目录：编译当前平台二进制 + 打出 fengagent-0.2.0.tgz
 npm install -g ./fengagent-0.2.0.tgz
 
@@ -191,6 +191,7 @@ $env:FENG_PROVIDER = "openai-compatible"
 $env:OPENAI_COMPATIBLE_API_KEY = "sk-你的key"
 $env:OPENAI_COMPATIBLE_BASE_URL = "https://api.deepseek.com"
 $env:OPENAI_COMPATIBLE_MODEL = "deepseek-chat"
+$env:FENG_MODEL = "deepseek-chat"
 ```
 
 **bash：**
@@ -200,7 +201,13 @@ export FENG_PROVIDER=openai-compatible
 export OPENAI_COMPATIBLE_API_KEY=sk-你的key
 export OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
 export OPENAI_COMPATIBLE_MODEL=deepseek-chat
+export FENG_MODEL=deepseek-chat
 ```
+
+> ⚠️ **`OPENAI_COMPATIBLE_MODEL` 不会自动成为主模型**：主模型取 `FENG_MODEL`，默认值是 `claude-sonnet-4-20250514`。
+> 从零实测：只设 `OPENAI_COMPATIBLE_MODEL=deepseek-chat` 时，请求实际发到端点的是 `"model":"claude-sonnet-4-20250514"`，
+> 在 DeepSeek 这类真实端点上会直接报「模型不存在」。所以**方式 A 必须同时设 `FENG_MODEL`**（方式 B 会把 model 一起写进 `config.model`，不受此影响）。
+
 
 其他厂商对应的变量见 [CONFIGURATION.md](./CONFIGURATION.md)（Anthropic / OpenAI / Google / AWS Bedrock 都有）。
 
@@ -742,7 +749,7 @@ bun run scripts/events-migrate.ts verify
 
 | 数据 | main 分支 | cordis 分支（本分支） |
 |---|---|---|
-| 会话库 | `.fengagent/sessions.db` | `.fengagent-cordis/sessions.db` |
+| 会话库 | `.fengagent/sessions.db`（TUI 默认写 `~/.fengagent/sessions.db`，见 main 手册第 16 节） | `.fengagent-cordis/sessions.db` |
 | 对话图 | `.fengagent/graph.jsonl` | `.fengagent-cordis/graph.jsonl` |
 | 事件日志 | 无 | `.fengagent-cordis/events/*.jsonl` |
 | 日志 / llm-trace | `.fengagent/logs/` | `.fengagent-cordis/logs/` |

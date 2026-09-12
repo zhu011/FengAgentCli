@@ -523,7 +523,7 @@
     <div class="feature-card">
       <div class="fc-icon">🌐</div>
       <div class="fc-title">WebUI</div>
-      <div class="fc-desc">React + Vite 暗色科技风，3 套主题切换</div>
+      <div class="fc-desc">React + Vite 暗色科技风，3 套主题切换；多会话后台并发</div>
     </div>
     <div class="feature-card">
       <div class="fc-icon">📦</div>
@@ -840,9 +840,10 @@ max_turns: 20
   <ul>
     <li><strong>实时对话</strong> — SSE 流式输出，Markdown 渲染</li>
     <li><strong>会话管理</strong> — 创建、切换、导出、删除会话</li>
+    <li><strong>多会话后台并发</strong> — 会话 A 生成中可切换 / 新建会话 B，A 在后台继续运行；切回 A 看到最新进度，SSE 事件按会话路由（刷新自动重放仍在运行的会话）</li>
     <li><strong>对话图面板</strong> — 节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显保留（cordis 分支）</li>
     <li><strong>Token / KV Cache 统计栏</strong> — 实时显示输入/输出/缓存命中/命中率（cordis 分支）</li>
-    <li><strong>权限审批</strong> — 工具执行前的交互式确认</li>
+    <li><strong>权限审批</strong> — 工具执行前的交互式确认；human-in-the-loop 改参：入参 JSON 可编辑，改后「以修改参数执行」（卡片标注「✏️ 已改参」）</li>
     <li><strong>主题切换</strong> — 3 套暗色主题（科技紫 / 深海蓝 / 暗夜绿）</li>
   </ul>
 

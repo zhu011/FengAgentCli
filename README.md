@@ -50,6 +50,7 @@ bun install
 export FENG_PROVIDER=openai-compatible
 export OPENAI_COMPATIBLE_API_KEY=sk-...
 export OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+export FENG_MODEL=deepseek-chat            # 主模型 ID：不设会退回默认 claude-sonnet-4-20250514
 
 # 3. 启动
 bun run packages/cli/src/entry.ts     # 终端 TUI 对话
@@ -63,7 +64,7 @@ bun run serve                         # WebUI：访问 http://127.0.0.1:3000
 > **不想克隆仓库？** 全局安装后**任意目录**直接运行 `fengagent` 即可进入 TUI，无需进入项目目录。
 
 ```bash
-npm install -g fengagent   # 或 bun install -g fengagent
+bun link && bun link fengagent   # 本仓库本地链接安装（npm 上的 fengagent 尚未发布，npm install -g 会 404）
 npm install -g ./fengagent-0.2.0.tgz   # 本地打包安装：先运行 bun run pack 生成 tgz
 fengagent                  # 任意目录直接进入 TUI
 fengagent acp              # ACP 服务（Multica 运行时）

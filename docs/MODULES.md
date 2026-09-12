@@ -328,7 +328,8 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | POST | `/api/sessions` | 创建会话 |
 | GET | `/api/sessions` | 列出会话 |
 | GET | `/api/sessions/:id` | 获取会话详情 |
-| POST | `/api/sessions/:id/messages` | 发送消息（返回 SSE 流） |
+| POST | `/api/sessions/:id/messages` | 发送消息（先订阅后启动 run，返回 SSE 流；已有运行中任务 → 流内 error 事件） |
+| GET | `/api/sessions/:id/events` | 订阅会话事件（SSE：回放缓冲 + 实时转发 + 心跳；重连 / 多客户端附加） |
 | POST | `/api/sessions/:id/interrupt` | 中断当前运行 |
 | POST | `/api/sessions/:id/permissions/:reqId` | 权限响应（allow 可携带修改后的工具入参 — human-in-the-loop 改参） |
 | GET | `/api/sessions/:id/permissions` | 获取待处理权限请求 |

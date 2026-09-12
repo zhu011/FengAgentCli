@@ -4,6 +4,30 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 真后台并发（会话间并行 Loop + 事件按会话路由）+ 多 Agent 并行提速
+
+### 新功能
+
+- **真后台并发（AGE-29 #1 重做）** — 会话 A 生成中切换到 / 新建会话 B，A 的 Loop **在后台继续运行**，切换不再中止：
+  - `SessionManager` 持有 run pump + 每会话订阅者 + `runEventLogs` 回放缓冲；`POST /:id/messages` **先订阅后启动**，SSE 事件按会话路由——A 的事件不会写入 B（`packages/server/src/session-manager.ts`、`routes/sessions.ts`）；
+  - `GET /:id/events` 纯订阅通道：断线重连 / 页面刷新自动回放仍在运行的会话（缓冲续播 + 心跳），run 结束广播 + finally 清理；
+  - （WebUI）per-session 视图状态切片（messages / isStreaming / 计时锚点 / 权限 / lastError）+ 侧边栏运行指示点；attach/rejoin 自动重订阅仍在运行的会话，`turn-stream` 渲染层发送与 attach 走同一套路径；「按 Esc 中断」只中断**当前会话**（`packages/web-ui/src/hooks/use-session.ts`、`lib/turn-stream.ts`）。
+- **researcher 子 Agent 只读可并行** — `task` 工具 `isConcurrencySafe` 按子 Agent 类型判定：researcher（只读）可与同轮其它工具调用并行执行，多 Agent 协作提速（`packages/tools/src/builtin/task.ts`）。
+
+### 修复
+
+- **中断后会话回落 idle（R2）+ rejoin 回放按 messageId 去重（R1）** — 中断路径也复位运行状态并持久化已完成轮次；断线重连回放与实时事件交叠不再重复渲染（`packages/server/src/create-runtime-agent.ts`、`packages/web-ui/src/lib/turn-stream.ts`）；
+- **计时锚点提升到 hook 层（WebUI）** — 「已用时长」不再因 view 切换重启。
+
+### 测试
+
+- `packages/server/src/__tests__/session-concurrency.test.ts`：并行 Loop / 事件按会话路由（零串扰）/ 同会话 busy 拒绝 / 中断只作用当前会话 / rejoin 回放去重（5/5）；
+- `packages/web-ui/src/lib/__tests__/turn-stream.test.ts`：回放去重（R1）。
+
+### 文档
+
+- README「WebUI」/ `docs/GUIDE-CORDIS.md` §11：多会话后台并发（互不干扰、消息隔离）用法。
+
 ## [Unreleased] — 对话图节点级「回退并重答」闭环 + 工具入参人工改参重试（human-in-the-loop）
 
 ### 新功能
