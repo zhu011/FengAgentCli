@@ -222,7 +222,10 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     const result =
       decision === "deny"
         ? { decision: "deny" as const, reason: body.reason }
-        : { decision: "allow" as const };
+        : body.input !== undefined
+          ? // allow 携带用户修改后的工具入参（human-in-the-loop 改参重试）
+            { decision: "allow" as const, input: body.input }
+          : { decision: "allow" as const };
 
     const responded = sessionManager.respondPermission(id, reqId, result);
     log.info("respondPermission", `sessionId=${id}, reqId=${reqId}, responded=${responded}`);

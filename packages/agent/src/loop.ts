@@ -239,6 +239,9 @@ export class AgentLoop {
           result: ToolResult;
         }> = [];
 
+        // 记录「用户改参后执行」的调用（executor 在结果 metadata 打 userCorrectedInput 标记）
+        const correctedToolUses = new Map<string, unknown>();
+
         log.info("run", `executing tools count=${toolCalls.length}`);
 
         // 准备可执行的工具调用（工具在注册表中存在）
@@ -283,6 +286,19 @@ export class AgentLoop {
               toolUseId: tc.id,
               result: execResult.result,
             });
+            const meta = execResult.result.metadata as
+              | Record<string, unknown>
+              | undefined;
+            if (meta?.userCorrectedInput === true) {
+              correctedToolUses.set(tc.id, execResult.input);
+              // 历史 tool-use 块同步为实际执行入参（用户改参后执行的是新参数）
+              const block = assistantContent.find(
+                (b) => b.type === "tool-use" && b.id === tc.id,
+              );
+              if (block && block.type === "tool-use") {
+                block.input = execResult.input;
+              }
+            }
           }
         }
 
@@ -297,6 +313,9 @@ export class AgentLoop {
             type: "tool-call-result",
             toolUseId,
             result,
+            ...(correctedToolUses.has(toolUseId)
+              ? { input: correctedToolUses.get(toolUseId) }
+              : {}),
           };
         }
 
