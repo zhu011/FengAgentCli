@@ -1,6 +1,6 @@
 # FengAgentCli 小白保姆级操作手册（refactor/cordis-graph-architecture）
 
-> **本手册适用于 `refactor/cordis-graph-architecture` 分支（HEAD `181726c`，Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。**
+> **本手册适用于 `refactor/cordis-graph-architecture` 分支（Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。**
 >
 > 老分支 `main` 的数据与配置文件与本分支**完全隔离**：main 用 `.fengagent/`，本分支用 `.fengagent-cordis/`，
 > 两分支同机运行互不干扰。隔离细节见 [ARCHITECTURE-CORDIS.md §6](./ARCHITECTURE-CORDIS.md)。
@@ -113,8 +113,8 @@ git clone https://github.com/zhu011/FengAgentCli.git
 cd FengAgentCli
 git checkout refactor/cordis-graph-architecture
 git log --oneline -1
-# 预期输出（commit 会随开发持续更新，分支 HEAD 即最新，不必与下面的示例一致）:
-# abcbd24 fix(server+webui): 中断后会话回落 idle + rejoin 回放按 messageId 去重（AGE-29 R1/R2）
+# 预期输出（一行「短哈希 + 提交说明」，会随开发更新，与你实际看到的未必一致）:
+# <短哈希> <最近一次提交的说明文字>
 ```
 
 > 提示：不切分支直接用 `main` 也可以跑，但**本手册讲的新功能（对话图/回退/事件溯源）只在 cordis 分支有**。
@@ -394,8 +394,7 @@ bun run packages/cli/src/entry.ts --print "一句话问题"               # 强�
 
 ![CLI 命令补全](site/screenshots/cli-06-help.png)
 
-> 注：补全列表来自集中维护的命令元数据表（`packages/cli/src/commands.ts` 的 `COMMANDS`），
-> 新命令加进表后自动出现在 `/` 联想里。
+> 注：补全列表来自集中维护的命令表，新增命令后会自动出现在 `/` 联想里。
 
 ---
 
@@ -515,7 +514,7 @@ bash scripts/demo.sh
 ### WebUI 里能做什么
 
 - **对话**：左侧会话列表（新建/切换/删除），中间消息区（Markdown 渲染、流式输出），底部输入框；
-- **多会话后台并发（互不干扰、消息隔离）**：会话 A 生成中新建 / 切到会话 B，A 的生成**在后台继续运行**——侧边栏会话行显示蓝色运行指示点，切回 A 即可看到最新进度（已流出的内容都在）；SSE 事件按会话路由，A 的事件不会写入 B；「按 Esc 中断」/ Stop 只中断**当前会话**，其它会话后台运行不受影响（会话刷新 / 页面重开也会自动订阅仍在运行的会话，从回放继续看到进度）；
+- **多会话后台并发（互不干扰、消息隔离）**：会话 A 生成中新建 / 切到会话 B，A 的生成**在后台继续运行**——侧边栏会话行显示蓝色运行指示点，切回 A 即可看到最新进度（已流出的内容都在）；会话之间消息互不串扰；「按 Esc 中断」/ Stop 只中断**当前会话**，其它会话后台运行不受影响（会话刷新 / 页面重开后仍能看到后台会话的最新进度）；
 - **Token 统计栏**：消息区下方实时显示「📥 输入 / 📤 输出 / ⚡ 缓存命中 / 🎯 命中率 / 合计 tokens」（见第 12 节）；
 - **图面板**：对话同时右侧展示对话图（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显保留），点「回退并重答」即**回退到该轮提问处并自动重新回答**（SSE 流式重答，新回答挂分支点下）并自动刷新会话与图；
 - **权限审批（human-in-the-loop 改参）**：工具请求审批（破坏性工具 / ask 规则 / 入参校验失败）时，右上角「检查器」面板出现审批卡片——**入参 JSON 可编辑**，改好参数后点「以修改参数执行」= Allow + 修改后入参，工具以新参数执行（结果卡片标注「✏️ 已改参」）；不改参数直接 Allow = 原参数放行；Deny = 拒绝本次调用；
