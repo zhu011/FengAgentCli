@@ -512,7 +512,7 @@
     <div class="feature-card">
       <div class="fc-icon">🌐</div>
       <div class="fc-title">WebUI</div>
-      <div class="fc-desc">React + Vite 暗色科技风，3 套主题切换</div>
+      <div class="fc-desc">React + Vite 暗色科技风，3 套主题切换；多会话后台并发</div>
     </div>
     <div class="feature-card">
       <div class="fc-icon">📦</div>
@@ -595,6 +595,7 @@ export OPENAI_COMPATIBLE_MODEL=deepseek-chat</code></pre>
     <li><strong>Skill</strong>：提示词模板放 <code>.fengagent/skills/*.md</code>（frontmatter 含 name/description/trigger），关键词自动触发；</li>
     <li><strong>测评</strong>：<code>bun run eval</code>（支持 <code>--date=</code> / <code>--all</code> / <code>--file=</code>），分析 <code>.fengagent/logs/llm-trace-*.jsonl</code> 输出模型准确率报告；</li>
     <li><strong>KV Cache 统计</strong>：WebUI 消息区下方实时显示 📥输入 / 📤输出 / ⚡缓存命中 / 🎯命中率 / 合计 tokens。</li>
+    <li><strong>多会话后台并发</strong>：会话 A 生成中可切到会话 B 继续用（或新建会话），A 在后台继续运行；切回 A 看到最新进度，Esc 中断只作用当前会话。</li>
   </ul>
 
   <p class="section-desc" style="margin-top:12px">👉 详细步骤、预期输出、FAQ 见 <a href="GUIDE.md" target="_blank">docs/GUIDE.md</a>。</p>
@@ -814,6 +815,7 @@ max_turns: 20
   <ul>
     <li><strong>实时对话</strong> — SSE 流式输出，Markdown 渲染</li>
     <li><strong>会话管理</strong> — 创建、切换、导出、删除会话</li>
+    <li><strong>多会话后台并发</strong> — 会话 A 生成中可切换 / 新建会话 B，A 在后台继续运行；切回 A 看到最新进度，SSE 事件按会话路由（刷新自动重放仍在运行的会话）</li>
     <li><strong>权限审批</strong> — 工具执行前的交互式确认</li>
     <li><strong>主题切换</strong> — 3 套暗色主题（科技紫 / 深海蓝 / 暗夜绿）</li>
   </ul>

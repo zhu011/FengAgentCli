@@ -2,7 +2,7 @@
 
 # ⚡ FengAgentCli
 
-**开源本地 AI Agent 对话平台** — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩、对话图溯源与回退重答。
+**开源本地 AI Agent 对话平台** — 在终端或浏览器中与 AI 对话，支持工具调用、多 Agent 协作、上下文压缩、记忆与 Agent 测评。
 
 [TypeScript](https://www.typescriptlang.org/) · [Bun](https://bun.sh/) · [Ink TUI](https://github.com/vadimdemedes/ink) · [React](https://react.dev/) · [Hono](https://hono.dev/)
 
@@ -15,8 +15,8 @@
 
 </div>
 
-> **分支说明**：本 README 对应 `refactor/cordis-graph-architecture` 分支（Cordis 插件化 + 对话图/可回溯 + 事件溯源架构）。
-> `main` 分支为经典 Loop 架构，两分支数据与配置完全隔离（本分支数据根 `.fengagent-cordis/`）。
+> **分支说明**：本 README 对应 `main` 分支（经典 Loop 架构，数据根 `.fengagent/`）。
+> 对话图 / 回退重答 / 事件溯源 / Cordis 插件化只在新分支 [`refactor/cordis-graph-architecture`](https://github.com/zhu011/FengAgentCli/tree/refactor/cordis-graph-architecture)（数据根 `.fengagent-cordis/`，手册 `docs/GUIDE-CORDIS.md`）；两分支数据与配置完全隔离。
 
 ---
 
@@ -25,10 +25,6 @@
 | 图标 | 特性 | 说明 |
 |:---:|------|------|
 | 💬 | **智能对话** | 多轮上下文对话，SSE 流式输出，Markdown 渲染，代码语法高亮 |
-| 🕸️ | **对话图（Graph）** | 每轮「提问→回答」沉淀为节点，可溯源、可分支、可回退 |
-| ↩️ | **回退重答** | `/rollback` 回退到任意节点重答，旧分支完整保留 |
-| 🧩 | **插件化架构** | 模型 / 工具 / 策略 / 存储 / 上下文 / Loop / 图全部为可插拔服务（Cordis） |
-| 📜 | **事件溯源** | 会话以 append-only 事件日志为准，可导出 / 导入 / 重建 / 跨机迁移 |
 | 🤖 | **多 Agent** | Task 工具派遣子 Agent，独立会话 + 角色定义 |
 | 🔧 | **工具调用** | 文件读写、Bash、Glob/Grep、Web 抓取、记忆、Skill |
 | 🧪 | **实验沙箱** | 临时文件 / 临时代码在隔离沙箱执行，安全可控 |
@@ -50,6 +46,7 @@ bun install
 export FENG_PROVIDER=openai-compatible
 export OPENAI_COMPATIBLE_API_KEY=sk-...
 export OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+export FENG_MODEL=deepseek-chat            # 主模型 ID：不设会退回默认 claude-sonnet-4-20250514
 
 # 3. 启动
 bun run packages/cli/src/entry.ts     # 终端 TUI 对话
@@ -63,11 +60,12 @@ bun run serve                         # WebUI：访问 http://127.0.0.1:3000
 > **不想克隆仓库？** 全局安装后**任意目录**直接运行 `fengagent` 即可进入 TUI，无需进入项目目录。
 
 ```bash
-npm install -g fengagent   # 或 bun install -g fengagent
-npm install -g ./fengagent-0.2.0.tgz   # 本地打包安装：先运行 bun run pack 生成 tgz
+bun link && bun link fengagent   # 本仓库本地链接安装（项目根执行；main 无 pack 脚本）
 fengagent                  # 任意目录直接进入 TUI
 fengagent acp              # ACP 服务（Multica 运行时）
 ```
+
+> ⚠️ `npm install -g fengagent` 暂不可用：该包尚未发布到 npm（registry 返回 404）。请用上面的本地方式（`bun link`，或 `bun run build:binary` 编译独立二进制）。
 
 ### 一键 Demo
 
@@ -99,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 ### TUI（终端对话）
 
 - **对话**：直接输入问题，`Enter` 发送；`/` 弹出命令补全
-- **常用命令**：`/help` 帮助 · `/model` 切换模型 · `/provider` 配置服务商 · `/graph` 对话图 · `/rollback` 回退重答 · `/compact` 压缩上下文 · `/clear` 清屏
+- **常用命令**：`/help` 帮助 · `/model` 切换模型 · `/provider` 配置服务商 · `/session` 会话管理 · `/compact` 压缩上下文 · `/clear` 清屏（`/graph`、`/rollback` 仅新分支提供）
 - **长对话**：`PgUp/PgDn` 或鼠标滚轮翻阅历史，`Home` 回顶、`End` 回底
 - **思考可视化**：推理模型（DeepSeek reasoner / Anthropic thinking）的思考过程**实时流式显示**（`💭` 缩进斜体），不再只有动画宠物空转
 - **状态栏**：上下文占用进度条（含百分比与 token 计数）+ 模型 / 会话信息
@@ -111,10 +109,11 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 - 三套主题：深空 / 日光 / 赛博（顶栏 ⚙ 设置下拉，显示当前主题名；Esc / 点击外部关闭）
 - 会话标题双击重命名（侧边栏与顶栏均可）；侧边栏顶部支持**会话搜索**；会话行 hover 显示重命名 / 删除
 - 发送消息后有「生成中」动画指示器（显示已用时长 + **按 Esc 中断**，Stop 按钮联动）
+- **多会话后台并发（互不干扰、消息隔离）**：会话 A 生成中新建 / 切换去会话 B，A 的生成**在后台继续运行**，侧边栏会话行显示运行指示点；切回 A 即可看到最新进度。SSE 事件按会话路由，A 的事件不会写入 B（隔离）；「按 Esc 中断」只中断当前会话，其它会话后台运行不受影响
 - **思考过程可视化**：推理模型的思考内容经 `thinking-delta` SSE 实时推送，以「💭 深度思考」面板流式展示，**点击展开 / 折叠**（流式期间自动展开，折叠后仍显示字数摘要）；历史消息的思考块同样可见
 - 欢迎页建议卡片点击**填入输入框**（确认后 Enter 发送），卡片 hover 微动画；空会话有轻量引导
 - 助手消息 Markdown 代码块带**复制按钮**（hover / 键盘 focus 可见）
-- 右侧面板：权限审批、消息检查器、对话图（分支可视化 / 回退，三套主题自适应）
+- 右侧面板：权限审批、消息检查器、调用链 / 评测深链（三套主题自适应）
 - 底部状态栏：输入 / 输出 / 缓存命中 / 命中率 / 合计 tokens
 
 ### 多 Agent 协作（任务拆解 → 子 Agent 分工 → 汇总）
@@ -144,14 +143,14 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 | `FENG_MODEL` | `claude-sonnet-4-20250514` | 主模型 ID |
 | `FENG_CONTEXT_WINDOW` | `200000` | 上下文窗口（token） |
 | `FENG_SERVER_PORT` | `3000` | HTTP 服务端口 |
-| `FENG_DATA_DIR` | `.fengagent-cordis` | 数据根（会话 / 事件 / 图 / 日志 / 记忆） |
+| `FENG_DATA_DIR` | `~/.fengagent`（CLI）/ `<项目根>/.fengagent`（WebUI） | 数据根（会话 / 日志 / 记忆）；建议显式指定以统一两端 |
 
 ## 📚 文档
 
 | 文档 | 说明 |
 |------|------|
-| [操作手册](docs/GUIDE-CORDIS.md) | 从安装到每个功能的可照抄命令 + 预期输出（新手推荐） |
-| [架构设计](docs/ARCHITECTURE-CORDIS.md) | Cordis 插件化 + 对话图 + 事件溯源设计 |
+| [操作手册](docs/GUIDE.md) | 从安装到每个功能的可照抄命令 + 预期输出（新手推荐） |
+| [架构设计](docs/ARCHITECTURE.md) | Loop / 工具 / 上下文 / 服务端架构设计 |
 | [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件、权限规则 |
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建、打包 |
 | [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent / Skill |
@@ -169,9 +168,6 @@ packages/
 ├── tools/      — 工具系统 + MCP + 权限 + Hook + 沙箱
 ├── context/    — 上下文管理（压缩、记忆、系统上下文）
 ├── agent/      — Agent 运行时（Loop、SessionStore、子 Agent）
-├── cordis/     — Cordis 插件化集成层
-├── graph/      — 对话图机制（可溯源 / 可回退）
-├── events/     — 事件溯源（append-only 日志 + 投影 + 迁移）
 ├── cli/        — CLI 入口（Ink TUI + print 模式）
 ├── server/     — HTTP 服务（Hono + SSE）
 ├── eval/       — Agent 测评模块

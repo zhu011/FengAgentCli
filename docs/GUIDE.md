@@ -158,6 +158,7 @@ $env:FENG_PROVIDER = "openai-compatible"
 $env:OPENAI_COMPATIBLE_API_KEY = "sk-你的key"
 $env:OPENAI_COMPATIBLE_BASE_URL = "https://api.deepseek.com"
 $env:OPENAI_COMPATIBLE_MODEL = "deepseek-chat"
+$env:FENG_MODEL = "deepseek-chat"
 ```
 
 **bash：**
@@ -167,7 +168,13 @@ export FENG_PROVIDER=openai-compatible
 export OPENAI_COMPATIBLE_API_KEY=sk-你的key
 export OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
 export OPENAI_COMPATIBLE_MODEL=deepseek-chat
+export FENG_MODEL=deepseek-chat
 ```
+
+> ⚠️ **`OPENAI_COMPATIBLE_MODEL` 不会自动成为主模型**：主模型取 `FENG_MODEL`，默认值是 `claude-sonnet-4-20250514`。
+> 从零实测：只设 `OPENAI_COMPATIBLE_MODEL=deepseek-chat` 时，请求实际发到端点的是 `"model":"claude-sonnet-4-20250514"`，
+> 在 DeepSeek 这类真实端点上会直接报「模型不存在」。所以**方式 A 必须同时设 `FENG_MODEL`**（方式 B 会把 model 一起写进 `config.model`，不受此影响）。
+
 
 其他厂商对应的变量见 [CONFIGURATION.md](./CONFIGURATION.md)（Anthropic / OpenAI / Google / AWS Bedrock 都有）。
 
@@ -475,7 +482,7 @@ AI 会根据任务自动选用工具（读写文件、跑命令、搜代码、�
 
 ### 12.3 多 Agent（子 Agent 派遣）
 
-`task` 工具可以把子任务派给独立子 Agent（独立 Session + 角色），适合并行处理大任务。
+`task` 工具可以把子任务派给独立子 Agent（独立 Session + 角色），适合并行处理大任务。只读子 Agent（`researcher`）可与同轮其它工具调用**并行执行**（多 Agent 协作提速），`coder` / `default` 保持串行。
 角色定义放在 `.fengagent/agents/*.md`，仓库自带：
 
 ```
@@ -530,6 +537,7 @@ bash scripts/demo.sh
 ### WebUI 里能做什么
 
 - **对话**：左侧会话列表（新建/切换/删除），中间消息区（Markdown 渲染、流式输出），底部输入框；
+- **多会话后台并发（互不干扰、消息隔离）**：会话 A 生成中新建 / 切到会话 B，A 的生成**在后台继续运行**——侧边栏会话行显示运行指示点，切回 A 即可看到最新进度；SSE 事件按会话路由，A 的事件不会写入 B；「按 Esc 中断」只中断**当前会话**，其它会话后台运行不受影响（刷新 / 重开页面会自动订阅仍在运行的会话，从回放继续看到进度）；生成计时的「已用时长」不因切换视图重启；
 - **Token 统计栏**：消息区下方实时显示「📥 输入 / 📤 输出 / ⚡ 缓存命中 / 🎯 命中率 / 合计 tokens」（见第 14 节）；
 - **主题切换**：右上角切换 3 套主题。
 
@@ -616,12 +624,27 @@ KV Cache:
 
 ## 16. 数据目录 .fengagent/ 说明
 
-main 分支**所有**运行时数据都在项目根的 `.fengagent/` 目录（全局用户级备份在 `~/.fengagent/`）：
+main 分支运行时数据默认在项目根的 `.fengagent/`，但**会话库位置在 CLI 与 WebUI 之间并不一致**（从零实测确认）：
+
+- CLI（`bun run packages/cli/src/entry.ts`）：`dataDir` 默认 `~/.fengagent`，会话库 = **`~/.fengagent/sessions.db`**；
+- WebUI 服务端（`bun run serve`）：固定 = **`<项目根>/.fengagent/sessions.db`**。
+
+想让两端共用同一份数据（也便于备份 / 清理），请显式设置 `FENG_DATA_DIR`：
+
+```powershell
+$env:FENG_DATA_DIR = "$PWD\.fengagent"     # PowerShell
+```
+
+```bash
+export FENG_DATA_DIR="$PWD/.fengagent"     # bash
+```
+
+目录内容对照：
 
 | 路径 | 内容 |
 |---|---|
 | `.fengagent/config.json` | 配置（`/model`、`/provider` 等命令写入，重启自动加载） |
-| `.fengagent/sessions.db` | 会话主存储（SQLite） |
+| `.fengagent/sessions.db` | 会话主存储（SQLite）—— 见上方说明：CLI 默认写 `~/.fengagent/`，WebUI 写项目根 |
 | `.fengagent/logs/` | 运行日志 `fengagent-{date}.log` + 会话 JSONL + LLM Trace `llm-trace-{date}.jsonl` + 测评报告 |
 | `.fengagent/memory/` | 记忆（`vector-store.json` + `MEMORY.md`） |
 | `.fengagent/agents/` | 子 Agent 角色定义（`default.md` / `coder.md` / `researcher.md`） |
@@ -631,6 +654,9 @@ main 分支**所有**运行时数据都在项目根的 `.fengagent/` 目录（�
 | `.fengagent/mcp-servers.json` | MCP Server 配置 |
 
 > 想清空全部数据（会话/日志/记忆）：退出程序后删除 `.fengagent/` 下对应子目录即可（操作前确认）。
+>
+> ⚠️ 从零实测：若不设 `FENG_DATA_DIR`，TUI 里聊完再打开 WebUI **看不到刚才的会话**（两者不是同一个库）。
+> 设好 `FENG_DATA_DIR` 后两端一致；彻底重来则需同时清理 `<项目根>/.fengagent/` 与 `~/.fengagent/`。
 
 ---
 

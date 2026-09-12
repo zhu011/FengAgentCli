@@ -4,6 +4,29 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 真后台并发（会话间并行 Loop + 事件按会话路由）+ HITL 改参后端适配 + 多 Agent 并行提速
+
+### 新功能
+
+- **真后台并发（refactor 模型 main 适配）** — 会话 A 生成中切换到 / 新建会话 B，A 的 Loop **在后台继续运行**，切换不再中止：
+  - `SessionManager` 持有 run pump + 每会话订阅者 + `runEventLogs` 回放缓冲；`POST /:id/messages` 先订阅后启动，SSE 事件按会话路由（A 的事件不写入 B）；会话已有运行中任务时返回 **409 JSON**（`isRunning` 预检 + SSE 流内兜底二次防护）；`GET /:id/events` 纯订阅通道（回放 + 心跳，供重连 / 多客户端附加）（`packages/server/src/session-manager.ts`、`routes/sessions.ts`）；
+  - （WebUI）完整移植 refactor per-session 视图状态模型：侧边栏运行指示点、attach/rejoin 自动重订阅、中断按会话 scope 只作用当前会话（`packages/web-ui/src/hooks/use-session.ts`）。
+- **工具入参人工改参重试（HITL，main 适配）** — `PermissionResult` allow 可携带 `input`：executor 改参后重新校验并以新参数执行；实际执行入参（`userCorrectedInput`）同步进 tool-call-result 事件与会话历史，工具卡片标注「✏️ 已改参」（`packages/core/src/permission.ts`、`packages/tools/src/executor.ts`）。
+- **researcher 子 Agent 只读可并行（main 适配）** — `task` 工具 `isConcurrencySafe` 按类型判定，多 Agent 协作提速（`packages/tools/src/builtin/task.ts`）。
+
+### 修复
+
+- **R1 / R2（main 适配）** — turn-stream 回放按 messageId 去重；`prompt()` try/finally 确保中断路径也复位 idle 并持久化（`packages/agent/src/loop.ts`、`packages/server/src/session-manager.ts`）；
+- **计时锚点（WebUI）** — 「已用时长」不因 view 切换重启。
+
+### 测试
+
+- `packages/server/src/__tests__/session-concurrency.test.ts`（移植自 refactor abcbd24，与之一致）：并行 Loop / 事件路由隔离 / 409 busy 拒绝 / 中断 scope / rejoin 回放去重（5/5）；main 全量 766 pass / 1 例既有 flake（非回归）。
+
+### 文档
+
+- README「WebUI」/ `docs/GUIDE.md` §13：多会话后台并发说明。
+
 ## [Unreleased] — task 缺参兜底 + 终止后工具卡片不再转圈（AGE-29 后续）
 
 ### 修复
