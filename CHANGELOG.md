@@ -4,6 +4,26 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 渲染进程多工作目录凭据修复（Multica 运行时启动失败）
+
+### 修复
+
+- **空工作目录下运行时启动失败（「hermes initialize failed: hermes process exited」）** — Multica 每次对话都会在**全新的空工作目录**（`task-<id>/workdir`）里拉起 `fengagent acp`，cwd 下既没有 `.fengagent/config.json` 也没有 `.fengagent-cordis/config.json`，凭据解析失败导致进程在初始化阶段退出，宿主只看到「运行时出错，没能完成回复」：
+  - `loadConfig` 新增**显式配置层** `FENG_CONFIG_FILE`（最高文件层，不依赖工作目录）；
+  - 新增 `promoteCredentialsToGlobal()`：把项目级 Provider 凭据**补齐**到全局配置 `~/.fengagent/config.json`（只补缺失键，不覆盖已有值；工作目录相关键不参与提升）；
+  - `fengagent runtime install` 现在会顺带完成上述补齐（`--no-global-config` 可跳过），并打印补齐结果；
+  - `acp` 启动期凭据缺失不再静默退出：stderr 与日志输出「查了哪些位置 + 三种修复方式」（`packages/core/src/config.ts`、`packages/cli/src/runtime-install.ts`、`packages/cli/src/entry.ts`）。
+
+### 测试
+
+- `packages/core/src/__tests__/config-portable.test.ts`：显式配置层优先级 / 凭据提取 / Provider 凭据完备性 / 全局补齐语义（16 项）；
+- `packages/cli/src/__tests__/runtime-install.test.ts`：项目凭据读取与补齐、opt-out、不覆盖已有值（7 项）。
+
+### 文档
+
+- `docs/CONFIGURATION.md`：配置优先级新增显式配置层，新增「多工作目录下的凭据可见性」；
+- `README.md`：全局安装一节补充 `fengagent runtime install` 与凭据补齐说明。
+
 ## [Unreleased] — 真后台并发（会话间并行 Loop + 事件按会话路由）+ 多 Agent 并行提速
 
 ### 新功能

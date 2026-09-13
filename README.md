@@ -68,7 +68,12 @@ bun link && bun link fengagent   # 本仓库本地链接安装（npm 上的 feng
 npm install -g ./fengagent-0.2.0.tgz   # 本地打包安装：先运行 bun run pack 生成 tgz
 fengagent                  # 任意目录直接进入 TUI
 fengagent acp              # ACP 服务（Multica 运行时）
+fengagent runtime install  # 注册为 Multica 本地运行时（并把项目凭据补齐到 ~/.fengagent/config.json）
 ```
+
+> Multica 每次对话都在**全新的空工作目录**里拉起运行时，读不到项目目录下的
+> `.fengagent/config.json`。`fengagent runtime install` 会把项目凭据补齐到全局配置
+> `~/.fengagent/config.json`（只补缺失项，不覆盖已有值），使凭据在任意工作目录可见。
 
 ### 一键 Demo
 

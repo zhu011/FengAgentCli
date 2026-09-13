@@ -7,8 +7,9 @@
 1. **内置默认值**（代码中的 `DEFAULT_CONFIG`）
 2. **全局配置**：`~/.fengagent/config.json`
 3. **项目配置**：`./.fengagent/config.json`
-4. **环境变量**：`FENG_*` 系列变量
-5. **命令行参数**：`--model`、`--port` 等
+4. **显式配置**：`FENG_CONFIG_FILE` 指向的文件（不依赖工作目录）
+5. **环境变量**：`FENG_*` 系列变量
+6. **命令行参数**：`--model`、`--port` 等
 
 ## 模型配置
 
@@ -70,15 +71,38 @@
 
 | 环境变量 | 配置键 | 默认值 | 说明 |
 |----------|--------|--------|------|
-| `FENG_CONFIG_FILE` | — | `.fengagent-cordis/config.json` | 分支级配置文件（`/model` `/provider` 只写这里；`.fengagent/config.json` 仅只读回退） |
+| `FENG_CONFIG_FILE` | — | — | 显式指定配置文件路径（最高文件层，不依赖工作目录）；用于宿主在空工作目录里拉起运行时的场景 |
 | `FENG_DATA_DIR` | `dataDir` | `.fengagent-cordis`（相对 workdir） | 数据存储目录（refactor/cordis 分支默认数据根；`~/.fengagent` 为 main 遗留数据根，仅作导入源/只读回退） |
 | `FENG_MAIN_DATA_DIR` | — | — | 显式指定 main 遗留数据根（导入源）。探测顺序：`FENG_MAIN_DATA_DIR` → `<workdir>/.fengagent` → `~/.fengagent` → `<workdir>/data`，首个含 `sessions.db`/`graph.jsonl` 者胜 |
 | `FENG_LOG_LEVEL` | `logLevel` | `info` | 日志级别（debug/info/warn/error） |
 | `FENG_LOG_DIR` | — | `<dataRoot>/logs` | 日志目录 |
 | `FENG_MCP_SERVERS` | — | — | MCP 服务器配置（JSON 格式） |
 
-**配置读取优先级（全链）**：`.fengagent-cordis/config.json`（分支级，`/model` `/provider` 只写这里）>
+**配置读取优先级（全链）**：`FENG_CONFIG_FILE`（显式路径，最高文件层）> `.fengagent-cordis/config.json`（分支级，`/model` `/provider` 只写这里）>
 项目 `.fengagent/config.json` > 全局 `~/.fengagent/config.json`（其后是环境变量 → CLI 参数）。
+
+## 多工作目录下的凭据可见性
+
+Provider 凭据默认从**当前工作目录**向上的配置层解析。某些宿主（如 Multica）
+每次对话都会在一个**全新的空工作目录**里拉起 `fengagent acp`，此时 cwd 下
+没有 `.fengagent/config.json`，凭据必须在工作目录之外可见，否则进程会在启动
+阶段因缺少 API Key 退出（宿主侧表现为「运行时初始化失败」）。
+
+三种做法（任选其一）：
+
+1. **补齐全局配置**（推荐）：在已配置好的项目目录执行
+
+   ```bash
+   fengagent runtime install
+   ```
+
+   它会把项目级 Provider 凭据**补齐**到 `~/.fengagent/config.json`（只补缺失项，
+   不覆盖已有值），使任意工作目录都能解析到凭据；加 `--no-global-config` 可跳过。
+
+2. **显式指定配置文件**：设置 `FENG_CONFIG_FILE=/path/to/config.json`。
+
+3. **由宿主注入环境变量**：如 `OPENAI_COMPATIBLE_API_KEY` /
+   `OPENAI_COMPATIBLE_BASE_URL`（宿主的运行时/智能体自定义环境变量）。
 
 ## 配置文件格式
 
@@ -234,6 +258,10 @@ trigger: review|审查|code review
 | `--version` | 显示版本信息 |
 | `serve` | WebUI 服务模式 |
 | `--print "问题"` | 非交互模式（stdin → stdout） |
+| `acp` | ACP 服务模式（Multica 运行时集成） |
+| `runtime install` | 注册为 Multica 本地运行时，并把项目凭据补齐到全局配置 |
+| `runtime uninstall` | 移除 Multica 本地运行时注册 |
+| `--no-global-config` | 与 `runtime install` 同用：跳过凭据补齐 |
 
 ## TUI 命令：`/provider`（配置 Provider）
 

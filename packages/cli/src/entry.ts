@@ -111,7 +111,30 @@ export async function main(argv: string[]): Promise<void> {
     // “OPENAI_COMPATIBLE_API_KEY is required” 运行时报错。
     const config = await loadConfig();
     const envForLLM = buildEnvForLLM(config);
-    const { client: llmClient } = createClientFromEnv(envForLLM);
+    let llmClient: import("@fengagent/llm").LLMClient;
+    try {
+      llmClient = createClientFromEnv(envForLLM).client;
+    } catch (err) {
+      // 凭据缺失时不静默退出：Multica 只能看到 "hermes initialize failed:
+      // hermes process exited"，无法定位。这里把「查了哪些位置、怎么修」写进
+      // stderr 与日志，宿主日志里可以直接看到可执行的修复步骤。
+      const message = err instanceof Error ? err.message : String(err);
+      const lines = [
+        `无法解析 Provider 凭据：${message}`,
+        `  工作目录: ${process.cwd()}`,
+        "  已查找的凭据来源: ./.fengagent/config.json、./.fengagent-cordis/config.json、~/.fengagent/config.json" +
+          (process.env.FENG_CONFIG_FILE ? `、FENG_CONFIG_FILE=${process.env.FENG_CONFIG_FILE}` : ""),
+        "  修复方式（任选其一）:",
+        "    1) 在已配置好的项目目录执行 `fengagent runtime install`，" +
+          "把项目凭据补齐到 ~/.fengagent/config.json（任意工作目录均可见）",
+        "    2) 设置 FENG_CONFIG_FILE 指向凭据配置文件",
+        "    3) 由宿主注入 Provider 环境变量（如 OPENAI_COMPATIBLE_API_KEY / OPENAI_COMPATIBLE_BASE_URL）",
+      ];
+      const hint = lines.join("\n");
+      log.error("acp", hint);
+      process.stderr.write(`Fatal: ${hint}\n`);
+      process.exit(1);
+    }
     const workdir = process.cwd();
 
     const hookRegistry = createHookRegistry();
@@ -157,11 +180,25 @@ export async function main(argv: string[]): Promise<void> {
     } = await import("./runtime-install.ts");
 
     if (parsed.runtime === "install") {
-      const file = installRuntimeRegistration();
+      const { file, registration, credentials } = installRuntimeRegistration({
+        seedGlobalConfig: !parsed.noGlobalConfig,
+      });
       process.stdout.write(`FengAgentCli 已注册为 Multica 本地运行时：\n  ${file}\n`);
       process.stdout.write(
-        "Multica 应能检测到 \"FengAgentCli\" 运行时（launchHeader: fengagent acp）。\n",
+        `Multica 应能检测到 "${registration.displayName}" 运行时（launchHeader: ${registration.launchHeader}）。\n`,
       );
+      if (credentials) {
+        process.stdout.write(
+          `\n已把项目级 Provider 凭据补齐到全局配置（${credentials.keys.length} 项）：\n` +
+            `  ${credentials.path}\n` +
+            "  用途：Multica 每次对话都在全新的空工作目录里拉起运行时，只有全局配置在任何工作目录都可见。\n",
+        );
+      } else if (!parsed.noGlobalConfig) {
+        process.stdout.write(
+          "\n未补齐全局配置：当前目录未找到项目级 .fengagent/config.json 凭据，" +
+            "或全局配置中对应项已存在（保持不覆盖）。\n",
+        );
+      }
     } else {
       const file = uninstallRuntimeRegistration();
       if (file) {
