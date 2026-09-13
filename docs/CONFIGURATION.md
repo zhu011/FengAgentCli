@@ -7,8 +7,9 @@
 1. **内置默认值**（代码中的 `DEFAULT_CONFIG`）
 2. **全局配置**：`~/.fengagent/config.json`
 3. **项目配置**：`./.fengagent/config.json`
-4. **环境变量**：`FENG_*` 系列变量
-5. **命令行参数**：`--model`、`--port` 等
+4. **显式配置**：`FENG_CONFIG_FILE` 指向的文件（不依赖工作目录）
+5. **环境变量**：`FENG_*` 系列变量
+6. **命令行参数**：`--model`、`--port` 等
 
 ## 模型配置
 
@@ -70,15 +71,42 @@
 
 | 环境变量 | 配置键 | 默认值 | 说明 |
 |----------|--------|--------|------|
-| `FENG_CONFIG_FILE` | — | `.fengagent/config.json` | 配置文件路径 |
-| `FENG_DATA_DIR` | `dataDir` | `~/.fengagent` | 数据存储目录 |
+| `FENG_CONFIG_FILE` | — | — | 显式指定配置文件路径（最高文件层，不依赖工作目录）；用于宿主在空工作目录里拉起运行时的场景 |
+| `FENG_DATA_DIR` | `dataDir` | `.fengagent-cordis`（相对 workdir） | 数据存储目录（refactor/cordis 分支默认数据根；`~/.fengagent` 为 main 遗留数据根，仅作导入源/只读回退） |
+| `FENG_MAIN_DATA_DIR` | — | — | 显式指定 main 遗留数据根（导入源）。探测顺序：`FENG_MAIN_DATA_DIR` → `<workdir>/.fengagent` → `~/.fengagent` → `<workdir>/data`，首个含 `sessions.db`/`graph.jsonl` 者胜 |
 | `FENG_LOG_LEVEL` | `logLevel` | `info` | 日志级别（debug/info/warn/error） |
-| `FENG_LOG_DIR` | — | `~/.fengagent/logs` | 日志目录 |
+| `FENG_LOG_DIR` | — | `<dataRoot>/logs` | 日志目录 |
 | `FENG_MCP_SERVERS` | — | — | MCP 服务器配置（JSON 格式） |
+
+**配置读取优先级（全链）**：`FENG_CONFIG_FILE`（显式路径，最高文件层）> `.fengagent-cordis/config.json`（分支级，`/model` `/provider` 只写这里）>
+项目 `.fengagent/config.json` > 全局 `~/.fengagent/config.json`（其后是环境变量 → CLI 参数）。
+
+## 多工作目录下的凭据可见性
+
+Provider 凭据默认从**当前工作目录**向上的配置层解析。某些宿主（如 Multica）
+每次对话都会在一个**全新的空工作目录**里拉起 `fengagent acp`，此时 cwd 下
+没有 `.fengagent/config.json`，凭据必须在工作目录之外可见，否则进程会在启动
+阶段因缺少 API Key 退出（宿主侧表现为「运行时初始化失败」）。
+
+三种做法（任选其一）：
+
+1. **补齐全局配置**（推荐）：在已配置好的项目目录执行
+
+   ```bash
+   fengagent runtime install
+   ```
+
+   它会把项目级 Provider 凭据**补齐**到 `~/.fengagent/config.json`（只补缺失项，
+   不覆盖已有值），使任意工作目录都能解析到凭据；加 `--no-global-config` 可跳过。
+
+2. **显式指定配置文件**：设置 `FENG_CONFIG_FILE=/path/to/config.json`。
+
+3. **由宿主注入环境变量**：如 `OPENAI_COMPATIBLE_API_KEY` /
+   `OPENAI_COMPATIBLE_BASE_URL`（宿主的运行时/智能体自定义环境变量）。
 
 ## 配置文件格式
 
-### 全局配置（`~/.fengagent/config.json`）
+### 全局配置（`~/.fengagent/config.json` — main 遗留，本分支仅只读回退）
 
 ```jsonc
 {
@@ -99,7 +127,7 @@
 }
 ```
 
-### 项目配置（`./.fengagent/config.json`）
+### 项目配置（`./.fengagent/config.json` — main 遗留，本分支仅只读回退；写入层为 `.fengagent-cordis/config.json`）
 
 ```jsonc
 {
@@ -175,28 +203,34 @@ max_turns: 20
 3. 提出改进建议
 ```
 
-### 插件（`./.fengagent/plugins/<name>/index.ts`）
+### 插件（Cordis 插件模型）
+
+本分支的插件是 **Cordis 插件**（函数 / 类 / 对象三种形态），通过 `ctx.plugin(plugin, config)` 装载；
+插件声明 `inject` 依赖的服务，依赖就绪后才 start（声明式装配、顺序无关）。内置插件
+`feng.model / feng.tools / feng.strategy / feng.context / feng.storage / feng.loop /
+feng.graph / feng.events / feng.rebuild` 分别挂到 `ctx.*` 服务（见 [EXTENDING.md](./EXTENDING.md)）。
+
+用户插件以模块路径装载：
 
 ```typescript
-import type { FengPlugin, PluginContext } from "@fengagent/core";
+// 示例：.fengagent/plugins/my-plugin.ts
+import type { Context } from "@fengagent/cordis";
 
-export default class MyPlugin implements FengPlugin {
-  name = "my-plugin";
-  version = "1.0.0";
-
-  async init(ctx: PluginContext) {
-    // 初始化逻辑
-  }
-
-  registerTools(registry: ToolRegistry) {
-    // 注册自定义工具
-  }
-
-  registerHooks(registry: HookRegistry) {
-    // 注册生命周期 Hook
-  }
+export default function myPlugin(ctx: Context, config: { greeting?: string }) {
+  // 依赖注入：声明需要 ctx.tools / ctx.graph，就绪后才执行
+  ctx.inject(["tools", "graph"], () => {
+    // 注册自定义工具到 ctx.tools；同时接入对话图 ctx.graph
+    ctx.tools.register({ /* ToolDefinition */ });
+  });
 }
 ```
+
+```typescript
+// 装配：createRuntime({ plugins: [{ id: "./.fengagent/plugins/my-plugin.ts", config: { greeting: "hi" } }] })
+```
+
+> 兼容：旧的 `.fengagent/plugins/<name>/index.ts`（导出 `FengPlugin` 类）加载器
+> （`packages/agent/src/plugin-loader.ts`）仍可用（经适配器薄包裹），但**推荐走 Cordis 插件**。
 
 ### Skills（`./.fengagent/skills/*.md`）
 
@@ -224,6 +258,10 @@ trigger: review|审查|code review
 | `--version` | 显示版本信息 |
 | `serve` | WebUI 服务模式 |
 | `--print "问题"` | 非交互模式（stdin → stdout） |
+| `acp` | ACP 服务模式（Multica 运行时集成） |
+| `runtime install` | 注册为 Multica 本地运行时，并把项目凭据补齐到全局配置 |
+| `runtime uninstall` | 移除 Multica 本地运行时注册 |
+| `--no-global-config` | 与 `runtime install` 同用：跳过凭据补齐 |
 
 ## TUI 命令：`/provider`（配置 Provider）
 
@@ -238,8 +276,8 @@ trigger: review|审查|code review
 
 ### 行为说明
 
-- **持久化路径**：写入项目级 `./.fengagent/config.json`（与现有配置 deepMerge 合并，保留其他键）；
-  下次启动 `loadConfig` 自动读取。
+- **持久化路径**：写入分支级 `./.fengagent-cordis/config.json`（与现有配置 deepMerge 合并，保留其他键；
+  main 的 `.fengagent/config.json` 只读回退，不被覆盖）；下次启动 `loadConfig` 自动读取。
 - **立即生效**：配置后自动调用 `createClientFromEnv` 重建 LLM Client，并通过
   `ReloadableLLMClient.setClient` 热替换到当前 Agent（`packages/llm/src/reloadable.ts`），
   无需重建 Agent；下一条消息即走新 Provider。
@@ -264,11 +302,11 @@ trigger: review|审查|code review
 | 命令 | 说明 |
 |------|------|
 | `/model list` | 列出当前 Provider 实际可用/已配置的模型。openai-compatible 会尝试拉取 `{baseUrl}/models` 真实目录（3s 超时），失败或未配置时回退到常见模型目录并标注当前模型 |
-| `/model <id>` | 切换模型：写入 `config.model`（openai-compatible 同时写 `openaiCompatibleModel`）→ 持久化到 `./.fengagent/config.json` → `reloadProvider` 重建并热替换 LLM Client → 更新当前会话 `session.model` |
+| `/model <id>` | 切换模型：写入 `config.model`（openai-compatible 同时写 `openaiCompatibleModel`）→ 持久化到 `./.fengagent-cordis/config.json` → `reloadProvider` 重建并热替换 LLM Client → 更新当前会话 `session.model` |
 
 ### 生效链路
 
-1. **持久化**：`writeConfigFile({ model, openaiCompatibleModel? })` 写入项目级 `./.fengagent/config.json`；
+1. **持久化**：`writeConfigFile({ model, openaiCompatibleModel? })` 写入分支级 `./.fengagent-cordis/config.json`；
 2. **热替换**：`reloadProvider`（`packages/cli/src/create-agent.ts`）重建 LLM Client 并 `setClient` 原子替换；
 3. **会话同步**：App 层把 `newModel` 写回 `session.model`；Agent Loop
    （`packages/agent/src/loop.ts`）每次 LLM 请求都以 `session.model` 作为 `request.model`，
@@ -276,3 +314,31 @@ trigger: review|审查|code review
 
 > 提示：`/model list` 在 openai-compatible 下返回的是服务端真实模型目录（如 DeepSeek 的
 > `deepseek-chat` / `deepseek-reasoner`），非硬编码列表。
+
+## 测评模块（`bun run eval`）
+
+读取 LLM Trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`）分析工具成功率 / 任务完成率 /
+错误率 / Token 用量 / KV Cache 命中率 / 模型对比，报告输出 `<数据根>/logs/eval-report-{date}.md`：
+
+| 命令 | 说明 |
+|------|------|
+| `bun run eval` | 分析今天的日志 |
+| `bun run eval --date=2026-08-16` | 分析指定日期 |
+| `bun run eval --all` | 分析全部日志 |
+| `bun run eval --file=<路径>` | 分析指定文件 |
+| `bun run eval --exclude-model=test-model,custom-model` | 排除某些模型（如测试 mock） |
+
+## 事件溯源 CLI（`scripts/events-migrate.ts`）
+
+把 `packages/events` 的导出 / 导入 / 重建 / 对账能力暴露为命令行（数据根默认
+`<workdir>/.fengagent-cordis`，可用 `FENG_DATA_DIR` 覆盖）：
+
+| 命令 | 说明 |
+|------|------|
+| `bun run scripts/events-migrate.ts list` | 列出有事件日志的会话 |
+| `bun run scripts/events-migrate.ts verify [--session <id>]` | 事件链校验 + 双写对账（投影 === 读模型） |
+| `bun run scripts/events-migrate.ts export [--dir <目录>] [--session <id>]` | 整库/单会话导出可移植事件文件 |
+| `bun run scripts/events-migrate.ts import <目录>` | 导入可移植事件文件（幂等去重，只写事件日志） |
+| `bun run scripts/events-migrate.ts rebuild [--prune]` | 以事件为准重建读模型（SQLite 降级为读模型） |
+
+完整的小白操作步骤与预期输出见 [GUIDE-CORDIS.md](./GUIDE-CORDIS.md) 第 14 节。

@@ -54,13 +54,22 @@ export { toAgentError } from "./event.ts";
 export {
   ConfigSchema,
   ConfigLayerPriority,
+  PORTABLE_CREDENTIAL_KEYS,
+  extractPortableCredentials,
+  hasProviderCredentials,
   loadConfig,
   loadConfigFromEnv,
   maskApiKey,
+  promoteCredentialsToGlobal,
   readConfigFileSync,
   writeConfigFile,
 } from "./config.ts";
-export type { Config, PartialConfig, ConfigLayer } from "./config.ts";
+export type {
+  Config,
+  PartialConfig,
+  ConfigLayer,
+  PortableCredentialKey,
+} from "./config.ts";
 
 export type {
   SquadMemberStatus,

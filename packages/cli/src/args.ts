@@ -17,6 +17,10 @@ export interface ParsedArgs {
   serve: boolean;
   /** 是否启动 ACP 服务模式 */
   acp: boolean;
+  /** Multica 运行时注册子命令（runtime install / runtime uninstall） */
+  runtime?: "install" | "uninstall";
+  /** runtime install 时跳过「项目凭据补齐到全局配置」 */
+  noGlobalConfig: boolean;
   /** 是否强制非交互模式（--print） */
   print: boolean;
   /** 额外的位置参数（非选项参数） */
@@ -53,6 +57,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     serve: false,
     acp: false,
     print: false,
+    noGlobalConfig: false,
     positional: [],
     help: false,
     version: false,
@@ -80,8 +85,24 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "acp":
         result.acp = true;
         break;
+      case "runtime": {
+        const sub = argv[i + 1];
+        if (sub === "install" || sub === "uninstall") {
+          result.runtime = sub;
+          i++;
+        } else {
+          throw {
+            message: `Unknown runtime subcommand: ${sub ?? "(missing)"} (expect: install | uninstall)`,
+            arg,
+          } satisfies ArgParseError;
+        }
+        break;
+      }
       case "--print":
         result.print = true;
+        break;
+      case "--no-global-config":
+        result.noGlobalConfig = true;
         break;
       case "--help":
       case "-h":
@@ -166,18 +187,23 @@ export function getHelpText(): string {
 用法: feng [选项] [提示文本]
       feng serve [选项]
       feng acp [选项]
+      feng runtime install|uninstall
 
 选项:
   -m, --model <id>       指定模型 ID
   -p, --port <n>         服务端口 (默认: 3000)
   -s, --session <id>     恢复已有会话
   --print                强制非交互模式（输出到 stdout）
+  --no-global-config     runtime install 时跳过「项目凭据补齐到全局配置」
   -h, --help             显示帮助
   -v, --version          显示版本
 
 子命令:
   serve                  启动 WebUI 服务模式
   acp                    启动 ACP 服务模式（Multica 运行时集成）
+  runtime install        注册为 Multica 本地运行时（写入 ~/.multica/runtimes/fengagent.json，
+                         并把项目级 Provider 凭据补齐到 ~/.fengagent/config.json）
+  runtime uninstall      移除 Multica 本地运行时注册
 
 示例:
   feng "帮我读取 package.json"
@@ -185,6 +211,10 @@ export function getHelpText(): string {
   feng --session abc-123 "继续上次对话"
   echo "修复这个 bug" | feng
   feng serve --port 8080
+  feng runtime install
+
+环境变量:
+  FENG_CONFIG_FILE       显式指定配置文件路径（最高文件层，不依赖工作目录）
 
 交互命令 (TUI 模式):
   /help                  显示帮助

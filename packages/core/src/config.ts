@@ -2,7 +2,7 @@
  * @fengagent/core — 配置系统
  *
  * ConfigSchema (Zod)、ConfigLayer、loadConfig 函数。
- * 配置分层加载：内置默认值 → 全局配置 → 项目配置 → 环境变量 → CLI 参数。
+ * 配置分层加载：内置默认值 → 全局配置 → 项目配置 → 分支级配置（.fengagent-cordis）→ 环境变量 → CLI 参数。
  * 参考 ARCHITECTURE.md 第 5 节。
  */
 
@@ -18,7 +18,9 @@ import {
   COMPACT_BUFFER,
   COMPACT_KEEP_TOKENS,
   COMPACT_THRESHOLD,
+  CONFIG_FILE_ENV,
   CONTEXT_WINDOW,
+  CORDIS_CONFIG_PATH,
   DEFAULT_CORS_ORIGIN,
   DEFAULT_DATA_DIR,
   DEFAULT_LOG_LEVEL,
@@ -188,6 +190,121 @@ function applyEnvVars(
 }
 
 // ──────────────────────────────────────────────
+// 跨工作目录可移植的凭据
+// ──────────────────────────────────────────────
+
+/**
+ * 需要跨工作目录共享的配置键（Provider 凭据 + 模型选择）。
+ *
+ * 只有这些键会被「提升」到全局配置 `~/.fengagent/config.json`：它们是运行
+ * 模型调用的最小必要集合，与具体工作目录无关；其余键（dataDir、工具权限、
+ * 端口等）保持项目/分支级语义，不参与提升。
+ */
+export const PORTABLE_CREDENTIAL_KEYS = [
+  "provider",
+  "model",
+  "smallModel",
+  "fallbackModel",
+  "anthropicApiKey",
+  "anthropicBaseUrl",
+  "openaiApiKey",
+  "openaiBaseUrl",
+  "openaiCompatibleApiKey",
+  "openaiCompatibleBaseUrl",
+  "openaiCompatibleModel",
+  "googleApiKey",
+  "googleBaseUrl",
+] as const;
+
+/** 可移植凭据键的联合类型 */
+export type PortableCredentialKey = (typeof PORTABLE_CREDENTIAL_KEYS)[number];
+
+/**
+ * 从配置中提取可移植凭据（仅保留已显式赋值的键，忽略空串）。
+ *
+ * @param config - 任意配置层（项目级 / 分支级 / 已合并配置）
+ * @returns 仅含凭据类键的补丁；无任何有效键时返回空对象
+ */
+export function extractPortableCredentials(
+  config: PartialConfig,
+): PartialConfig {
+  const patch: Record<string, unknown> = {};
+  for (const key of PORTABLE_CREDENTIAL_KEYS) {
+    const value = (config as Record<string, unknown>)[key];
+    if (value !== undefined && value !== null && value !== "") {
+      patch[key] = value;
+    }
+  }
+  return patch as PartialConfig;
+}
+
+/**
+ * 判断配置中是否含当前 Provider 所需的凭据。
+ *
+ * 用于启动期诊断：缺失时给出可执行的修复提示，而不是让进程静默退出。
+ * bedrock 走 AWS 环境变量（AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY），
+ * 配置文件中不含凭据，故一律视为「需由环境提供」。
+ *
+ * @param config - 已合并的配置（或任意配置层）
+ * @returns 凭据是否齐备
+ */
+export function hasProviderCredentials(config: PartialConfig): boolean {
+  switch (config.provider ?? DEFAULT_PROVIDER) {
+    case "anthropic":
+      return Boolean(config.anthropicApiKey);
+    case "openai":
+      return Boolean(config.openaiApiKey);
+    case "openai-compatible":
+      return Boolean(config.openaiCompatibleApiKey && config.openaiCompatibleBaseUrl);
+    case "google":
+      return Boolean(config.googleApiKey);
+    case "bedrock":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * 把项目级 Provider 凭据「提升」到全局配置 `~/.fengagent/config.json`。
+ *
+ * 背景：Multica 等宿主每次对话都在全新的空工作目录里拉起运行时时，cwd 下没有
+ * `.fengagent/config.json`，只有全局配置能让凭据在任何工作目录可见。
+ *
+ * 语义为「补齐」而非「覆盖」：全局配置中已存在且非空的键保持不动，避免覆盖
+ * 用户已经验证可用的全局凭据；只有缺失的键才会被写入。
+ *
+ * @param config - 凭据来源配置（通常是项目级 `.fengagent/config.json`）
+ * @param options - 可选：全局配置文件路径覆盖（测试用）
+ * @returns 实际写入的路径与被写入的键；无新键可写时返回 null
+ */
+export function promoteCredentialsToGlobal(
+  config: PartialConfig,
+  options?: { globalPath?: string },
+): { path: string; keys: PortableCredentialKey[] } | null {
+  const source = extractPortableCredentials(config);
+  const filePath = options?.globalPath ?? GLOBAL_CONFIG_PATH;
+  const existing = readConfigFileSync(filePath);
+
+  const patch: Record<string, unknown> = {};
+  const keys: PortableCredentialKey[] = [];
+  for (const key of PORTABLE_CREDENTIAL_KEYS) {
+    const value = (source as Record<string, unknown>)[key];
+    if (value === undefined) continue;
+    const current = (existing as Record<string, unknown>)[key];
+    if (current !== undefined && current !== null && current !== "") continue;
+    patch[key] = value;
+    keys.push(key);
+  }
+
+  if (keys.length === 0) {
+    return null;
+  }
+  const path = writeConfigFile(patch, { path: filePath });
+  return { path, keys };
+}
+
+// ──────────────────────────────────────────────
 // 文件读取辅助
 // ──────────────────────────────────────────────
 
@@ -248,7 +365,8 @@ export function maskApiKey(key: string | undefined | null): string {
 // ──────────────────────────────────────────────
 
 /**
- * 将配置补丁合并写入配置文件（默认项目级 `./.fengagent/config.json`）。
+ * 将配置补丁合并写入配置文件（默认分支级 `./.fengagent-cordis/config.json`；
+ * 项目级 `./.fengagent/config.json` 保持只读回退，不被 /model /provider 覆盖）。
  *
  * 写入策略：
  * 1. 读取现有文件内容（不存在视为空对象）
@@ -291,8 +409,10 @@ export function writeConfigFile(
  * 1. 内置默认值（ConfigSchema.parse({})）
  * 2. 全局配置（~/.fengagent/config.json）
  * 3. 项目配置（./.fengagent/config.json）
- * 4. 环境变量（FENG_* 系列）
- * 5. 命令行参数（cliArgs）
+ * 4. 分支级配置（./.fengagent-cordis/config.json — 新分支写入层，/model /provider 只落这里）
+ * 5. 显式配置路径（`FENG_CONFIG_FILE` / `configFilePath`）— 不依赖 cwd 的最后兜底
+ * 6. 环境变量（FENG_* 系列）
+ * 7. 命令行参数（cliArgs）
  *
  * 最终通过 ConfigSchema 校验，确保类型安全。
  *
@@ -304,11 +424,15 @@ export async function loadConfig(
   options?: {
     globalConfigPath?: string;
     projectConfigPath?: string;
+    cordisConfigPath?: string;
+    /** 显式配置文件路径（未传时读取 FENG_CONFIG_FILE 环境变量） */
+    configFilePath?: string;
     env?: Record<string, string | undefined>;
   },
 ): Promise<Config> {
   const globalPath = options?.globalConfigPath ?? GLOBAL_CONFIG_PATH;
   const projectPath = options?.projectConfigPath ?? PROJECT_CONFIG_PATH;
+  const cordisPath = options?.cordisConfigPath ?? CORDIS_CONFIG_PATH;
   const env = options?.env ?? process.env;
 
   // 1. 内置默认值
@@ -320,14 +444,26 @@ export async function loadConfig(
   // 3. 项目配置
   const projectConfig = await readConfigFile(projectPath);
 
+  // 4. 分支级配置（.fengagent-cordis/config.json — 最高文件层）
+  const cordisConfig = await readConfigFile(cordisPath);
+
   // 逐层合并（低优先级 → 高优先级）
   let merged = deepMerge(defaults, globalConfig);
   merged = deepMerge(merged, projectConfig);
+  merged = deepMerge(merged, cordisConfig);
 
-  // 4. 环境变量
+  // 5. 显式配置路径 — cwd 之外的最后兜底（宿主可在全新空工作目录里拉起运行时）
+  const explicitPath =
+    options?.configFilePath ?? envStr(env, CONFIG_FILE_ENV, "");
+  if (explicitPath) {
+    const explicitConfig = await readConfigFile(explicitPath);
+    merged = deepMerge(merged, explicitConfig);
+  }
+
+  // 6. 环境变量
   const withEnv = applyEnvVars(merged, env);
 
-  // 5. 命令行参数
+  // 7. 命令行参数
   if (cliArgs) {
     merged = deepMerge(withEnv, cliArgs);
   } else {

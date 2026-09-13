@@ -55,14 +55,35 @@ export const MAX_TURNS = 50 as const;
 /** 默认日志级别 */
 export const DEFAULT_LOG_LEVEL = "info" as const;
 
-/** 默认数据存储目录 */
+/** 默认数据存储目录（main 分支默认数据根，相对 workdir） */
 export const DEFAULT_DATA_DIR = "~/.fengagent" as const;
+
+/** 新分支数据目录名（相对 workdir） */
+export const CORDIS_DATA_DIR = ".fengagent-cordis" as const;
+
+/** main 分支数据目录名（相对 workdir，只读 / 导入源） */
+export const MAIN_DATA_DIR = ".fengagent" as const;
+
+/** main 分支全局数据根（~/.fengagent，只读 / 导入源） */
+export const MAIN_GLOBAL_DATA_DIR = "~/.fengagent" as const;
+
+/** 配置文件路径（分支级） */
+export const CORDIS_CONFIG_PATH = ".fengagent-cordis/config.json" as const;
 
 /** 配置文件路径（项目级） */
 export const PROJECT_CONFIG_PATH = ".fengagent/config.json" as const;
 
 /** 配置文件路径（全局级） */
 export const GLOBAL_CONFIG_PATH = "~/.fengagent/config.json" as const;
+
+/**
+ * 显式配置文件路径的环境变量名（最高文件层）。
+ *
+ * 用于运行时不依赖工作目录即可拿到凭据的场景：Multica 等宿主每次对话都会在
+ * 全新的空工作目录里拉起 `fengagent acp`，此时 cwd 下没有 `.fengagent/config.json`，
+ * 只能靠全局配置或本变量指向的配置文件解析 Provider 凭据。
+ */
+export const CONFIG_FILE_ENV = "FENG_CONFIG_FILE" as const;
 
 /** Token 估算系数（字符数 / 4） */
 export const TOKEN_ESTIMATE_RATIO = 4 as const;
