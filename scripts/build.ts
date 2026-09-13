@@ -18,14 +18,18 @@
  */
 
 import { mkdir, rm, stat, rename } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const entry = resolve(root, "packages/cli/src/binary-entry.ts");
 const distDir = resolve(root, "dist");
 
-// 版本号与构建时间（通过 --define 注入到编译产物中）
-const VERSION = "0.1.0";
+// 版本号（单一事实来源：package.json，避免编译产物自报版本与包版本不一致）
+// 与构建时间（通过 --define 注入到编译产物中）
+const VERSION = JSON.parse(
+  readFileSync(resolve(root, "package.json"), "utf8"),
+).version as string;
 const BUILD_TIME = new Date().toISOString();
 
 // 所有跨平台编译目标
