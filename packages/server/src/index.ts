@@ -37,5 +37,5 @@ export { createModelRoutes, getDefaultModels } from "./routes/models.ts";
 export { createHealthRoutes } from "./routes/health.ts";
 
 // ACP 适配层
-export { createAcpApp, startAcpServer } from "./acp-server.ts";
+export { createAcpApp, startAcpServer, resolvePreferredAcpPort } from "./acp-server.ts";
 export type { AcpServerOptions } from "./acp-server.ts";

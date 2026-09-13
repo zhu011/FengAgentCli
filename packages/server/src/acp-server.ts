@@ -235,9 +235,69 @@ export function createAcpApp(options: AcpServerOptions): Hono {
 }
 
 /**
+ * 解析 ACP 端点的首选端口。
+ *
+ * 优先级：`FENG_ACP_PORT`（宿主显式指定，便于固定端口调试/排查）
+ * → `config.serverPort + 1`（历史默认，保持人工调试时的可预期性）。
+ * 返回 0 表示直接由操作系统分配临时端口。
+ *
+ * @param config - 运行时配置
+ * @returns 首选端口
+ */
+export function resolvePreferredAcpPort(config: Config): number {
+  const raw = process.env.FENG_ACP_PORT;
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) {
+      return parsed;
+    }
+  }
+  return config.serverPort + 1;
+}
+
+/**
+ * 在首选端口上启动 ACP 服务；端口被占用时回退到操作系统分配的临时端口。
+ *
+ * 为什么必须回退：Multica 守护进程每次对话都会**新起一个** ACP 进程
+ * （`fengagent acp`），端口写死时只要有任意一个别的进程占着它——
+ * 残留的上一次 ACP 实例、人工调试实例、本地 dev server——守护进程侧
+ * 就只会看到子进程秒退，报成无从定位的
+ * `hermes initialize failed: hermes process exited`
+ * （子进程 stderr 的真实原因是 Bun 的
+ * `Failed to start server. Is port <n> in use?`）。
+ *
+ * @param app - ACP Hono 应用
+ * @param preferredPort - 首选端口；0 表示直接由系统分配
+ * @returns Bun 服务实例
+ */
+function serveAcpWithFallback(
+  app: Hono,
+  preferredPort: number,
+): ReturnType<typeof Bun.serve> {
+  const bind = (port: number) =>
+    Bun.serve({ port, hostname: "127.0.0.1", fetch: app.fetch });
+
+  try {
+    return bind(preferredPort);
+  } catch (err) {
+    if (preferredPort === 0) {
+      throw err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    // 不静默降级：把「哪个端口被占、实际用了哪个」写进 stderr，宿主日志可见
+    console.error(
+      `FengAgent ACP 首选端口 ${preferredPort} 不可用（${message}），` +
+        "改用操作系统分配的临时端口",
+    );
+    return bind(0);
+  }
+}
+
+/**
  * 启动 ACP 兼容服务。
  *
- * 监听指定端口，提供 ACP 协议接口供 Multica 守护进程调用。
+ * 监听端口后把**真实端口**打印到 stdout，供宿主（Multica 守护进程）发现：
+ * `FengAgent ACP server listening on http://127.0.0.1:<port>`。
  *
  * @param options - 服务选项
  * @returns Bun 服务实例
@@ -245,16 +305,12 @@ export function createAcpApp(options: AcpServerOptions): Hono {
 export function startAcpServer(options: AcpServerOptions): ReturnType<typeof Bun.serve> {
   const app = createAcpApp(options);
 
-  // ACP 服务使用独立端口，默认 0（随机端口，由 Multica 守护进程发现）
-  const port = options.config.serverPort + 1;
+  const preferredPort = resolvePreferredAcpPort(options.config);
+  const server = serveAcpWithFallback(app, preferredPort);
 
-  const server = Bun.serve({
-    port,
-    hostname: "127.0.0.1",
-    fetch: app.fetch,
-  });
-
-  console.log(`FengAgent ACP server listening on http://127.0.0.1:${port}`);
+  console.log(
+    `FengAgent ACP server listening on http://127.0.0.1:${server.port}`,
+  );
 
   return server;
 }
