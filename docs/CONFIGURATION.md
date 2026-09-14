@@ -104,6 +104,9 @@ Provider 凭据默认从**当前工作目录**向上的配置层解析。某些�
 3. **由宿主注入环境变量**：如 `OPENAI_COMPATIBLE_API_KEY` /
    `OPENAI_COMPATIBLE_BASE_URL`（宿主的运行时/智能体自定义环境变量）。
 
+如果凭据仍然解析不到，`fengagent acp` 不再让进程静默退出，而是把「查了哪些位置 +
+怎么修」写进 stderr，并让建立会话的请求返回同一条可执行原因，宿主可以直接透出。
+
 ## 配置文件格式
 
 ### 全局配置（`~/.fengagent/config.json` — main 遗留，本分支仅只读回退）
@@ -258,7 +261,8 @@ trigger: review|审查|code review
 | `--version` | 显示版本信息 |
 | `serve` | WebUI 服务模式 |
 | `--print "问题"` | 非交互模式（stdin → stdout） |
-| `acp` | ACP 服务模式（Multica 运行时集成） |
+| `acp` | ACP 服务模式（Multica 运行时集成）：**stdio JSON-RPC**，stdout 专用协议、日志走 stderr |
+| `--acp-http` | 与 `acp` 同用：改走 HTTP + SSE（人工调试 / WebUI），端口见 `FENG_ACP_PORT` |
 | `runtime install` | 注册为 Multica 本地运行时，并把项目凭据补齐到全局配置 |
 | `runtime uninstall` | 移除 Multica 本地运行时注册 |
 | `--no-global-config` | 与 `runtime install` 同用：跳过凭据补齐 |

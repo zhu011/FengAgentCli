@@ -67,10 +67,16 @@ bun run serve                         # WebUI：访问 http://127.0.0.1:3000
 bun link && bun link fengagent   # 本仓库本地链接安装（npm 上的 fengagent 尚未发布，npm install -g 会 404）
 npm install -g ./fengagent-0.2.0.tgz   # 本地打包安装：先运行 bun run pack 生成 tgz
 fengagent                  # 任意目录直接进入 TUI
-fengagent acp              # ACP 服务（Multica 运行时）
+fengagent acp              # ACP 服务（Multica 运行时）：stdio JSON-RPC
+fengagent acp --acp-http   # ACP 服务改走 HTTP + SSE（人工调试 / WebUI）
 fengagent runtime install  # 注册为 Multica 本地运行时（并把项目凭据补齐到 ~/.fengagent/config.json）
 ```
 
+> **`fengagent acp` 的两种传输**：默认 **stdio JSON-RPC** —— Multica 桌面守护进程把运行时
+> 当子进程拉起，通过 stdin/stdout 跑 ACP（Agent Client Protocol），因此 stdout 是协议专用
+> 通道、日志全部走 stderr。`--acp-http` 才监听 HTTP + SSE（端口见 `FENG_ACP_PORT`），
+> 供人工调试或 WebUI 使用。
+>
 > Multica 每次对话都在**全新的空工作目录**里拉起运行时，读不到项目目录下的
 > `.fengagent/config.json`。`fengagent runtime install` 会把项目凭据补齐到全局配置
 > `~/.fengagent/config.json`（只补缺失项，不覆盖已有值），使凭据在任意工作目录可见。

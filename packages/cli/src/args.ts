@@ -17,6 +17,11 @@ export interface ParsedArgs {
   serve: boolean;
   /** 是否启动 ACP 服务模式 */
   acp: boolean;
+  /**
+   * ACP 传输层：`false`（默认）= stdio JSON-RPC（Multica 守护进程面向的协议），
+   * `true` = 旧 HTTP + SSE 服务（供 WebUI / 人工调试）。
+   */
+  acpHttp: boolean;
   /** Multica 运行时注册子命令（runtime install / runtime uninstall） */
   runtime?: "install" | "uninstall";
   /** runtime install 时跳过「项目凭据补齐到全局配置」 */
@@ -56,6 +61,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const result: ParsedArgs = {
     serve: false,
     acp: false,
+    acpHttp: false,
     print: false,
     noGlobalConfig: false,
     positional: [],
@@ -84,6 +90,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "acp":
         result.acp = true;
+        break;
+      case "--acp-http":
+        result.acpHttp = true;
         break;
       case "runtime": {
         const sub = argv[i + 1];
@@ -194,6 +203,7 @@ export function getHelpText(): string {
   -p, --port <n>         服务端口 (默认: 3000)
   -s, --session <id>     恢复已有会话
   --print                强制非交互模式（输出到 stdout）
+  --acp-http             acp 子命令改用 HTTP + SSE 传输（默认走 stdio JSON-RPC）
   --no-global-config     runtime install 时跳过「项目凭据补齐到全局配置」
   -h, --help             显示帮助
   -v, --version          显示版本
@@ -201,6 +211,9 @@ export function getHelpText(): string {
 子命令:
   serve                  启动 WebUI 服务模式
   acp                    启动 ACP 服务模式（Multica 运行时集成）
+                         - 默认：stdio JSON-RPC（stdout 专用于协议，日志走 stderr），
+                           即 Multica 守护进程 spawn "fengagent acp" 时使用的传输
+                         - --acp-http：改为监听 HTTP + SSE（供 WebUI / 人工调试）
   runtime install        注册为 Multica 本地运行时（写入 ~/.multica/runtimes/fengagent.json，
                          并把项目级 Provider 凭据补齐到 ~/.fengagent/config.json）
   runtime uninstall      移除 Multica 本地运行时注册
@@ -211,10 +224,13 @@ export function getHelpText(): string {
   feng --session abc-123 "继续上次对话"
   echo "修复这个 bug" | feng
   feng serve --port 8080
+  feng acp                       # stdio JSON-RPC ACP（Multica 守护进程调用）
+  feng acp --acp-http            # HTTP + SSE ACP（人工调试 / WebUI）
   feng runtime install
 
 环境变量:
   FENG_CONFIG_FILE       显式指定配置文件路径（最高文件层，不依赖工作目录）
+  FENG_ACP_PORT          acp --acp-http 的首选监听端口（被占用时回退到临时端口）
 
 交互命令 (TUI 模式):
   /help                  显示帮助

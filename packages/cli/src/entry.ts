@@ -31,6 +31,16 @@ const log = createLogger("cli");
  * 4. 默认 → Ink TUI 交互模式
  */
 export async function main(argv: string[]): Promise<void> {
+  // ACP stdio 模式下 stdout 是协议专用通道（换行分隔 JSON-RPC 帧）。
+  // 必须在**任何**输出之前把 console / process.stdout 改道到 stderr：
+  // @fengagent/shared 的 logger 用 console.log（stdout）输出 info 日志，
+  // 哪怕只多一个字节，宿主的 NDJSON 解析就会失败，最终只报「进程退出」。
+  const stdioAcpMode = argv.includes("acp") && !argv.includes("--acp-http");
+  if (stdioAcpMode) {
+    const { redirectConsoleToStderr } = await import("@fengagent/server/acp-stdio");
+    redirectConsoleToStderr();
+  }
+
   // Windows 中文控制台（代码页 936）下确保 UTF-8 输出，避免 TUI 中文/emoji 乱码
   ensureWindowsConsoleUtf8();
 
@@ -89,85 +99,14 @@ export async function main(argv: string[]): Promise<void> {
   }
 
   // acp 子命令 — 启动 ACP 服务（Multica 运行时集成）
+  //
+  // 两种传输：
+  // - 默认 stdio JSON-RPC：Multica 守护进程把运行时当子进程拉起（`fengagent acp`），
+  //   用 stdin/stdout 管道跑 ACP，stdout 专用于协议帧。
+  // - `--acp-http`：旧 HTTP + SSE 服务，供 WebUI / 人工调试。
   if (parsed.acp) {
-    const { loadConfig } = await import("@fengagent/core");
-    const { Agent } = await import("@fengagent/agent");
-    const { createClientFromEnv } = await import("@fengagent/llm");
-    const {
-      createToolRegistry,
-      createToolExecutor,
-      registerBuiltinTools,
-      createPermissionChecker,
-      createHookRegistry,
-    } = await import("@fengagent/tools");
-    const { createContextManager } = await import("@fengagent/context");
-    const { startAcpServer, buildEnvForLLM } = await import("@fengagent/server");
-
-    // 与 TUI/serve 路径一致：分层加载配置（默认值 → 全局 ~/.fengagent/config.json
-    // → 项目 .fengagent/config.json → 分支 .fengagent-cordis/config.json → FENG_* 环境变量），
-    // 再经 buildEnvForLLM 把配置文件中的 API Key / BaseURL / Model 注入为 LLM 环境变量。
-    // 修复：此前用 loadConfigFromEnv() + createClientFromEnv() 只读环境变量，
-    // 未读配置文件，导致 FENG_PROVIDER=openai-compatible 时
-    // “OPENAI_COMPATIBLE_API_KEY is required” 运行时报错。
-    const config = await loadConfig();
-    const envForLLM = buildEnvForLLM(config);
-    let llmClient: import("@fengagent/llm").LLMClient;
-    try {
-      llmClient = createClientFromEnv(envForLLM).client;
-    } catch (err) {
-      // 凭据缺失时不静默退出：Multica 只能看到 "hermes initialize failed:
-      // hermes process exited"，无法定位。这里把「查了哪些位置、怎么修」写进
-      // stderr 与日志，宿主日志里可以直接看到可执行的修复步骤。
-      const message = err instanceof Error ? err.message : String(err);
-      const lines = [
-        `无法解析 Provider 凭据：${message}`,
-        `  工作目录: ${process.cwd()}`,
-        "  已查找的凭据来源: ./.fengagent/config.json、./.fengagent-cordis/config.json、~/.fengagent/config.json" +
-          (process.env.FENG_CONFIG_FILE ? `、FENG_CONFIG_FILE=${process.env.FENG_CONFIG_FILE}` : ""),
-        "  修复方式（任选其一）:",
-        "    1) 在已配置好的项目目录执行 `fengagent runtime install`，" +
-          "把项目凭据补齐到 ~/.fengagent/config.json（任意工作目录均可见）",
-        "    2) 设置 FENG_CONFIG_FILE 指向凭据配置文件",
-        "    3) 由宿主注入 Provider 环境变量（如 OPENAI_COMPATIBLE_API_KEY / OPENAI_COMPATIBLE_BASE_URL）",
-      ];
-      const hint = lines.join("\n");
-      log.error("acp", hint);
-      process.stderr.write(`Fatal: ${hint}\n`);
-      process.exit(1);
-    }
-    const workdir = process.cwd();
-
-    const hookRegistry = createHookRegistry();
-    const permissionChecker = createPermissionChecker(workdir);
-
-    function createAcpAgent(): InstanceType<typeof Agent> {
-      const toolRegistry = createToolRegistry();
-      registerBuiltinTools(toolRegistry);
-
-      const toolExecutor = createToolExecutor(permissionChecker, hookRegistry);
-      const contextManager = createContextManager({
-        config: {
-          contextWindow: config.contextWindow,
-          compactThreshold: config.compactThreshold,
-          compactKeepTokens: config.compactKeepTokens,
-          disableCompact: config.disableCompact,
-          smallModel: config.smallModel,
-        },
-        summaryGenerator: llmClient,
-        // ACP 路径同样禁用 AGENTS.md 注入（与对话卡死修复一致，防止运行时指令注入系统提示）
-        systemContextOptions: { workdir, loadAgentsMd: false },
-      });
-      return new Agent({
-        llmClient,
-        toolRegistry,
-        toolExecutor,
-        contextManager,
-        config,
-        workdir,
-      });
-    }
-
-    startAcpServer({ config, createAgent: createAcpAgent });
+    const { startAcpMode } = await import("./acp-mode.ts");
+    await startAcpMode({ http: parsed.acpHttp });
     return;
   }
 

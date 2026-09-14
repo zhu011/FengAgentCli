@@ -4,6 +4,27 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — ACP 走 stdio JSON-RPC（Multica 运行时握手/建会话）
+
+### 修复
+
+- **Multica 里「准备会话」一直不启动 / 报「hermes initialize failed: hermes process exited」** — Multica 守护进程把本地运行时当**子进程**拉起，走 stdin/stdout 上的 ACP（Agent Client Protocol）JSON-RPC；此前 `fengagent acp` 只监听 HTTP + SSE 且从不读 stdin，握手无从完成，宿主只能看到子进程退出：
+  - `fengagent acp` 默认改为 **stdio JSON-RPC**：`initialize` / `authenticate` / `session/new` / `session/prompt` / `session/cancel`（`session/set_model` 容错支持），方法名、字段形状、JSON-RPC 错误码与措辞严格对标同族 `dsh-acp`（`packages/server/src/acp-stdio.ts`）；
+  - **stdout 成为协议专用通道**：`console` 与 `process.stdout` 在进程启动早期即改道 stderr，协议帧经模块加载时捕获的原始 stdout 写出——任何非协议字节都会破坏 NDJSON 握手（`redirectConsoleToStderr`）；
+  - 助手文本按 `session/update` 的 `agent_message_chunk` **流式**推送，思考/工具调用/用量分别推 `agent_thought_chunk` / `tool_call` / `tool_call_update` / `usage_update`；
+  - **凭据缺失不再让进程退出**：改为 `session/new` 返回带可执行修复步骤的 JSON-RPC 错误，宿主可原样透出真正原因（HTTP 模式仍直接退出）；
+  - `session/new` 使用宿主给的 `cwd` 作为会话工作目录（权限配置按该目录解析）；
+  - 旧 HTTP + SSE 传输保留在 `fengagent acp --acp-http`（供 WebUI / 人工调试）；
+  - ACP 模式装配抽到 `packages/cli/src/acp-mode.ts`（配置分层加载 → 凭据解析 → 工具/权限/上下文 → Agent 工厂 → 传输），`entry.ts` 只做路由。
+
+### 测试
+
+- `packages/server/src/__tests__/acp-stdio.test.ts`（20 项）：握手能力声明与协议版本、错误码/措辞、`session/new` 的 cwd 与（非空）mcpServers 容忍、完整一轮的事件形状与 `stopReason`、通知先于响应、取消结算 `cancelled`、错误事件以 `-32603` 拒绝、并发 prompt 拒绝、协议通道纯净性、stdin 关闭后不再写帧。
+
+### 文档
+
+- `README.md` / `docs/CONFIGURATION.md`：`fengagent acp` 两种传输的用途与切换方式，`FENG_ACP_PORT` 归属 HTTP 模式。
+
 ## [Unreleased] — 渲染进程多工作目录凭据修复（Multica 运行时启动失败）
 
 ### 修复
