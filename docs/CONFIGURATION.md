@@ -258,7 +258,8 @@ trigger: review|审查|code review
 | `--version` | 显示版本信息 |
 | `serve` | WebUI 服务模式 |
 | `--print "问题"` | 非交互模式（stdin → stdout） |
-| `acp` | ACP 服务模式（Multica 运行时集成） |
+| `acp` | ACP 服务模式（Multica 运行时集成）：**stdio JSON-RPC**，stdout 专用协议、日志走 stderr |
+| `--acp-http` | 与 `acp` 同用：改走 HTTP + SSE（人工调试 / WebUI），端口见 `FENG_ACP_PORT` |
 | `runtime install` | 注册为 Multica 本地运行时，并把项目凭据补齐到全局配置 |
 | `runtime uninstall` | 移除 Multica 本地运行时注册 |
 | `--no-global-config` | 与 `runtime install` 同用：跳过凭据补齐 |

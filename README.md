@@ -62,8 +62,14 @@ bun run serve                         # WebUI：访问 http://127.0.0.1:3000
 ```bash
 bun link && bun link fengagent   # 本仓库本地链接安装（项目根执行；main 无 pack 脚本）
 fengagent                  # 任意目录直接进入 TUI
-fengagent acp              # ACP 服务（Multica 运行时）
+fengagent acp              # ACP 服务（Multica 运行时）：stdio JSON-RPC
+fengagent acp --acp-http   # ACP 服务改走 HTTP + SSE（人工调试 / WebUI）
 ```
+
+> **`fengagent acp` 的两种传输**：默认 **stdio JSON-RPC** —— Multica 桌面守护进程把运行时
+> 当子进程拉起，通过 stdin/stdout 跑 ACP（Agent Client Protocol），因此 stdout 是协议专用
+> 通道、日志全部走 stderr。`--acp-http` 才监听 HTTP + SSE（端口见 `FENG_ACP_PORT`），
+> 供人工调试或 WebUI 使用。
 
 > ⚠️ `npm install -g fengagent` 暂不可用：该包尚未发布到 npm（registry 返回 404）。请用上面的本地方式（`bun link`，或 `bun run build:binary` 编译独立二进制）。
 

@@ -6,7 +6,9 @@
     ".": "./src/index.ts",
     "./server": "./src/server.ts",
     "./sse": "./src/sse.ts",
-    "./session-manager": "./src/session-manager.ts"
+    "./session-manager": "./src/session-manager.ts",
+    "./acp-server": "./src/acp-server.ts",
+    "./acp-stdio": "./src/acp-stdio.ts"
   },
   "publishConfig": {
     "access": "public"

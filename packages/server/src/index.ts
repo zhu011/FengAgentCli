@@ -36,6 +36,24 @@ export { createSessionRoutes } from "./routes/sessions.ts";
 export { createModelRoutes, getDefaultModels } from "./routes/models.ts";
 export { createHealthRoutes } from "./routes/health.ts";
 
-// ACP 适配层
+// ACP 适配层（HTTP + SSE，供 WebUI / 人工调试）
 export { createAcpApp, startAcpServer, resolvePreferredAcpPort } from "./acp-server.ts";
 export type { AcpServerOptions } from "./acp-server.ts";
+
+// ACP stdio JSON-RPC（Multica 守护进程面向的传输层）
+export {
+  startAcpStdioServer,
+  redirectConsoleToStderr,
+  acpPromptToText,
+  promptHasUnsupportedContent,
+  turnEndToStopReason,
+  ACP_PROTOCOL_VERSION,
+} from "./acp-stdio.ts";
+export type {
+  AcpStdioOptions,
+  AcpStdioConnection,
+  AcpStopReason,
+  AcpSessionUpdate,
+  AcpFrameWriter,
+  AcpLogFn,
+} from "./acp-stdio.ts";

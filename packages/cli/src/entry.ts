@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @fengagent/cli — CLI 入口
  *
  * 命令行参数解析、模式路由：
@@ -31,6 +31,16 @@ const log = createLogger("cli");
  * 4. 默认 → Ink TUI 交互模式
  */
 export async function main(argv: string[]): Promise<void> {
+  // ACP stdio 模式下 stdout 是协议专用通道（换行分隔 JSON-RPC 帧）。
+  // 必须在**任何**输出之前把 console / process.stdout 改道到 stderr：
+  // @fengagent/shared 的 logger 用 console.log（stdout）输出 info 日志，
+  // 哪怕只多一个字节，宿主的 NDJSON 解析就会失败，最终只报「进程退出」。
+  const stdioAcpMode = argv.includes("acp") && !argv.includes("--acp-http");
+  if (stdioAcpMode) {
+    const { redirectConsoleToStderr } = await import("@fengagent/server/acp-stdio");
+    redirectConsoleToStderr();
+  }
+
   // Windows 中文控制台（代码页 936）下确保 UTF-8 输出，避免 TUI 中文/emoji 乱码
   ensureWindowsConsoleUtf8();
 
@@ -186,74 +196,14 @@ export async function main(argv: string[]): Promise<void> {
   }
 
   // acp 子命令 — 启动 ACP 服务（Multica 运行时集成）
+  //
+  // 两种传输：
+  // - 默认 stdio JSON-RPC：Multica 守护进程把运行时当子进程拉起（`fengagent acp`），
+  //   用 stdin/stdout 管道跑 ACP，stdout 专用于协议帧。
+  // - `--acp-http`：旧 HTTP + SSE 服务，供 WebUI / 人工调试。
   if (parsed.acp) {
-    const { loadConfig } = await import("@fengagent/core");
-    const { Agent } = await import("@fengagent/agent");
-    const { createClientFromEnv } = await import("@fengagent/llm");
-    const {
-      createToolRegistry,
-      createToolExecutor,
-      registerBuiltinTools,
-      createPermissionChecker,
-      createHookRegistry,
-    } = await import("@fengagent/tools");
-    const { createContextManager } = await import("@fengagent/context");
-    const { startAcpServer } = await import("@fengagent/server");
-
-    // 与 serve 路径一致：分层加载配置（默认值 → 全局 → 项目 → 分支 → 环境变量），
-    // 再把配置文件中的 API Key / BaseURL / Model 注入为 LLM 环境变量。
-    // 修复：此前用 loadConfigFromEnv() + createClientFromEnv() 只读环境变量，
-    // 未读配置文件，导致 FENG_PROVIDER=openai-compatible 时
-    // “OPENAI_COMPATIBLE_API_KEY is required” 运行时报错。
-    const config = await loadConfig();
-    const envForLLM: Record<string, string | undefined> = { ...process.env };
-    function injectConfigEnv(key: string, configVal: string | undefined) {
-      if (configVal !== undefined && configVal !== "" && !envForLLM[key]) {
-        envForLLM[key] = configVal;
-      }
-    }
-    injectConfigEnv("FENG_PROVIDER", config.provider);
-    injectConfigEnv("FENG_MODEL", config.model);
-    injectConfigEnv("ANTHROPIC_API_KEY", config.anthropicApiKey);
-    injectConfigEnv("OPENAI_API_KEY", config.openaiApiKey);
-    injectConfigEnv("OPENAI_COMPATIBLE_API_KEY", config.openaiCompatibleApiKey);
-    injectConfigEnv("OPENAI_COMPATIBLE_BASE_URL", config.openaiCompatibleBaseUrl);
-    injectConfigEnv("OPENAI_COMPATIBLE_MODEL", config.openaiCompatibleModel);
-
-    const { client: llmClient } = createClientFromEnv(envForLLM);
-    const workdir = process.cwd();
-
-    const hookRegistry = createHookRegistry();
-    const permissionChecker = createPermissionChecker(workdir);
-
-    function createAcpAgent(): InstanceType<typeof Agent> {
-      const toolRegistry = createToolRegistry();
-      registerBuiltinTools(toolRegistry);
-
-      const toolExecutor = createToolExecutor(permissionChecker, hookRegistry);
-      const contextManager = createContextManager({
-        config: {
-          contextWindow: config.contextWindow,
-          compactThreshold: config.compactThreshold,
-          compactKeepTokens: config.compactKeepTokens,
-          disableCompact: config.disableCompact,
-          smallModel: config.smallModel,
-        },
-        summaryGenerator: llmClient,
-        // ACP 路径同样禁用 AGENTS.md 注入（与对话卡死修复一致，防止运行时指令注入系统提示）
-        systemContextOptions: { workdir, loadAgentsMd: false },
-      });
-      return new Agent({
-        llmClient,
-        toolRegistry,
-        toolExecutor,
-        contextManager,
-        config,
-        workdir,
-      });
-    }
-
-    startAcpServer({ config, createAgent: createAcpAgent });
+    const { startAcpMode } = await import("./acp-mode.ts");
+    await startAcpMode({ http: parsed.acpHttp });
     return;
   }
 
