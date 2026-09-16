@@ -4,6 +4,25 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — ACP 续聊：session/resume 跨进程恢复（Multica 第二次对话失败）
+
+### 修复
+
+- **Multica 里「首次对话正常、第二次对话报错」** — 守护进程**每个任务都 spawn 一个新的 `fengagent acp` 子进程**，第二轮对话不是「同进程里的第二次 prompt」，而是新进程只带上一轮的 `sessionId` 回来：`initialize → session/resume{sessionId} → session/prompt`。此前桥未实现该方法，直接回 `-32601 "Method not found"`，宿主侧报 `hermes session/resume failed: session/resume: "Method not found" (code=-32601)`：
+  - `session/resume` 与 `session/load` 落地（`packages/server/src/acp-stdio.ts`）：参数取 ACP `ResumeSessionRequest`（`cwd` / `sessionId` / `mcpServers`），返回形状对标 `ResumeSessionResponse`（baseline 桥只回 `sessionId`）；**未命中落盘记录时用宿主给的同一个 id 建空会话兜底**，保证这一轮 prompt 仍能跑完而不是整轮失败；
+  - `initialize` 声明 `agentCapabilities.sessionCapabilities.resume`，与同族 `dsh-acp` / opencode 对齐；
+  - **会话落盘补齐**：ACP 装配（`packages/cli/src/acp-mode.ts`）把同一份 `SessionStore`（数据根 `FENG_DATA_DIR` > 配置 `dataDir` > `<workdir>/.fengagent-cordis`，与 serve / cordis 一致）同时交给 `session/new`、`session/resume` 与 `Agent` —— 只建会话行、不写消息的「半截修复」会让续聊成功但失忆；
+  - `session/new` 也走同一份会话库，`session/prompt` 追加的消息在下一轮进程可读，上下文真正延续。
+
+### 测试
+
+- `packages/server/src/__tests__/acp-stdio.test.ts`：新增续聊用例（resume 命中返回同一 `sessionId` 且后续 prompt 正常结算、未命中同 id 兜底、缺 `sessionId` 报 `-32602`、`session/load` 同语义、能力声明）。
+- `packages/server/src/__tests__/acp-resume-persistence.test.ts`：用真实 `SessionStore` 钉住「新会话落盘 → 下个进程按 id 读回 → 续聊命中同一会话」的契约，并对比「会话库未接上」时退化为同 id 空会话（失忆）的差异。
+
+### 文档
+
+- `docs/MODULES.md`：ACP（stdio）方法表补 `session/resume` / `session/load`。
+
 ## [Unreleased] — ACP 走 stdio JSON-RPC（Multica 运行时握手/建会话）
 
 ### 修复

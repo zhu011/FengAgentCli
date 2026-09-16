@@ -13,6 +13,8 @@
  * - `http`：监听 HTTP + SSE，供 WebUI / 人工调试（`--acp-http`）。
  */
 
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentEvent, Config } from "@fengagent/core";
 import type { AcpFrameReader, AcpFrameWriter, AcpLogFn } from "@fengagent/server/acp-stdio";
 
@@ -48,6 +50,20 @@ export interface AcpModeHandle {
   createAgent: (workdir: string) => unknown;
 }
 
+/** 一次会话装配的结果（Agent + 会话） */
+interface AcpSessionEntry {
+  agent: InstanceType<typeof import("@fengagent/agent").Agent>;
+  session: import("@fengagent/core").Session;
+}
+
+/** ACP 会话服务（`session/new` 与 `session/resume` 的公共装配） */
+interface AcpSessionService {
+  /** 新建一个会话（消息由 Agent 在 prompt 时写进同一份会话库） */
+  createSession(workdir: string): AcpSessionEntry;
+  /** 按宿主持有的 id 恢复会话（未命中则同 id 空会话） */
+  resumeSession(workdir: string, sessionId: string): AcpSessionEntry;
+}
+
 /**
  * 凭据缺失时的可执行修复指引。
  *
@@ -80,13 +96,14 @@ export function credentialHint(err: unknown, cwd: string = process.cwd()): strin
  * @returns 启动句柄（HTTP 模式端口 / stdio 模式连接）
  */
 export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpModeHandle> {
-  const { loadConfig } = await import("@fengagent/core");
-  const { Agent } = await import("@fengagent/agent");
+  const { loadConfig, createSession: createSessionFactory } = await import("@fengagent/core");
+  const { Agent, SessionStore } = await import("@fengagent/agent");
+  const { resolveDataRoot } = await import("@fengagent/shared");
   const { createClientFromEnv } = await import("@fengagent/llm");
   const {
     createToolRegistry,
-    createToolExecutor,
     registerBuiltinTools,
+    createToolExecutor,
     createPermissionChecker,
     createHookRegistry,
   } = await import("@fengagent/tools");
@@ -119,6 +136,38 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
 
   const hookRegistry = createHookRegistry();
 
+  // ── 会话库（跨进程续聊的落盘基座）──────────────────────────────────
+  // 必须在 `createAcpAgent` 之前建好：Agent 要拿到同一个 `SessionStore` 才会把
+  // 每轮消息写进库，`session/resume` 才有东西可读 —— 只建会话行、不写消息，
+  // 续聊就变成「成功但失忆」。
+  const stores = new Map<string, InstanceType<typeof SessionStore>>();
+
+  /**
+   * 取该 workdir 的会话库（按 workdir 缓存：进程级单写者，避免多连接互锁）。
+   *
+   * 数据根与 serve / cordis 一致（`FENG_DATA_DIR` > 配置 `dataDir` >
+   * `<workdir>/.fengagent-cordis`），保证 ACP 路径与其它入口看到同一份会话库。
+   *
+   * @param workdir - 会话工作目录（宿主在 `session/new` / `session/resume` 里给的 cwd）
+   * @returns 会话库；打不开（磁盘/权限/被占用）时返回 undefined，退回「不持久化但能对话」
+   */
+  function storeFor(workdir: string): InstanceType<typeof SessionStore> | undefined {
+    const cached = stores.get(workdir);
+    if (cached) return cached;
+    try {
+      const dataRoot = resolveDataRoot({ workdir, configDataDir: config.dataDir });
+      mkdirSync(dataRoot, { recursive: true });
+      const store = new SessionStore(join(dataRoot, "sessions.db"));
+      stores.set(workdir, store);
+      return store;
+    } catch (err) {
+      process.stderr.write(
+        `Fatal: 会话库不可用（${workdir}）：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return undefined;
+    }
+  }
+
   /**
    * 每个 ACP 会话一份 Agent（与 HTTP ACP 的 per-session Agent 语义一致）。
    *
@@ -148,6 +197,7 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
       // ACP 路径同样禁用 AGENTS.md 注入（与对话卡死修复一致，防止运行时指令注入系统提示）
       systemContextOptions: { workdir, loadAgentsMd: false },
     });
+    const sessionStore = storeFor(workdir);
     return new Agent({
       llmClient,
       toolRegistry,
@@ -155,8 +205,34 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
       contextManager,
       config,
       workdir,
+      // 传了才会持久化：每轮消息落盘是「下一个进程还能续聊」的唯一依据
+      ...(sessionStore ? { sessionStore } : {}),
     });
   }
+
+  /**
+   * ACP 会话服务：`session/new` 与 `session/resume` 共用同一份会话库。
+   *
+   * - `createSession`：新建会话，Agent 在 prompt 时把消息写进同一份库；
+   * - `resumeSession`：按宿主持有的 id 恢复；未命中则用**同一个 id** 建空会话，
+   *   仍让这一轮 prompt 跑完（不把「历史丢了」升级成「对话失败」）并留痕 stderr。
+   */
+  const sessionService: AcpSessionService = {
+    createSession(workdir: string): AcpSessionEntry {
+      return { agent: createAcpAgent(workdir), session: createSessionFactory(config.model) };
+    },
+    resumeSession(workdir: string, sessionId: string): AcpSessionEntry {
+      const agent = createAcpAgent(workdir);
+      const restored = storeFor(workdir)?.loadSession(sessionId);
+      if (restored) return { agent, session: restored };
+      process.stderr.write(
+        `[fengagent-acp] 会话 ${sessionId} 无落盘记录，按同 id 新建空会话续聊（cwd=${workdir}）\n`,
+      );
+      const session = createSessionFactory(config.model);
+      session.id = sessionId;
+      return { agent, session };
+    },
+  };
 
   if (options.http) {
     // 旧 HTTP + SSE 传输：监听端口并把真实端口打到 stdout 供人工/宿主发现
@@ -171,6 +247,8 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
   const { VERSION } = await import("./args.ts");
   const connection = startAcpStdioServer({
     createAgent: createAcpAgent,
+    createSessionEntry: (workdir) => sessionService.createSession(workdir),
+    resumeAgent: (workdir, sessionId) => sessionService.resumeSession(workdir, sessionId),
     config,
     agentInfo: { name: "fengagent-acp", version: VERSION },
     ...(options.input ? { input: options.input } : {}),

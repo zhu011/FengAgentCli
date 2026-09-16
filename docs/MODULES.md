@@ -280,7 +280,7 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | 入口 | `entry.ts` | 参数解析、模式路由（TUI / print / serve / acp / runtime） |
-| ACP 模式 | `acp-mode.ts` | `startAcpMode()`：ACP 模式装配（配置/凭据/工具/上下文/Agent 工厂 + 传输选择），支持注入内存流做端到端测试 |
+| ACP 模式 | `acp-mode.ts` | `startAcpMode()`：ACP 模式装配（配置/凭据/工具/上下文/会话库/Agent 工厂 + 传输选择），支持注入内存流做端到端测试；会话库按 workdir 缓存并同时交给 `session/new` / `session/resume` / `Agent`，让守护进程换进程后仍能续聊 |
 | 装配 | `create-runtime-agent.ts` | `createRuntimeAgent()`：Cordis 插件装配 RuntimeAgent（对话即节点） |
 | 兼容 | `create-agent.ts` | 旧接口 `createAgent` / `reloadProvider`，委托给 RuntimeAgent |
 | TUI App | `tui/app.tsx` | Ink 主应用（标题卡片、动态图标、状态栏） |
@@ -322,7 +322,7 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | SSE | `sse.ts` | AgentEvent → SSE 帧转换 |
 | SessionManager | `session-manager.ts` | RuntimeAgent 实例池、权限桥接（含改参 allow）、getGraph / rollbackSession / rollbackRetrySession / getAgent |
 | ACP（HTTP） | `acp-server.ts` | 旧 HTTP + SSE 传输的 ACP 兼容层（`fengagent acp --acp-http`） |
-| ACP（stdio） | `acp-stdio.ts` | **Multica 守护进程面向的传输**：stdin/stdout 上的 ACP JSON-RPC（`initialize` / `authenticate` / `session/new` / `session/prompt` / `session/cancel`），stdout 专用于协议帧，并提供 `redirectConsoleToStderr()` 把日志改道 stderr |
+| ACP（stdio） | `acp-stdio.ts` | **Multica 守护进程面向的传输**：stdin/stdout 上的 ACP JSON-RPC（`initialize` / `authenticate` / `session/new` / `session/resume` / `session/load` / `session/prompt` / `session/cancel`），stdout 专用于协议帧，并提供 `redirectConsoleToStderr()` 把日志改道 stderr。守护进程每个任务 spawn 一个新进程，第二轮对话只带 `sessionId` 回来，`session/resume` 负责按 id 恢复会话（命中落盘记录则延续上下文，未命中则同 id 空会话兜底） |
 
 ### API 端点
 
