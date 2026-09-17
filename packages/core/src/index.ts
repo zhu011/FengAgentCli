@@ -96,7 +96,7 @@ export type {
   PermissionDecision,
   PermissionFilter,
 } from "./permission.ts";
-export { ALLOW, allowWithInput, deny, ask } from "./permission.ts";
+export { ALLOW, allowWithInput, deny, denyUnrecoverable, ask } from "./permission.ts";
 
 // 插件接口
 export type {

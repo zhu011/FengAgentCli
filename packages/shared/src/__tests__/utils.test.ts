@@ -9,6 +9,7 @@ import {
   expandTilde,
   estimateTokens,
   truncate,
+  toSingleLine,
   DEFAULT_MODEL,
   MAX_TOKENS,
   CONTEXT_WINDOW,
@@ -166,6 +167,26 @@ describe("truncate", () => {
 
   it("truncates and adds ellipsis when over limit", () => {
     expect(truncate("hello world", 8)).toBe("hello...");
+  });
+});
+
+describe("toSingleLine", () => {
+  it("keeps a single-line string unchanged", () => {
+    expect(toSingleLine("Error: boom")).toBe("Error: boom");
+  });
+
+  it("folds multi-line pretty JSON into one physical line (AGE-29 `provider error: [`)", () => {
+    const multi = `Error: [\n  {\n    "code": "invalid_type"\n  }\n]`;
+    const single = toSingleLine(multi);
+    expect(single.includes("\n")).toBe(false);
+    expect(single.includes("\r")).toBe(false);
+    expect(single.startsWith("Error: [")).toBe(true);
+    // 后续内容不再丢失，宿主不会只看到首行的 `[`
+    expect(single).toContain("invalid_type");
+  });
+
+  it("folds CRLF too", () => {
+    expect(toSingleLine("a\r\nb\rc")).toBe("a⏎b⏎c");
   });
 });
 

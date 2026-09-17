@@ -4,6 +4,52 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 空转死循环防护增强 + 失败详情单行化（main 适配）
+
+### 修复
+
+- **长对话「一直转圈、调用很多次工具、最后报错」** — 现场一轮对话走了 25 步 / 42 次工具 / 约 3 分钟，其中大量调用是「成功但零进展」（反复 `read_file` 同一个被截断的文件、反复 glob `**/*` 只回同一个文件）。原有的两层防护都拦不住：`maxTurns=50` 远未达到，`MAX_CONSECUTIVE_TOOL_ERROR_STEPS=3` 要求**连续**三轮全失败，而现场的失败是分散的，中间夹着大量成功空转。增强（`packages/agent/src/loop.ts`）：
+  - **同参数重复调用检测**：同一「工具 + 入参 + 结果」重复出现达到 `FENG_MAX_IDENTICAL_TOOL_RESULTS`（默认 3）即终止；入参按稳定序列化比较，不受键顺序影响；
+  - **无进展步数上限**：连续 `FENG_MAX_NO_PROGRESS_STEPS`（默认 5）步没有产生任何「首次出现且非错误」的结果即终止；
+  - **同文件反复读取检测**：同一路径被只读工具读取达到 `FENG_MAX_SAME_TARGET_READS`（默认 6）次且期间没有成功的变更类调用即终止（覆盖「每次 offset 不同、结果不同」的绕行形态）；
+  - **整体 wall-clock 兜底**：单轮超过 `FENG_MAX_WALL_CLOCK_MS`（默认 10 分钟）强制结算，不再无限期挂起；
+  - **不可恢复的错误立即结算**：工具需要人工审批但当前运行**没有权限回调**时（非交互式宿主 / 守护进程 ACP 路径），模型改参或重试都过不去 —— 权限层标记 `unrecoverable`（`packages/core/src/permission.ts` 新增 `denyUnrecoverable`），loop 层直接结束本轮并说明原因，而不是把这一轮喂回模型空转。
+- **宿主把失败原因误分类成 `hermes provider error: [`** — 我们的失败详情里带有多行 pretty JSON（zod 校验错误），宿主按行采集子进程输出后只取到首行的 `[` 碎片，完全不可定位。现在所有会落到 stderr / 日志 / 宿主错误帧的文本都做**单物理行**保证：
+  - `toSingleLine()` 工具函数（`packages/shared/src/utils.ts`），多行折叠为 `⏎`；
+  - 工具结果（入参校验失败、工具抛异常）在源头单行化（`packages/tools/src/executor.ts`）；
+  - 分级日志器每条记录单行（`packages/shared/src/logger.ts`）；
+  - ACP 的 `console` 改道 stderr 时**逐行加前缀** `[fengagent-acp] `，JSON-RPC `-32603` 错误消息单行化（`packages/server/src/acp-stdio.ts`）。
+
+### 测试
+
+- `packages/agent/src/__tests__/loop.test.ts`：新增空转防护用例（重复调用、连续无进展、同文件反复读取、wall-clock、不可恢复权限错误、阈值可注入），并保留「成功写入会重置读取计数」的防误伤用例；
+- `packages/tools/src/__tests__/loop-safety.test.ts`：无权限回调的审批拒绝被标记 `unrecoverable`（有回调 / 用户拒绝时不标记）＋ 工具结果单物理行契约；
+- `packages/server/src/__tests__/acp-stdio.test.ts`：多行失败详情被压成单行且详情不丢失、stderr 逐行前缀；
+- `packages/shared/src/__tests__/utils.test.ts`：`toSingleLine` 单测。
+
+### 文档
+
+- `docs/CONFIGURATION.md`：新增「死循环防护（Agent Loop）」小节，列出四个阈值环境变量与两条与阈值无关的规则。
+
+## [Unreleased] — ACP 续聊：session/resume 跨进程恢复（Multica 第二次对话失败，main 适配）
+
+### 修复
+
+- **Multica 里「首次对话正常、第二次对话报错」** — 守护进程**每个任务都 spawn 一个新的 `fengagent acp` 子进程**，第二轮对话不是「同进程里的第二次 prompt」，而是新进程只带上一轮的 `sessionId` 回来：`initialize → session/resume{sessionId} → session/prompt`。此前桥未实现该方法，直接回 `-32601 "Method not found"`，宿主侧报 `hermes session/resume failed: session/resume: "Method not found" (code=-32601)`：
+  - `session/resume` 与 `session/load` 落地（`packages/server/src/acp-stdio.ts`）：参数取 ACP `ResumeSessionRequest`（`cwd` / `sessionId` / `mcpServers`），返回形状对标 `ResumeSessionResponse`（baseline 桥只回 `sessionId`）；**未命中落盘记录时用宿主给的同一个 id 建空会话兜底**，保证这一轮 prompt 仍能跑完而不是整轮失败；
+  - `initialize` 声明 `agentCapabilities.sessionCapabilities.resume`，与同族 `dsh-acp` / opencode 对齐；
+  - **会话落盘补齐**：ACP 装配（`packages/cli/src/acp-mode.ts`）把同一份 `SessionStore`（数据根 `FENG_DATA_DIR` > `<workdir>/.fengagent`，存在 `.fengagent-cordis/` 时优先，与 serve 一致）同时交给 `session/new`、`session/resume` 与 `Agent` —— 只建会话行、不写消息的「半截修复」会让续聊成功但失忆；
+  - `session/new` 也走同一份会话库，`session/prompt` 追加的消息在下一轮进程可读，上下文真正延续。
+
+### 测试
+
+- `packages/server/src/__tests__/acp-stdio.test.ts`：新增续聊用例（resume 命中返回同一 `sessionId` 且后续 prompt 正常结算、未命中同 id 兜底、缺 `sessionId` 报 `-32602`、`session/load` 同语义、能力声明）。
+- `packages/server/src/__tests__/acp-resume-persistence.test.ts`：用真实 `SessionStore` 钉住「新会话落盘 → 下个进程按 id 读回 → 续聊命中同一会话」的契约，并对比「会话库未接上」时退化为同 id 空会话（失忆）的差异。
+
+### 文档
+
+- `docs/MODULES.md`：ACP（stdio）方法表补 `session/resume` / `session/load`。
+
 ## [Unreleased] — ACP 走 stdio JSON-RPC（Multica 运行时握手/建会话，main 适配）
 
 ### 修复

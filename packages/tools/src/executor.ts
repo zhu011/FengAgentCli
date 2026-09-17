@@ -14,7 +14,7 @@
  */
 import type { ToolDefinition, ToolResult, ToolContext } from "@fengagent/core/tool";
 import { BASH_TIMEOUT, MAX_TOOL_CONCURRENCY } from "@fengagent/shared/constants";
-import { getEnvNumber } from "@fengagent/shared/utils";
+import { getEnvNumber, toSingleLine } from "@fengagent/shared/utils";
 import type { PermissionChecker } from "./permission.ts";
 import { createPermissionChecker } from "./permission.ts";
 import { truncateOutput } from "./truncate.ts";
@@ -83,18 +83,23 @@ function withTimeout<T>(
 
 function errorResult(error: Error): ToolResult {
   return {
-    content: `Error: ${error.message}`,
+    content: `Error: ${toSingleLine(error.message)}`,
     isError: true,
   };
 }
 
-/** 解析 Zod 校验错误为可读信息（含 JSON 序列化兜底） */
+/**
+ * 解析 Zod 校验错误为可读信息（含 JSON 序列化兜底）。
+ *
+ * 返回前压成单行：zod 的 `message` 是多行 pretty JSON 数组，直接拼进工具结果后
+ * 会被宿主按行采集、切成碎片（AGE-29 的 `provider error: [`）。
+ */
 function validationErrorText(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) return toSingleLine(err.message);
   try {
-    return JSON.stringify(err);
+    return toSingleLine(JSON.stringify(err));
   } catch {
-    return String(err);
+    return toSingleLine(String(err));
   }
 }
 
@@ -248,7 +253,11 @@ export function createToolExecutor(
         result: {
           content: `Permission denied: ${perm.reason ?? "not allowed"}`,
           isError: true,
-          metadata: { permissionDecision: "deny" },
+          metadata: {
+            permissionDecision: "deny",
+            // 不可恢复的拒绝（无回调可用）→ 循环层据此立即结算，不再空转
+            ...(perm.unrecoverable ? { unrecoverable: true } : {}),
+          },
         },
       };
     }
@@ -310,7 +319,8 @@ export function createToolExecutor(
           result: {
             content: `Tool "${tool.name}" requires user approval but no permission callback is available.`,
             isError: true,
-            metadata: { permissionDecision: "deny" },
+            // 无回调可用的 ask：模型无论怎么改参/重试都过不去，标记为不可恢复
+            metadata: { permissionDecision: "deny", unrecoverable: true },
           },
         };
       }

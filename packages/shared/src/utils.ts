@@ -131,3 +131,18 @@ export function truncate(text: string, maxLength: number): string {
   }
   return text.slice(0, maxLength - 3) + "...";
 }
+
+/**
+ * 把任意文本压成**单物理行**（多行内容折叠为 `⏎`）。
+ *
+ * 为什么需要：宿主（Multica 守护进程）按行采集子进程的 stderr，并把首行当作
+ * 失败详情。多行 pretty JSON（zod 校验错误、序列化后的对象）被按行切开后，
+ * 首行只剩一个 `[`，守护进程据此拼出的 `provider error: [` 完全不可定位
+ * （AGE-29 现场）。凡是要落到 stderr / 日志 / 宿主错误帧的文本，都先过这里。
+ *
+ * @param text - 原始文本
+ * @returns 不含 CR/LF 的单行文本
+ */
+export function toSingleLine(text: string): string {
+  return text.replace(/\r\n|\r|\n/g, "⏎");
+}

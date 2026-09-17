@@ -18,6 +18,7 @@ import {
   promptHasUnsupportedContent,
   turnEndToStopReason,
   ACP_PROTOCOL_VERSION,
+  redirectConsoleToStderr,
   type AcpSessionUpdate,
 } from "../acp-stdio.ts";
 import type { AgentEvent, Session } from "@fengagent/core";
@@ -633,6 +634,71 @@ describe("ACP stdio — 取消与错误", () => {
     conn.notify("session/cancel", { sessionId });
     await first.promise;
     conn.connection.dispose();
+  });
+});
+
+// ──────────────────────────────────────────────
+// 失败详情单行化（AGE-29：宿主侧只看到 `hermes provider error: [`）
+// ──────────────────────────────────────────────
+
+describe("ACP stdio — 失败详情单行化", () => {
+  it("多行失败详情被压成单行，宿主不会只取到 `[` 碎片", async () => {
+    const multiLine = `Error: [\n  {\n    "code": "invalid_type",\n    "path": ["filePath"]\n  }\n]`;
+    const { factory } = makeFakeAgent(() => [
+      { type: "error", error: { message: multiLine } },
+      { type: "turn-end", reason: "error" },
+    ]);
+    const conn = connect(factory);
+
+    const newRes = await conn.request("session/new", { cwd: process.cwd() }).promise;
+    const sessionId = (newRes["result"] as { sessionId: string }).sessionId;
+    const res = await conn.request("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text: "触发失败" }],
+    }).promise;
+
+    const message = (res["error"] as { message: string }).message;
+    expect(message.startsWith("Internal error: turn failed: ")).toBe(true);
+    // 详情保留（不是只剩首行 `[`），且不含裸换行
+    expect(message).toContain("invalid_type");
+    expect(message).toContain("filePath");
+    expect(message.includes("\n")).toBe(false);
+    expect(message.includes("\r")).toBe(false);
+
+    // 原始输出按行切开后，每一行都仍是合法 JSON-RPC 帧
+    const raw = conn.output.lines.join("");
+    for (const line of raw.split("\n").filter((l) => l.length > 0)) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+
+    conn.connection.dispose();
+  });
+
+  it("console 改道到 stderr 时逐行加前缀（碎片可归属、不再是孤立 `[`）", () => {
+    const written: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      written.push(typeof chunk === "string" ? chunk : chunk.toString());
+      return true;
+    }) as typeof process.stderr.write;
+
+    const restore = redirectConsoleToStderr();
+    try {
+      console.log(`Error: [\n  { "code": 1 }\n]`);
+    } finally {
+      restore();
+      process.stderr.write = originalWrite;
+    }
+
+    const raw = written.join("");
+    const lines = raw.split("\n").filter((l) => l.length > 0);
+    expect(lines.length).toBe(3);
+    for (const line of lines) {
+      expect(line.startsWith("[fengagent-acp] ")).toBe(true);
+    }
+    // 首行不再是一个孤立的 `[`
+    expect(lines[0]).toContain("Error: [");
+    expect(lines[0]).not.toBe("[");
   });
 });
 

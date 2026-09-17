@@ -12,7 +12,7 @@
  */
 import type { ToolDefinition, ToolContext } from "@fengagent/core/tool";
 import type { PermissionResult } from "@fengagent/core/permission";
-import { ALLOW, deny, ask } from "@fengagent/core/permission";
+import { ALLOW, deny, denyUnrecoverable, ask } from "@fengagent/core/permission";
 import { getEnv, getEnvBoolean } from "@fengagent/shared/utils";
 import { createLogger } from "@fengagent/shared";
 import {
@@ -151,7 +151,7 @@ export function createPermissionChecker(
         return ask(`Tool "${tool.name}" is destructive. Confirm execution?`);
       }
       // 不缓存 — 此 deny 依赖 context.requestPermission 是否存在
-      return deny(
+      return denyUnrecoverable(
         `Tool "${tool.name}" is destructive and no permission callback available`,
       );
     }
