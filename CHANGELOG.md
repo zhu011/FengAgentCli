@@ -4,6 +4,33 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — 空转死循环防护增强 + 失败详情单行化
+
+### 修复
+
+- **长对话「一直转圈、调用很多次工具、最后报错」** — 现场一轮对话走了 25 步 / 42 次工具 / 约 3 分钟，其中大量调用是「成功但零进展」（反复 `read_file` 同一个被截断的文件、反复 glob `**/*` 只回同一个文件）。原有的两层防护都拦不住：`maxTurns=50` 远未达到，`MAX_CONSECUTIVE_TOOL_ERROR_STEPS=3` 要求**连续**三轮全失败，而现场的失败是分散的，中间夹着大量成功空转。增强（`packages/agent/src/loop.ts`）：
+  - **同参数重复调用检测**：同一「工具 + 入参 + 结果」重复出现达到 `FENG_MAX_IDENTICAL_TOOL_RESULTS`（默认 3）即终止；入参按稳定序列化比较，不受键顺序影响；
+  - **无进展步数上限**：连续 `FENG_MAX_NO_PROGRESS_STEPS`（默认 5）步没有产生任何「首次出现且非错误」的结果即终止；
+  - **同文件反复读取检测**：同一路径被只读工具读取达到 `FENG_MAX_SAME_TARGET_READS`（默认 6）次且期间没有成功的变更类调用即终止（覆盖「每次 offset 不同、结果不同」的绕行形态）；
+  - **整体 wall-clock 兜底**：单轮超过 `FENG_MAX_WALL_CLOCK_MS`（默认 10 分钟）强制结算，不再无限期挂起；
+  - **不可恢复的错误立即结算**：工具需要人工审批但当前运行**没有权限回调**时（非交互式宿主 / 守护进程 ACP 路径），模型改参或重试都过不去 —— 权限层标记 `unrecoverable`（`packages/core/src/permission.ts` 新增 `denyUnrecoverable`），loop 层直接结束本轮并说明原因，而不是把这一轮喂回模型空转。
+- **宿主把失败原因误分类成 `hermes provider error: [`** — 我们的失败详情里带有多行 pretty JSON（zod 校验错误），宿主按行采集子进程输出后只取到首行的 `[` 碎片，完全不可定位。现在所有会落到 stderr / 日志 / 宿主错误帧的文本都做**单物理行**保证：
+  - `toSingleLine()` 工具函数（`packages/shared/src/utils.ts`），多行折叠为 `⏎`；
+  - 工具结果（入参校验失败、工具抛异常）在源头单行化（`packages/tools/src/executor.ts`）；
+  - 分级日志器每条记录单行（`packages/shared/src/logger.ts`）；
+  - ACP 的 `console` 改道 stderr 时**逐行加前缀** `[fengagent-acp] `，JSON-RPC `-32603` 错误消息单行化（`packages/server/src/acp-stdio.ts`）。
+
+### 测试
+
+- `packages/agent/src/__tests__/loop.test.ts`：新增空转防护用例（重复调用、连续无进展、同文件反复读取、wall-clock、不可恢复权限错误、阈值可注入），并保留「成功写入会重置读取计数」的防误伤用例；
+- `packages/tools/src/__tests__/loop-safety.test.ts`：无权限回调的审批拒绝被标记 `unrecoverable`（有回调 / 用户拒绝时不标记）＋ 工具结果单物理行契约；
+- `packages/server/src/__tests__/acp-stdio.test.ts`：多行失败详情被压成单行且详情不丢失、stderr 逐行前缀；
+- `packages/shared/src/__tests__/utils.test.ts`：`toSingleLine` 单测。
+
+### 文档
+
+- `docs/CONFIGURATION.md`：新增「死循环防护（Agent Loop）」小节，列出四个阈值环境变量与两条与阈值无关的规则。
+
 ## [Unreleased] — ACP 续聊：session/resume 跨进程恢复（Multica 第二次对话失败）
 
 ### 修复

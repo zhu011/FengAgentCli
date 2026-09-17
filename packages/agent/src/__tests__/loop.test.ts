@@ -20,13 +20,16 @@ import type {
   Message,
 } from "@fengagent/core";
 import { createSession, createUserMessage } from "@fengagent/core";
-import { createToolRegistry, createToolExecutor } from "@fengagent/tools";
+import { createToolRegistry, createToolExecutor, fileRead } from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
 import { AgentLoop } from "../loop.ts";
 import type { AgentLoopOptions } from "../loop.ts";
 import { Agent } from "../agent.ts";
 import { SessionStore } from "../session.ts";
 import { z } from "zod";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // ──────────────────────────────────────────────
 // Mock LLM Client
@@ -806,5 +809,416 @@ describe("SessionStore — SQLite 持久化", () => {
     expect(loaded!.messages[loaded!.messages.length - 1]!.role).toBe("assistant");
 
     store.close();
+  });
+});
+
+// ──────────────────────────────────────────────
+// 测试：空转 / 死循环防护增强（AGE-29 现场：25 步、42 次工具、end_turn 正常结束）
+//
+// 现场特征：失败**不连续**（bash requires-approval ×3、file-read 参数错、skill-not-found
+// 分散在各步），中间夹大量「成功但零进展」的调用（反复 glob 只回一个文件、反复读同一
+// 截断文件）。旧的「连续 3 轮全失败」防护永远攒不满，25 步也远不到 maxTurns=50。
+// ──────────────────────────────────────────────
+
+/** 注册一个「总是成功且输出固定」的工具（用于制造纯空转） */
+function registerFixedTool(
+  toolRegistry: ReturnType<typeof createToolRegistry>,
+  name: string,
+  content: string,
+  extra: Record<string, unknown> = {},
+) {
+  toolRegistry.register({
+    name,
+    description: `Always returns fixed content`,
+    inputSchema: z.object({ text: z.string() }).passthrough(),
+    async execute() {
+      return { content };
+    },
+    isReadOnly: () => true,
+    isConcurrencySafe: () => true,
+    ...extra,
+  });
+}
+
+/** 注册一个每次返回不同内容、但始终失败的工具（永不重复 → 只可能被「无进展」捕获） */
+function registerDriftingFailTool(
+  toolRegistry: ReturnType<typeof createToolRegistry>,
+) {
+  let n = 0;
+  toolRegistry.register({
+    name: "drift-fail",
+    description: "Always fails with drifting content",
+    inputSchema: z.object({ text: z.string() }).passthrough(),
+    async execute() {
+      n++;
+      return { content: `Error: boom #${n}`, isError: true };
+    },
+    isReadOnly: () => true,
+    isConcurrencySafe: () => true,
+  });
+}
+
+describe("AgentLoop — 空转防护（重复调用 / 无进展 / 重复读 / wall-clock）", () => {
+  test("同参数同结果的重复调用达到上限 → 终止并给出可定位原因", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    // 模型反复读同一个截断文件：入参与结果逐字节相同
+    mockLLM.setResponses([
+      [toolCall("c1", "read-fixed", { text: "AGENTS.md" }), finish("tool_use")],
+      [toolCall("c2", "read-fixed", { text: "AGENTS.md" }), finish("tool_use")],
+      [toolCall("c3", "read-fixed", { text: "AGENTS.md" }), finish("tool_use")],
+      [textDelta("should not reach here"), finish("end_turn")],
+    ]);
+    registerFixedTool(options.toolRegistry, "read-fixed", "1: <!-- BEGIN -->\n2: # Runtime");
+
+    const loop = new AgentLoop(options);
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("看看工作区"));
+
+    const events = await collectEvents(loop.run(session));
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toHaveLength(1);
+    const message = (errors[0] as { error: { message: string } }).error.message;
+    expect(message).toContain("重复工具调用");
+    expect(message).toContain("read-fixed");
+    // 单行化：宿主按行采集，多行消息会被切碎
+    expect(message.includes("\n")).toBe(false);
+
+    // 第 4 轮不再执行
+    expect(
+      events.some(
+        (e) =>
+          e.type === "text-delta" &&
+          (e as { text: string }).text.includes("should not reach"),
+      ),
+    ).toBe(false);
+    const turnEnds = events.filter((e) => e.type === "turn-end");
+    expect((turnEnds[turnEnds.length - 1] as { reason: string }).reason).toBe("error");
+  });
+
+  test("连续无进展步（错误 + 历史重复结果，但非「连续全失败」）→ 终止", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    registerFixedTool(options.toolRegistry, "read-fixed", "constant content");
+    registerDriftingFailTool(options.toolRegistry);
+
+    // 每步：一个「成功但重复」的调用 + 一个「失败但内容不同」的调用
+    // → allToolsFailed 为 false（连续失败防护攒不满），但整步零新信息
+    const step = (id: string): LLMEvent[] => [
+      toolCall(`${id}-a`, "read-fixed", { text: "same" }),
+      toolCall(`${id}-b`, "drift-fail", { text: `attempt-${id}` }),
+      finish("tool_use"),
+    ];
+    mockLLM.setResponses([step("1"), step("2"), step("3"), step("4")]);
+
+    const loop = new AgentLoop({
+      ...options,
+      // 收紧阈值、放宽重复调用检测，隔离出「无进展」这一条规则
+      guards: {
+        maxIdenticalToolResults: 99,
+        maxSameTargetReads: 99,
+        maxNoProgressSteps: 2,
+        maxWallClockMs: 0,
+      },
+    });
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("干活"));
+
+    const events = await collectEvents(loop.run(session));
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toHaveLength(1);
+    expect(
+      (errors[0] as { error: { message: string } }).error.message,
+    ).toContain("没有任何新进展");
+  });
+
+  test("只读工具反复读同一文件（每次结果不同）→ 终止", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    // 每次 offset 不同 → 结果不同，躲得过「重复结果」检测
+    let n = 0;
+    options.toolRegistry.register({
+      name: "read-chunk",
+      description: "Reads a chunk of a file",
+      inputSchema: z.object({ filePath: z.string(), offset: z.number() }).passthrough(),
+      async execute() {
+        n++;
+        return { content: `chunk ${n}` };
+      },
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+    });
+
+    const chunk = (id: string, offset: number): LLMEvent[] => [
+      toolCall(id, "read-chunk", { filePath: "AGENTS.md", offset }),
+      finish("tool_use"),
+    ];
+    mockLLM.setResponses([
+      chunk("c1", 0),
+      chunk("c2", 10),
+      chunk("c3", 20),
+      chunk("c4", 30),
+    ]);
+
+    const loop = new AgentLoop({
+      ...options,
+      guards: {
+        maxIdenticalToolResults: 99,
+        maxNoProgressSteps: 99,
+        maxSameTargetReads: 3,
+        maxWallClockMs: 0,
+      },
+    });
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("读文件"));
+
+    const events = await collectEvents(loop.run(session));
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toHaveLength(1);
+    const message = (errors[0] as { error: { message: string } }).error.message;
+    expect(message).toContain("同一文件被重复读取");
+    expect(message).toContain("AGENTS.md");
+  });
+
+  test("成功的写入会重置同文件读取计数 → 不误伤正常的「读-改-读」", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    let reads = 0;
+    options.toolRegistry.register({
+      name: "read-chunk",
+      description: "Reads a chunk of a file",
+      inputSchema: z.object({ filePath: z.string(), offset: z.number() }).passthrough(),
+      async execute() {
+        reads++;
+        return { content: `chunk ${reads}` };
+      },
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+    });
+    let writes = 0;
+    options.toolRegistry.register({
+      name: "write-file",
+      description: "Writes a file",
+      inputSchema: z.object({ filePath: z.string() }).passthrough(),
+      async execute() {
+        writes++;
+        return { content: `wrote #${writes}` };
+      },
+      isReadOnly: () => false,
+      isConcurrencySafe: () => false,
+    });
+
+    mockLLM.setResponses([
+      [toolCall("c1", "read-chunk", { filePath: "a.ts", offset: 0 }), finish("tool_use")],
+      [toolCall("c2", "read-chunk", { filePath: "a.ts", offset: 1 }), finish("tool_use")],
+      [toolCall("c3", "write-file", { filePath: "a.ts" }), finish("tool_use")],
+      [toolCall("c4", "read-chunk", { filePath: "a.ts", offset: 0 }), finish("tool_use")],
+      [toolCall("c5", "read-chunk", { filePath: "a.ts", offset: 1 }), finish("tool_use")],
+      [textDelta("改完了"), finish("end_turn")],
+    ]);
+
+    const loop = new AgentLoop({
+      ...options,
+      guards: { maxSameTargetReads: 3, maxWallClockMs: 0 },
+    });
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("改文件"));
+
+    const events = await collectEvents(loop.run(session));
+
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    const turnEnds = events.filter((e) => e.type === "turn-end");
+    expect((turnEnds[turnEnds.length - 1] as { reason: string }).reason).toBe("end_turn");
+  });
+
+  test("整体 wall-clock 超时 → 终止（步数与工具调用看起来都正常）", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    options.toolRegistry.register({
+      name: "slow-tool",
+      description: "Takes a while",
+      inputSchema: z.object({ text: z.string() }).passthrough(),
+      async execute() {
+        await Bun.sleep(30);
+        return { content: `slow #${Date.now()}` };
+      },
+      isReadOnly: () => false,
+      isConcurrencySafe: () => false,
+    });
+
+    mockLLM.setResponses([
+      [toolCall("c1", "slow-tool", { text: "a" }), finish("tool_use")],
+      [toolCall("c2", "slow-tool", { text: "b" }), finish("tool_use")],
+      [textDelta("should not reach here"), finish("end_turn")],
+    ]);
+
+    const loop = new AgentLoop({
+      ...options,
+      guards: { maxWallClockMs: 5 },
+    });
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("慢活"));
+
+    const events = await collectEvents(loop.run(session));
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toHaveLength(1);
+    expect(
+      (errors[0] as { error: { message: string } }).error.message,
+    ).toContain("wall-clock");
+  });
+
+  test("无权限回调的审批拒绝（不可恢复）→ 立即结算，不把该轮喂回模型空转", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    // 破坏性 + 非只读 + 无权限回调 → 权限层返回 unrecoverable deny
+    // （这里直接由 checkPermissions 复刻该决策，隔离出 loop 层的行为）
+    options.toolRegistry.register({
+      name: "bash-like",
+      description: "Destructive shell command",
+      inputSchema: z.object({ command: z.string() }).passthrough(),
+      async execute(input: { command: string }) {
+        return { content: `ran: ${input.command}` };
+      },
+      isReadOnly: () => false,
+      isDestructive: () => true,
+      isConcurrencySafe: () => false,
+      checkPermissions: () => ({
+        decision: "deny" as const,
+        reason:
+          'Tool "bash-like" is destructive and no permission callback available',
+        unrecoverable: true,
+      }),
+    });
+
+    mockLLM.setResponses([
+      [toolCall("c1", "bash-like", { command: "ls -la" }), finish("tool_use")],
+      [toolCall("c2", "bash-like", { command: "ls -la" }), finish("tool_use")],
+      [textDelta("should not reach here"), finish("end_turn")],
+    ]);
+
+    const loop = new AgentLoop(options);
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("跑个命令"));
+
+    const events = await collectEvents(loop.run(session));
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toHaveLength(1);
+    const message = (errors[0] as { error: { message: string } }).error.message;
+    expect(message).toContain("不可恢复");
+    // 第 1 步就结算，不再有第 2 步
+    expect(events.filter((e) => e.type === "turn-end")).toHaveLength(1);
+    expect(
+      events.some(
+        (e) =>
+          e.type === "text-delta" &&
+          (e as { text: string }).text.includes("should not reach"),
+      ),
+    ).toBe(false);
+  });
+
+  test("防护阈值可注入：放宽后同样的空转不再触发（默认值才是防线）", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+    registerFixedTool(options.toolRegistry, "read-fixed", "constant content");
+
+    mockLLM.setResponses([
+      [toolCall("c1", "read-fixed", { text: "x" }), finish("tool_use")],
+      [toolCall("c2", "read-fixed", { text: "x" }), finish("tool_use")],
+      [toolCall("c3", "read-fixed", { text: "x" }), finish("tool_use")],
+      [textDelta("done"), finish("end_turn")],
+    ]);
+
+    const loop = new AgentLoop({
+      ...options,
+      guards: {
+        maxIdenticalToolResults: 99,
+        maxNoProgressSteps: 99,
+        maxSameTargetReads: 99,
+        maxWallClockMs: 0,
+      },
+    });
+    const session = createSession("test-model");
+    session.messages.push(createUserMessage("随便"));
+
+    const events = await collectEvents(loop.run(session));
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+});
+
+// ──────────────────────────────────────────────
+// 测试：现场形态复现（真实 file-read 工具 + 真工作目录）
+//
+// AGE-29 现场：`read_file` 对**同一个文件**连续读了 8 次，每次 offset 不同（工具
+// 返回不同片段，所以「同结果」检测抓不到），中间没有任何写入。这正是「反复读同一
+// 截断文件的不同片段」的形态，由「同文件反复读取」护栏兜住。
+// ──────────────────────────────────────────────
+
+describe("AgentLoop — 现场形态复现（反复读同一文件的不同片段）", () => {
+  test("真实 file-read 读同一文件 6 次（offset 不同）→ 护栏终止", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fengagent-age29-"));
+    try {
+      const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+      writeFileSync(join(dir, "AGENTS.md"), lines.join("\n"), "utf-8");
+
+      const { options } = createTestSetup();
+      const mockLLM = options.llmClient as MockLLMClient;
+      options.toolRegistry.register(fileRead);
+
+      // 每步读同一文件的相邻片段（offset 不同 → 结果不同）
+      mockLLM.setResponses([
+        ...Array.from({ length: 6 }, (_, i) => [
+          toolCall(`c${i + 1}`, "file-read", {
+            filePath: "AGENTS.md",
+            offset: i * 10,
+            limit: 10,
+          }),
+          finish("tool_use" as const),
+        ]),
+        [textDelta("should not reach here"), finish("end_turn")],
+      ]);
+
+      const loop = new AgentLoop({
+        ...options,
+        workdir: dir,
+        // 隔离出「同文件反复读取」这一条规则
+        guards: {
+          maxIdenticalToolResults: 99,
+          maxNoProgressSteps: 99,
+          maxSameTargetReads: 5,
+          maxWallClockMs: 0,
+        },
+      });
+      const session = createSession("test-model");
+      session.messages.push(createUserMessage("看看工作区"));
+
+      const events = await collectEvents(loop.run(session));
+
+      const errors = events.filter((e) => e.type === "error");
+      expect(errors).toHaveLength(1);
+      const message = (errors[0] as { error: { message: string } }).error.message;
+      expect(message).toContain("同一文件被重复读取");
+      expect(message).toContain("AGENTS.md");
+      // 第 7 轮不再执行
+      expect(
+        events.some(
+          (e) =>
+            e.type === "text-delta" &&
+            (e as { text: string }).text.includes("should not reach"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

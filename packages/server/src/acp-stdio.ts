@@ -40,6 +40,7 @@ import { isAbsolute, resolve } from "node:path";
 import { format } from "node:util";
 import type { AgentEvent, Config, FinishReason, Session } from "@fengagent/core";
 import type { Agent } from "@fengagent/agent";
+import { toSingleLine } from "@fengagent/shared/utils";
 
 /**
  * 模块加载时捕获的原始 stdout 写函数。
@@ -205,7 +206,12 @@ function invalidParams(additionalMessage?: string): AcpRequestError {
 function internalError(additionalMessage?: string): AcpRequestError {
   return new AcpRequestError(
     -32603,
-    `Internal error${additionalMessage ? `: ${additionalMessage}` : ""}`,
+    // 单行化：宿主按行采集子进程输出，多行详情（工具返回的 pretty JSON）会被
+    // 按行切开，首行只剩 `[` 之类的碎片，宿主据此拼出的错误摘要完全不可定位
+    // （AGE-29 的 `hermes provider error: [`）。
+    toSingleLine(
+      `Internal error${additionalMessage ? `: ${additionalMessage}` : ""}`,
+    ),
     undefined,
   );
 }
@@ -336,7 +342,8 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
   const log: AcpLogFn =
     options.log ??
     ((level, message) => {
-      process.stderr.write(`[fengagent-acp] [${level}] ${message}\n`);
+      // 单物理行：宿主按行采集 stderr，多行消息会被切碎成无意义碎片
+      process.stderr.write(`[fengagent-acp] [${level}] ${toSingleLine(message)}\n`);
     });
 
   const sessions = new Map<string, SessionRecord>();
@@ -829,7 +836,13 @@ export function redirectConsoleToStderr(): () => void {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 
   const toStderr = (...args: unknown[]): void => {
-    process.stderr.write(`${format(...args)}\n`);
+    // 逐行加前缀：宿主按行采集 stderr，多行输出（pretty JSON 错误对象）被切开后
+    // 每一行仍能归属到本进程、且首行不再是一个孤立的 `[` 碎片。
+    const text = format(...args);
+    const lines = text.split(/\r\n|\r|\n/);
+    for (const line of lines) {
+      process.stderr.write(`[fengagent-acp] ${line}\n`);
+    }
   };
 
   console.log = toStderr;

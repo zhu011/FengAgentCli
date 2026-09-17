@@ -18,7 +18,7 @@
 
 import { join } from "node:path";
 import { mkdirSync, appendFileSync, existsSync } from "node:fs";
-import { getEnv } from "./utils.ts";
+import { getEnv, toSingleLine } from "./utils.ts";
 import { resolveLogsDir } from "./data-root.ts";
 
 /** 日志级别 */
@@ -87,7 +87,9 @@ export function createLogger(moduleName: string) {
   function log(level: LogLevel, funcName: string, message: string): void {
     if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[minLevel]) return;
 
-    const line = `[${timestamp()}] [${level.toUpperCase()}] [${moduleName}] [${funcName}] ${message}`;
+    // 单物理行保证：宿主按行采集 stderr，多行消息（pretty JSON 错误对象）会被
+    // 按行切开、首行只剩碎片，导致上游把失败原因误分类（见 toSingleLine 注释）。
+    const line = `[${timestamp()}] [${level.toUpperCase()}] [${moduleName}] [${funcName}] ${toSingleLine(message)}`;
 
     // 控制台输出
     switch (level) {

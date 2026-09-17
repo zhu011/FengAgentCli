@@ -24,7 +24,18 @@ export interface Permission {
 /** 权限决策结果 */
 export type PermissionResult =
   | { decision: "allow"; input?: unknown }
-  | { decision: "deny"; reason?: string }
+  | {
+      decision: "deny";
+      reason?: string;
+      /**
+       * 该拒绝是否「不可恢复」——即在同一运行环境里重试同样的调用**必然**再次失败。
+       *
+       * 典型场景：工具需要人工审批（ask / destructive），但当前运行没有
+       * `requestPermission` 回调（非交互式宿主、守护进程 ACP 路径）。模型无法
+       * 通过改参或重试自救，循环继续只是空耗 token（AGE-29 现场）。
+       */
+      unrecoverable?: boolean;
+    }
   | { decision: "ask"; message?: string };
 
 /** 权限过滤器（用于工具注册表的 materialize） */
@@ -48,6 +59,16 @@ export function allowWithInput(input: unknown): PermissionResult {
 /** 快捷：拒绝 */
 export function deny(reason?: string): PermissionResult {
   return { decision: "deny", reason };
+}
+
+/**
+ * 快捷：拒绝，且标记为「不可恢复」（重试必然同样失败）。
+ *
+ * @param reason - 给用户/模型看的拒绝原因
+ * @returns 带 `unrecoverable: true` 的拒绝决策
+ */
+export function denyUnrecoverable(reason?: string): PermissionResult {
+  return { decision: "deny", reason, unrecoverable: true };
 }
 
 /** 快捷：询问用户 */
