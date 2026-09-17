@@ -12,9 +12,20 @@
  * | `initialize` | client → agent | 协商协议版本，只声明 baseline prompt 能力 |
  * | `authenticate` | client → agent | 空实现（不声明任何 auth method） |
  * | `session/new` | client → agent | 用 `cwd` 建新 Agent + 会话，返回 `sessionId` |
+ * | `session/resume` | client → agent | 按宿主持有的 `sessionId` 恢复会话（跨进程重建），返回 `{ sessionId }` |
+ * | `session/load` | client → agent | 同 resume 的恢复语义（ACP `loadSession` 能力），返回 `{}` |
  * | `session/prompt` | client → agent | 跑一轮 Agent Loop，流式推 `session/update`，返回 `stopReason` |
  * | `session/cancel` | client → agent（notification） | 取消该会话在飞的 prompt，结算为 `cancelled` |
  * | `session/set_model` | client → agent | 容错扩展：把 `modelId` 应用到会话模型 |
+ *
+ * 为什么必须有 `session/resume`：Multica 桌面守护进程**每个任务 spawn 一个新的
+ * `fengagent acp` 子进程**，进程结束即回收，第二轮对话不是「同一进程里的第二次
+ * `session/prompt`」，而是**新进程 + 老的 sessionId**：
+ * `initialize → session/resume{sessionId} → session/prompt`。若这里回
+ * `-32601 Method not found`，宿主侧就是 `hermes session/resume failed: ... (code=-32601)`，
+ * 表现为「首次对话正常、第二次对话必失败」。因此 resume 必须靠宿主持久化的会话
+ * 数据把上下文重建出来，`resumeAgent` 选项即该重建入口（见 `acp-mode.ts` 的
+ * `SessionStore` 实现）。
  *
  * 消息格式严格对标同族 `@deepseek-ai/dsh-acp`（`dsh-acp.exe`）：NDJSON 分帧、
  * JSON-RPC 2.0 的 id/error 语义、`session/update` 通知的字段名与嵌套形状、
@@ -103,6 +114,26 @@ export interface AcpStdioOptions {
    * 每个 ACP 会话一份独立 Agent（与 HTTP ACP 的 per-session Agent 语义一致）。
    */
   createAgent: (workdir: string) => Agent;
+  /**
+   * 新会话工厂（`session/new`）。
+   *
+   * 宿主续聊靠 `session/resume` 找回上下文，因此 `session/new` 建出来的会话必须
+   * 落到宿主下一轮能读到的地方（`acp-mode.ts` 用同一份 `SessionStore` 落盘）。
+   * 未提供时回落到 `createAgent(workdir)` + `agent.createSession()`。
+   */
+  createSessionEntry?: (workdir: string) => { agent: Agent; session: Session };
+  /**
+   * 会话恢复工厂（`session/resume` / `session/load`）。
+   *
+   * 宿主（Multica 守护进程）在**新进程**里带上一轮的 `sessionId` 续聊，因此这里
+   * 要按 id 把会话重建出来：命中持久化数据则恢复完整上下文，未命中则退化为
+   * 「用同一个 id 建空会话」（仍要求后续 prompt 能正常跑完）。
+   *
+   * 未提供时回落到 `createAgent(workdir)` + `agent.createSession()`，并且
+   * **保留宿主要的 sessionId** —— 会话注册表以宿主 id 为准，保证 resume 之后的
+   * `session/prompt` 一定能命中同一个会话记录。
+   */
+  resumeAgent?: (workdir: string, sessionId: string) => { agent: Agent; session: Session };
   /** 运行时配置（仅用于 `usage_update` 的上下文窗口大小，可选） */
   config?: Pick<Config, "contextWindow">;
   /** `initialize` 响应里回给宿主的 agentInfo */
@@ -380,12 +411,75 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
       );
     }
 
-    const agent = options.createAgent(workdir);
-    const session = agent.createSession();
+    const entry = options.createSessionEntry
+      ? options.createSessionEntry(workdir)
+      : (() => {
+          const agent = options.createAgent(workdir);
+          return { agent, session: agent.createSession() };
+        })();
+    const record: SessionRecord = { agent: entry.agent, session: entry.session };
+    sessions.set(entry.session.id, record);
+    log("info", `session/new sessionId=${entry.session.id} cwd=${workdir}`);
+    return { sessionId: entry.session.id };
+  }
+
+  /** 解析宿主给的 cwd（与 `session/new` 同一套宽容规则） */
+  function resolveWorkdir(params: Record<string, unknown>): string {
+    const rawCwd = typeof params.cwd === "string" ? params.cwd : "";
+    const workdir = rawCwd ? resolve(rawCwd) : process.cwd();
+    if (rawCwd && !isAbsolute(rawCwd)) {
+      log("warn", `session cwd 不是绝对路径（${rawCwd}），已解析为 ${workdir}`);
+    }
+    return workdir;
+  }
+
+  /**
+   * 注册（或返回已注册的）会话记录。
+   *
+   * `session/resume` 的 `sessionId` 必须成为本进程内的会话键：宿主后续的
+   * `session/prompt` 只会带那个 id，若这里换成新建会话的自生成 id，prompt 就会
+   * 落到 `unknown session` 上 —— 那只是把 `-32601` 换成了 `-32602`。
+   */
+  function registerSession(sessionId: string, workdir: string): SessionRecord {
+    const existing = sessions.get(sessionId);
+    if (existing) return existing;
+
+    let agent: Agent;
+    let session: Session;
+    if (options.resumeAgent) {
+      ({ agent, session } = options.resumeAgent(workdir, sessionId));
+    } else {
+      agent = options.createAgent(workdir);
+      session = agent.createSession();
+    }
+    // 宿主 id 优先：resume 语义就是「延续这个 id」，不是「换一个新 id」。
+    session.id = sessionId;
     const record: SessionRecord = { agent, session };
-    sessions.set(session.id, record);
-    log("info", `session/new sessionId=${session.id} cwd=${workdir}`);
-    return { sessionId: session.id };
+    sessions.set(sessionId, record);
+    return record;
+  }
+
+  /**
+   * 恢复会话（`session/resume` / `session/load` 共用）。
+   *
+   * 返回形状对标 ACP `ResumeSessionResponse`（`models` / `modes` / `configOptions`
+   * 全部可选，本桥只声明 baseline，因此不回这三项）。
+   *
+   * @param params - 宿主请求参数（`sessionId` 必填）
+   * @returns 会话记录
+   */
+  function resumeSession(params: Record<string, unknown>): SessionRecord {
+    const sessionId = params.sessionId;
+    if (typeof sessionId !== "string" || sessionId.length === 0) {
+      throw invalidParams("sessionId must be a non-empty string");
+    }
+    const workdir = resolveWorkdir(params);
+    const record = registerSession(sessionId, workdir);
+    log(
+      "info",
+      `session/resume sessionId=${record.session.id} cwd=${workdir} messages=${record.session.messages.length}`,
+    );
+    return record;
   }
 
   /** 结算在飞的 prompt（幂等） */
@@ -541,11 +635,15 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
       case "initialize":
         // 只声明 baseline 能力 —— 不声明 image / audio / embeddedContext，
         // 也不声明 session / editor / terminal / filesystem / MCP 能力。
+        // `sessionCapabilities.resume` 属于 spec 内的会话续聊能力（对标
+        // @deepseek-ai/dsh-acp / opencode）：守护进程续聊走 `session/resume`，
+        // 声明它让宿主知道「带 sessionId 回来是安全的」。
         return {
           protocolVersion: ACP_PROTOCOL_VERSION,
           agentInfo: { name: agentInfo.name, version: agentInfo.version },
           agentCapabilities: {
             promptCapabilities: { image: false, audio: false, embeddedContext: false },
+            sessionCapabilities: { resume: {} },
           },
           authMethods: [],
         };
@@ -556,6 +654,19 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
 
       case "session/new":
         return createSession(args);
+
+      case "session/resume": {
+        const record = resumeSession(args);
+        return { sessionId: record.session.id };
+      }
+
+      case "session/load": {
+        // ACP `load_session`：恢复语义与 resume 相同（差异只在 spec 要求
+        // `session/load` 回放历史；本桥的续聊入口是 resume，这里保底成功，
+        // 避免宿主换用 load 时再撞一次 -32601）。
+        resumeSession(args);
+        return {};
+      }
 
       case "session/prompt": {
         const record = requireSession(args.sessionId);

@@ -61,7 +61,7 @@ class FrameCollector {
 /** 造一个按脚本产出事件的假 Agent */
 function makeFakeAgent(
   script: AgentEvent[] | ((text: string) => AgentEvent[]),
-  options: { delayMs?: number } = {},
+  options: { delayMs?: number; knownSessions?: Record<string, Session> } = {},
 ) {
   const delayMs = options.delayMs ?? 0;
   const created: Array<{ workdir: string; session: Session }> = [];
@@ -95,7 +95,34 @@ function makeFakeAgent(
     return agent;
   };
 
-  return { factory, created };
+  /**
+   * 假的「按 sessionId 恢复」工厂：`knownSessions` 命中则回该会话（模拟跨进程
+   * 从持久化数据恢复上下文），未命中则回一个与宿主同 id 的空会话。
+   */
+  const resumed: Array<{ workdir: string; sessionId: string; hit: boolean }> = [];
+  const resumeAgent = (workdir: string, sessionId: string) => {
+    const agent = factory(workdir);
+    const hit = options.knownSessions?.[sessionId];
+    resumed.push({ workdir, sessionId, hit: hit !== undefined });
+    const session = hit ?? ({ ...factorySessionStub(sessionId) } as Session);
+    return { agent, session };
+  };
+
+  return { factory, created, resumeAgent, resumed };
+}
+
+/** 与宿主 id 对齐的空会话桩（resume 未命中时的保底形状） */
+function factorySessionStub(sessionId: string): Session {
+  return {
+    id: sessionId,
+    title: "resumed",
+    messages: [],
+    model: "fake-model",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    status: "idle",
+    tokenCount: 0,
+  } as Session;
 }
 
 /** 长时间在飞的脚本：用于取消 / 并发抢占（配合 delayMs 拉长窗口） */
@@ -108,11 +135,15 @@ function longTurn(): AgentEvent[] {
 }
 
 /** 建一个受控的连接 */
-function connect(factory: (workdir: string) => Agent) {
+function connect(
+  factory: (workdir: string) => Agent,
+  resumeAgent?: (workdir: string, sessionId: string) => { agent: Agent; session: Session },
+) {
   const input = new EventEmitter();
   const output = new FrameCollector();
   const connection = startAcpStdioServer({
     createAgent: factory,
+    ...(resumeAgent ? { resumeAgent } : {}),
     config: { contextWindow: 100000 },
     input,
     output,
@@ -195,6 +226,8 @@ describe("ACP stdio — 握手", () => {
       protocolVersion: ACP_PROTOCOL_VERSION,
       agentCapabilities: {
         promptCapabilities: { image: false, audio: false, embeddedContext: false },
+        // 续聊能力：守护进程按它判断「带老 sessionId 回来」是否安全
+        sessionCapabilities: { resume: {} },
       },
       authMethods: [],
     });
@@ -220,12 +253,12 @@ describe("ACP stdio — 握手", () => {
     const { factory } = makeFakeAgent([]);
     const conn = connect(factory);
 
-    const res = await conn.request("session/load", { sessionId: "x" }).promise;
+    const res = await conn.request("session/archive", { sessionId: "x" }).promise;
     expect(res["result"]).toBeUndefined();
     expect(res["error"]).toMatchObject({
       code: -32601,
-      message: '"Method not found": session/load',
-      data: { method: "session/load" },
+      message: '"Method not found": session/archive',
+      data: { method: "session/archive" },
     });
 
     conn.connection.dispose();
@@ -381,6 +414,120 @@ describe("ACP stdio — 会话与对话", () => {
       code: -32602,
       message: "Invalid params: unknown session: nope",
     });
+
+    conn.connection.dispose();
+  });
+});
+
+describe("ACP stdio — 会话续聊（session/resume）", () => {
+  it("session/resume 命中落盘会话：返回宿主 sessionId，后续 prompt 正常跑完", async () => {
+    // 第二轮对话的真实形状：新进程 initialize → session/resume{sessionId} → session/prompt
+    const known = factorySessionStub("ses_from_previous_process");
+    const { factory, resumeAgent, resumed } = makeFakeAgent(normalTurn, {
+      knownSessions: { ses_from_previous_process: known },
+    });
+    const conn = connect(factory, resumeAgent);
+
+    await conn.request("initialize", { protocolVersion: 1 }).promise;
+    const res = await conn.request("session/resume", {
+      sessionId: "ses_from_previous_process",
+      cwd: process.cwd(),
+      mcpServers: [],
+    }).promise;
+
+    expect(res["error"]).toBeUndefined();
+    // 返回形状对标 ACP ResumeSessionResponse：本桥 baseline-only，只回 sessionId
+    expect(res["result"]).toEqual({ sessionId: "ses_from_previous_process" });
+    expect(resumed).toEqual([
+      { workdir: process.cwd(), sessionId: "ses_from_previous_process", hit: true },
+    ]);
+
+    const promptRes = await conn.request("session/prompt", {
+      sessionId: "ses_from_previous_process",
+      prompt: [{ type: "text", text: "继续" }],
+    }).promise;
+    expect(promptRes["error"]).toBeUndefined();
+    expect(promptRes["result"]).toEqual({ stopReason: "end_turn" });
+
+    const updates = updatesOf(conn.output.frames(), "ses_from_previous_process");
+    expect(updates.map((u) => u.sessionUpdate)).toContain("agent_message_chunk");
+
+    conn.connection.dispose();
+  });
+
+  it("session/resume 未命中：仍以宿主 sessionId 建会话，prompt 不落 unknown session", async () => {
+    const { factory, resumeAgent, resumed } = makeFakeAgent(normalTurn);
+    const conn = connect(factory, resumeAgent);
+
+    const res = await conn.request("session/resume", {
+      sessionId: "ses_missing",
+      cwd: process.cwd(),
+    }).promise;
+    expect(res["error"]).toBeUndefined();
+    expect(res["result"]).toEqual({ sessionId: "ses_missing" });
+    expect(resumed[0]?.hit).toBe(false);
+
+    // 关键回归：prompt 必须命中 resume 注册的那个 id，而不是新会话的自生成 id
+    const promptRes = await conn.request("session/prompt", {
+      sessionId: "ses_missing",
+      prompt: [{ type: "text", text: "hi" }],
+    }).promise;
+    expect(promptRes["error"]).toBeUndefined();
+    expect(promptRes["result"]).toEqual({ stopReason: "end_turn" });
+
+    conn.connection.dispose();
+  });
+
+  it("未注入 resumeAgent 时 session/resume 用宿主 id 保底，不再回 -32601", async () => {
+    // 这是守护进程实际撞到的报错：hermes session/resume failed ... (code=-32601)
+    const { factory } = makeFakeAgent(normalTurn);
+    const conn = connect(factory);
+
+    const res = await conn.request("session/resume", {
+      sessionId: "ses_legacy",
+      cwd: process.cwd(),
+    }).promise;
+
+    expect(res["error"]).toBeUndefined();
+    expect(res["result"]).toEqual({ sessionId: "ses_legacy" });
+    expect(conn.connection.sessionCount()).toBe(1);
+
+    conn.connection.dispose();
+  });
+
+  it("session/resume 缺 sessionId 时按 -32602 拒绝", async () => {
+    const { factory, resumeAgent } = makeFakeAgent(normalTurn);
+    const conn = connect(factory, resumeAgent);
+
+    const res = await conn.request("session/resume", { cwd: process.cwd() }).promise;
+    expect(res["error"]).toMatchObject({
+      code: -32602,
+      message: "Invalid params: sessionId must be a non-empty string",
+    });
+
+    conn.connection.dispose();
+  });
+
+  it("session/load 与 resume 同语义（返回空响应，不再 -32601）", async () => {
+    const { factory, resumeAgent } = makeFakeAgent(normalTurn, {
+      knownSessions: { ses_loaded: factorySessionStub("ses_loaded") },
+    });
+    const conn = connect(factory, resumeAgent);
+
+    const res = await conn.request("session/load", {
+      sessionId: "ses_loaded",
+      cwd: process.cwd(),
+      mcpServers: [],
+    }).promise;
+
+    expect(res["error"]).toBeUndefined();
+    expect(res["result"]).toEqual({});
+
+    const promptRes = await conn.request("session/prompt", {
+      sessionId: "ses_loaded",
+      prompt: [{ type: "text", text: "hi" }],
+    }).promise;
+    expect(promptRes["result"]).toEqual({ stopReason: "end_turn" });
 
     conn.connection.dispose();
   });
