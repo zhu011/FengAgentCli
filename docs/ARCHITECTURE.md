@@ -529,7 +529,11 @@ while (needsContinuation && step < maxTurns) {
 ### 8.4 权限审批方案
 
 - `PermissionChecker`：auto / allow / deny / ask；
-- CLI 弹框 / WebUI SSE 推送审批请求，用户响应回传。
+- CLI 弹框 / WebUI SSE 推送审批请求，用户响应回传；
+- Multica（`fengagent acp`）：审批作为 ACP 出站请求 `session/request_permission`
+  发给守护进程，宿主的 `optionId` 翻译回 allow / deny；宿主不支持或超时按「未表态」
+  放行（`metadata.permissionPreAuthorized` 留痕）。子 Agent 无审批通道，保持拒绝不
+  静默提权。
 
 ### 8.5 上下文压缩实现
 

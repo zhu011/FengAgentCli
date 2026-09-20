@@ -9,12 +9,13 @@ export type { ToolRegistry } from "./registry.ts";
 export { createToolExecutor } from "./executor.ts";
 export type {
   ToolExecutor,
+  ToolExecutorOptions,
   ExecutionContext,
   ExecutedToolResult,
 } from "./executor.ts";
 
 export { createPermissionChecker } from "./permission.ts";
-export type { PermissionChecker } from "./permission.ts";
+export type { PermissionChecker, PermissionCheckerOptions } from "./permission.ts";
 
 export { createHookRegistry } from "./hooks.ts";
 export type {
