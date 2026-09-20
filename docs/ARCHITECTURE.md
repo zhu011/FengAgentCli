@@ -1295,6 +1295,11 @@ if (command === "serve" || command === "server") {
 执行工具或返回拒绝
 ```
 
+Multica（`fengagent acp`）路径：审批作为 ACP 出站请求 `session/request_permission`
+发给守护进程，宿主的 `optionId` 翻译回 allow / deny；宿主不支持或超时按「未表态」
+放行（`metadata.permissionPreAuthorized` 留痕）。子 Agent 无审批通道，保持拒绝不
+静默提权。
+
 ### 6.6 上下文压缩实现
 
 ```typescript

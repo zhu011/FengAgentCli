@@ -18,6 +18,17 @@ import { join } from "node:path";
 import type { AgentEvent, Config } from "@fengagent/core";
 import type { AcpFrameReader, AcpFrameWriter, AcpLogFn } from "@fengagent/server/acp-stdio";
 
+/**
+ * ACP 路径「需要审批但宿主没有回调」时的兜底策略。
+ *
+ * 为什么是 `allow`：Multica 守护进程把 `fengagent acp` 当运行时子进程拉起，
+ * 会话由用户在界面上发起、工作目录是该任务的独立 workdir —— 等价于宿主预授权。
+ * 正常路径上审批走 ACP 权限桥（`session/request_permission`，见 acp-stdio），
+ * 这里只是「宿主没回/不支持」时的兜底：不把 ask 类工具（bash 等）判成不可恢复
+ * 而中断整轮对话（AGE-29 现场）。
+ */
+const ACP_UNATTENDED_PERMISSION_POLICY = "allow" as const;
+
 /** ACP 模式选项 */
 export interface AcpModeOptions {
   /** `true` = HTTP + SSE；默认 stdio JSON-RPC */
@@ -192,8 +203,12 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
     registerBuiltinTools(toolRegistry);
 
     // 权限配置按会话工作目录解析（.fengagent/permissions.json 是项目级配置）
-    const permissionChecker = createPermissionChecker(workdir);
-    const toolExecutor = createToolExecutor(permissionChecker, hookRegistry);
+    const permissionChecker = createPermissionChecker(workdir, undefined, {
+      unattendedPermissionPolicy: ACP_UNATTENDED_PERMISSION_POLICY,
+    });
+    const toolExecutor = createToolExecutor(permissionChecker, hookRegistry, {
+      unattendedPermissionPolicy: ACP_UNATTENDED_PERMISSION_POLICY,
+    });
     const contextManager = createContextManager({
       config: {
         contextWindow: config.contextWindow,

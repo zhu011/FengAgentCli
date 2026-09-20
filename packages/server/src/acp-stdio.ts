@@ -17,6 +17,7 @@
  * | `session/prompt` | client → agent | 跑一轮 Agent Loop，流式推 `session/update`，返回 `stopReason` |
  * | `session/cancel` | client → agent（notification） | 取消该会话在飞的 prompt，结算为 `cancelled` |
  * | `session/set_model` | client → agent | 容错扩展：把 `modelId` 应用到会话模型 |
+ * | `session/request_permission` | agent → client | 工具审批（bash 等 ask 类工具）：宿主把请求透出到界面并回 `optionId`，缺省实现见 `mapPermissionResponse` |
  *
  * 为什么必须有 `session/resume`：Multica 桌面守护进程**每个任务 spawn 一个新的
  * `fengagent acp` 子进程**，进程结束即回收，第二轮对话不是「同一进程里的第二次
@@ -39,6 +40,7 @@ import { StringDecoder } from "node:string_decoder";
 import { isAbsolute, resolve } from "node:path";
 import { format } from "node:util";
 import type { AgentEvent, Config, FinishReason, Session } from "@fengagent/core";
+import type { PermissionResult } from "@fengagent/core/permission";
 import type { Agent } from "@fengagent/agent";
 import { toSingleLine } from "@fengagent/shared/utils";
 
@@ -157,6 +159,66 @@ export interface AcpStdioOptions {
    * 句柄不释放会把会话吊死；测试注入自定义流时默认不退出。
    */
   exitOnClose?: boolean;
+  /**
+   * 是否启用 ACP 权限桥（`session/request_permission` 请求 → 宿主决策）。
+   *
+   * 默认 `true`。宿主（Multica 守护进程）实现该 client 方法：它把审批请求
+   * 转发到界面并在用户驱动会话里自动放行（守护进程日志
+   * `auto-approved agent permission request method=session/request_permission`）。
+   *
+   * 关掉它（或宿主回 `-32601`）时 agent 拿不到 `requestPermission` 回调，此时
+   * 需要宿主侧配合「预授权」策略，否则 ask 类工具（bash 等）会被判不可恢复
+   * 并立即结算整轮对话。
+   */
+  permissionBridge?: boolean;
+  /**
+   * 单次权限请求等待宿主决策的上限（毫秒，默认 120000）。
+   *
+   * 超时按「宿主未表态」处理：放行并留痕（见 `mapPermissionResponse`），
+   * 不能让宿主侧没有交互通道时把整轮对话吊死。
+   */
+  permissionTimeoutMs?: number;
+}
+
+/** 权限桥的拒绝选项 id（对标 ACP `PermissionOptionKind`；放行选项见 requestPermissionFromHost） */
+const PERMISSION_REJECT_OPTION_IDS = ["reject-once", "reject_once", "reject-always"] as const;
+
+/** 在飞的「出站请求 → 宿主响应」记录 */
+interface PendingOutboundRequest {
+  resolve(result: unknown): void;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+/**
+ * 把宿主对 `session/request_permission` 的响应翻译成我们的权限决策。
+ *
+ * 语义（宁放行不误杀）：
+ * - `outcome: "cancelled"` → 拒绝（宿主明确取消，例如用户点了取消/停止）；
+ * - 选项 id 命中拒绝集合 → 拒绝；
+ * - 其余（命中放行集合 / 宿主回了没见过的 id / 响应缺字段）→ 放行并留痕。
+ *   宿主已经替用户做过一次决策，我们不该因为对不齐 id 字面量就把工具调用判死
+ *   （`dsh-acp` 用 `allow-once`，Multica 守护进程自己回 `approve_once`）。
+ *
+ * @param response - 宿主响应（JSON-RPC result）
+ * @returns 权限决策
+ */
+export function mapPermissionResponse(response: unknown): PermissionResult {
+  const outcome = (response as { outcome?: unknown } | null)?.outcome;
+  if (!outcome || typeof outcome !== "object") {
+    return { decision: "allow" };
+  }
+  const record = outcome as { outcome?: unknown; optionId?: unknown };
+  if (record.outcome === "cancelled") {
+    return { decision: "deny", reason: "host cancelled the permission request" };
+  }
+  const optionId = typeof record.optionId === "string" ? record.optionId : "";
+  if (optionId.length === 0) {
+    return { decision: "allow" };
+  }
+  if ((PERMISSION_REJECT_OPTION_IDS as readonly string[]).includes(optionId)) {
+    return { decision: "deny", reason: `host chose ${optionId}` };
+  }
+  return { decision: "allow" };
 }
 
 /** 连接句柄 */
@@ -233,6 +295,17 @@ interface InflightPrompt {
   endReason?: FinishReason;
   resolve(reason: AcpStopReason): void;
   reject(error: unknown): void;
+  /**
+   * 本轮 prompt 的权限回调：需要人工审批的工具（bash 等）走它征求宿主决策。
+   *
+   * 宿主（Multica 守护进程）在 `session/start` 时以 ACP 方法
+   * `session/request_permission` 回来 —— 这正是 `dsh-acp` 的同款路径。
+   */
+  requestPermission?: (permission: {
+    toolName: string;
+    input: unknown;
+    reason?: string;
+  }) => Promise<PermissionResult>;
 }
 
 /**
@@ -385,6 +458,124 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
       method: "session/update",
       params: { sessionId, update },
     });
+  }
+
+  // ------------------------------------------------------- 权限桥（出站请求）
+  // ACP 里「工具审批」是 agent → client 的**请求**：agent 发
+  // `session/request_permission`，宿主把审批透出到界面并回决策。这是本桥唯一
+  // 的 agent→client 请求通道，也是最容易出错的一段：
+  // 没有它，ask 类工具（bash）在守护进程路径下永远拿不到回调 → 被判不可恢复
+  // → 整轮对话立即结算（AGE-29）。
+  const permissionBridge = options.permissionBridge ?? true;
+  const permissionTimeoutMs = options.permissionTimeoutMs ?? 120_000;
+  const pendingPermissions = new Map<number, PendingOutboundRequest>();
+  let nextOutboundRequestId = 0;
+
+  /**
+   * 向宿主发一个出站 JSON-RPC 请求并等它的响应。
+   *
+   * 与 `send()` 共用同一个写队列，因此不会与响应帧 / 通知帧交错。
+   *
+   * @param method - 方法名
+   * @param params - 参数
+   * @returns 宿主响应的 `result`
+   */
+  function sendRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
+    return new Promise<unknown>((resolvePromise, rejectPromise) => {
+      const id = ++nextOutboundRequestId;
+      const timer =
+        permissionTimeoutMs > 0
+          ? setTimeout(() => {
+              if (pendingPermissions.delete(id)) {
+                log("warn", `${method} 等待宿主决策超时（${permissionTimeoutMs}ms），按未表态处理`);
+                rejectPromise(new Error(`${method} timed out after ${permissionTimeoutMs}ms`));
+              }
+            }, permissionTimeoutMs)
+          : undefined;
+      pendingPermissions.set(id, {
+        resolve: (result) => {
+          if (timer) clearTimeout(timer);
+          resolvePromise(result);
+        },
+        timer,
+      });
+      void send({ jsonrpc: "2.0", id, method, params });
+    });
+  }
+
+  /**
+   * 把工具审批推给宿主（ACP `session/request_permission`）。
+   *
+   * 选项 id 同时给「规范写法」（`allow-once` / `reject-once`，对标 dsh-acp）与
+   * 守护进程实际会回的 `approve_once`，避免 id 字面量对不齐导致已批准的调用被
+   * 判成拒绝。
+   *
+   * @param sessionId - 会话 id
+   * @param permission - 权限请求（工具名 / 入参 / 原因）
+   * @returns 宿主决策；宿主不可用或超时 → 放行并留痕（见 mapPermissionResponse）
+   */
+  async function requestPermissionFromHost(
+    sessionId: string,
+    permission: { toolName: string; input: unknown; reason?: string },
+  ): Promise<PermissionResult> {
+    const requestId = nextOutboundRequestId + 1;
+    const toolCallId = `perm_${sessionId}_${requestId}`;
+    try {
+      const response = await sendRequest("session/request_permission", {
+        sessionId,
+        toolCall: { toolCallId, title: permission.toolName },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "approve_once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      });
+      const decision = mapPermissionResponse(response);
+      log(
+        "info",
+        `session/request_permission tool=${permission.toolName} decision=${decision.decision}`,
+      );
+      return decision;
+    } catch (error) {
+      // 宿主不支持该方法（-32601）/ 连接异常 / 超时：不把工具调用判死。
+      // 这里的宿主是用户驱动的 Multica 会话，工作目录是该任务的独立 workdir，
+      // 等价于「宿主预授权」（与 acp-mode 的 unattended 策略同一口径）。
+      log(
+        "warn",
+        `session/request_permission 失败（按宿主未表态放行）: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return { decision: "allow" };
+    }
+  }
+
+  /**
+   * 处理宿主对出站请求的响应帧。
+   *
+   * @param message - 已解析的协议帧
+   * @returns 是否消费了该帧
+   */
+  function handleResponse(message: Record<string, unknown>): boolean {
+    const id = message.id;
+    if (typeof id !== "number") return false;
+    const pending = pendingPermissions.get(id);
+    if (!pending) return false;
+    pendingPermissions.delete(id);
+    if (message.error !== undefined && message.error !== null) {
+      pending.resolve(undefined);
+      return true;
+    }
+    pending.resolve(message.result);
+    return true;
+  }
+
+  /** 连接关闭时结算所有在飞请求（调用方按「宿主未表态」兜底） */
+  function failPendingPermissions(): void {
+    for (const [id, pending] of pendingPermissions) {
+      pendingPermissions.delete(id);
+      pending.resolve(undefined);
+    }
   }
 
   // ---------------------------------------------------------------- 会话管理
@@ -580,12 +771,25 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
         settled: false,
         resolve: resolvePromise,
         reject: rejectPromise,
+        ...(permissionBridge
+          ? {
+              requestPermission: (permission: {
+                toolName: string;
+                input: unknown;
+                reason?: string;
+              }) => requestPermissionFromHost(record.session.id, permission),
+            }
+          : {}),
       };
       record.inflight = inflight;
 
       void (async () => {
         try {
-          for await (const event of record.agent.prompt(text, record.session)) {
+          for await (const event of record.agent.prompt(text, record.session, {
+            ...(inflight.requestPermission
+              ? { requestPermission: inflight.requestPermission }
+              : {}),
+          })) {
             if (inflight.cancelled) break;
             handleAgentEvent(record, event, inflight);
           }
@@ -749,7 +953,9 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
     }
 
     if (id !== undefined) {
-      // 本桥不向客户端发请求，收到响应说明对端行为异常 —— 记录即可。
+      // agent → client 的出站请求（权限桥）的响应走这里；除此之外本桥不主动发请求，
+      // 收到未知响应说明对端行为异常 —— 记录即可。
+      if (handleResponse(message)) return;
       log("debug", `收到未知响应 id=${String(id)}`);
       return;
     }
@@ -782,7 +988,9 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
   function close(): void {
     if (closed) return;
     closed = true;
-    // 先拒绝新会话/新 prompt，再结算在飞 prompt，最后等待写队列排空。
+    // 先结算在飞的权限请求（宿主按「未表态」兜底），再拒绝新会话/新 prompt，
+    // 最后等待写队列排空。
+    failPendingPermissions();
     for (const record of sessions.values()) {
       const inflight = record.inflight;
       if (inflight) {

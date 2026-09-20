@@ -54,6 +54,37 @@ export interface ToolExecutor {
   getHookRegistry(): HookRegistry;
 }
 
+/**
+ * 工具执行器选项。
+ */
+export interface ToolExecutorOptions {
+  /**
+   * 「需要人工审批（ask）但当前宿主没有 `requestPermission` 回调」时的兜底策略。
+   *
+   * - `deny`（默认，也是历史行为）：返回错误并把结果标记为
+   *   `metadata.unrecoverable`，循环层据此立即结算 —— 模型改参/重试都过不去，
+   *   继续跑只是空耗 token（AGE-29 现场）。
+   * - `allow`：视为宿主**预授权**（pre-authorized）直接放行执行，并在结果里打
+   *   `metadata.permissionPreAuthorized = true` 留痕。
+   *
+   * 只有「用户驱动、工作目录隔离」的非交互宿主才该选 `allow`：当前是 ACP
+   * （Multica 守护进程）路径 —— 会话由用户在界面上发起，工作目录是该任务的
+   * 独立 workdir。TUI / WebUI / 子 Agent 保持默认 `deny`（前两者有真实审批 UI，
+   * 子 Agent 不应静默提权）。
+   */
+  unattendedPermissionPolicy?: "deny" | "allow";
+}
+
+/**
+ * 「需要审批但宿主没有回调」时是否按预授权直接放行。
+ *
+ * @param policy - 执行器策略
+ * @returns 允许放行时返回 true
+ */
+function preAuthorizesUnattendedAsk(policy: "deny" | "allow"): boolean {
+  return policy === "allow";
+}
+
 function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -132,9 +163,11 @@ function toHookContext(context: ToolContext): HookContext {
 export function createToolExecutor(
   permissionChecker?: PermissionChecker,
   hookRegistry?: HookRegistry,
+  options?: ToolExecutorOptions,
 ): ToolExecutor {
   const permChecker = permissionChecker ?? createPermissionChecker();
   const hooks = hookRegistry ?? createHookRegistry();
+  const unattendedPolicy = options?.unattendedPermissionPolicy ?? "deny";
 
   /**
    * 执行单个工具，返回「实际执行的入参」+ 结果。
@@ -153,6 +186,8 @@ export function createToolExecutor(
     const originalInput = input;
     // 用户是否在审批环节修改了入参（用于上层把「实际执行入参」同步进历史/卡片）
     let correctedByUser = false;
+    // 非交互宿主（ACP）预授权放行（用于结果留痕，见 ToolExecutorOptions）
+    let preAuthorized = false;
     // 0. 入参校验 — 失败且工具本就需要人工审批（ask）时，先给用户改参机会；
     //    自动放行场景（autoApprove / 只读工具）保持原行为：直接把校验错误回给模型自行修正
     let validated = tryValidate(tool, input);
@@ -313,6 +348,16 @@ export function createToolExecutor(
           input = userDecision.input;
           validated = corrected;
         }
+      } else if (preAuthorizesUnattendedAsk(unattendedPolicy)) {
+        // 非交互宿主预授权（ACP / Multica 路径）：不打扰、不放行失败，直接执行。
+        // 留痕到日志，便于回看「这次 bash 是谁批的」。
+        preAuthorized = true;
+        log.info(
+          "executeOne",
+          `tool=${tool.name}, permission pre-authorized by host (no approval channel), reason=${
+            perm.message ?? ""
+          }`,
+        );
       } else {
         return {
           input,
@@ -366,6 +411,12 @@ export function createToolExecutor(
           userCorrectedInput: true,
         };
       }
+      if (preAuthorized) {
+        result.metadata = {
+          ...(result.metadata as Record<string, unknown>),
+          permissionPreAuthorized: true,
+        };
+      }
       result = await hooks.triggerPostToolUse(tool.name, validated.value, result, hookCtx);
       return { input, result };
     }
@@ -381,6 +432,7 @@ export function createToolExecutor(
       metadata: {
         ...(result.metadata as Record<string, unknown>),
         ...(correctedByUser ? { userCorrectedInput: true } : {}),
+        ...(preAuthorized ? { permissionPreAuthorized: true } : {}),
         ...(truncated.overflowFile
           ? { overflowFile: truncated.overflowFile }
           : {}),

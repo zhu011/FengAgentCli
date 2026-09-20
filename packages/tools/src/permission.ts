@@ -35,6 +35,21 @@ export interface PermissionChecker {
   clearCache(): void;
 }
 
+/**
+ * 权限检查器选项。
+ */
+export interface PermissionCheckerOptions {
+  /**
+   * 「破坏性工具需要审批但宿主没有 `requestPermission` 回调」时的兜底策略。
+   *
+   * - `deny`（默认，也是历史行为）：返回 `denyUnrecoverable`，循环层立即结算
+   *   （AGE-29：ACP 路径下 bash 永远被拒）。
+   * - `allow`：宿主**预授权**，直接放行 —— 只适用于用户驱动且工作目录隔离的
+   *   非交互宿主（ACP / Multica）。子 Agent、无 UI 的批处理保持默认。
+   */
+  unattendedPermissionPolicy?: "deny" | "allow";
+}
+
 // ──────────────────────────────────────────────
 // 决策缓存
 // ──────────────────────────────────────────────
@@ -62,10 +77,12 @@ function cacheKey(toolName: string, input: unknown): CacheKey {
  *
  * @param workdir - 工作目录（用于加载 .fengagent/permissions.json）
  * @param config - 可选的预加载权限配置（跳过文件读取）
+ * @param options - 可选策略（非交互宿主的预授权）
  */
 export function createPermissionChecker(
   workdir?: string,
   config?: PermissionConfig,
+  options?: PermissionCheckerOptions,
 ): PermissionChecker {
   // 加载权限配置（文件级规则）
   const permConfig: PermissionConfig =
@@ -74,6 +91,8 @@ export function createPermissionChecker(
   // 决策缓存
   const cacheEnabled = permConfig.cache;
   const decisionCache = new Map<CacheKey, PermissionResult>();
+  // 非交互宿主预授权（ACP / Multica 路径）：见 PermissionCheckerOptions.unattendedPermissionPolicy
+  const unattendedPolicy = options?.unattendedPermissionPolicy ?? "deny";
 
   function checkPermissions(
     tool: ToolDefinition,
@@ -149,6 +168,14 @@ export function createPermissionChecker(
     if (tool.isDestructive && tool.isDestructive(input)) {
       if (context.requestPermission) {
         return ask(`Tool "${tool.name}" is destructive. Confirm execution?`);
+      }
+      // 预授权宿主（ACP）：直接放行，避免「无回调 → 不可恢复拒绝」把整轮对话打断
+      if (unattendedPolicy === "allow") {
+        log.info(
+          "checkPermissions",
+          `tool=${tool.name}, decision=allow, reason=preAuthorizedDestructive`,
+        );
+        return ALLOW;
       }
       // 不缓存 — 此 deny 依赖 context.requestPermission 是否存在
       return denyUnrecoverable(

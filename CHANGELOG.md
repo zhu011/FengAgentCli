@@ -4,6 +4,41 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — ACP 权限桥：Multica 路径下 bash 等审批类工具可用（main 适配）
+
+### 修复
+
+- **Multica（ACP 路径）下所有需要审批的工具（bash 等）都不可用** — 现场报
+  `-32603 ... Tool "bash" requires user approval but no permission callback is available`：
+  `fengagent acp` 装配 Agent 时没有注入 `requestPermission` 回调，bash 这类自带
+  `checkPermissions → ask` 的工具在工具执行器里被判「无回调可用」，配合上一版的
+  「不可恢复立即结算」直接把整轮对话终止 —— 结果是 feng小弟 在 Multica 里执行不了
+  任何命令。修复分两层：
+  - **ACP 权限桥**（`packages/server/src/acp-stdio.ts`）：审批作为 ACP 出站请求
+    `session/request_permission` 发给宿主（与 `@deepseek-ai/dsh-acp` 同款路径），
+    宿主回 `optionId`（`allow-once` / `approve_once` / `reject-once`，`outcome: cancelled`
+    视为拒绝）后翻译成权限决策；宿主不支持该方法、回未知选项或超时（默认 120s）时按
+    **宿主未表态**放行并留痕，不让审批把对话吊死；
+  - **非交互宿主预授权策略**（`packages/tools/src/executor.ts` + `permission.ts`，
+    `packages/cli/src/acp-mode.ts`）：`ToolExecutorOptions.unattendedPermissionPolicy`
+    与 `PermissionCheckerOptions.unattendedPermissionPolicy` 默认 `deny`（历史行为不变，
+    子 Agent 不静默提权），ACP 装配显式设为 `allow` —— 用户驱动、工作目录隔离的宿主
+    视为已授权，ask 类工具直接执行并在结果上打 `metadata.permissionPreAuthorized`。
+
+### 测试
+
+- `packages/server/src/__tests__/acp-permission.test.ts`：`mapPermissionResponse` 语义；
+  与宿主的审批往返（放行 / 拒绝 / `-32601` / 超时 / 连接关闭结算）；
+  真实 Agent + 真实工具执行器 + 真实权限层的端到端（宿主放行后工具真的被执行）；
+- `packages/tools/src/__tests__/unattended-permission.test.ts`：默认策略仍 `unrecoverable`、
+  预授权策略放行且带留痕、有回调时仍走真实审批。
+
+### 文档
+
+- `docs/CONFIGURATION.md`：新增「工具审批在各宿主上的行为」表（TUI / WebUI / Multica ACP /
+  子 Agent）与 ACP 路径的兜底语义；
+- `docs/ARCHITECTURE.md`：6.5 权限审批方案补 ACP 出站审批请求与预授权兜底。
+
 ## [Unreleased] — 空转死循环防护增强 + 失败详情单行化（main 适配）
 
 ### 修复
