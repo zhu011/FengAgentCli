@@ -227,7 +227,10 @@ describe("ACP stdio — 握手", () => {
       protocolVersion: ACP_PROTOCOL_VERSION,
       agentCapabilities: {
         promptCapabilities: { image: false, audio: false, embeddedContext: false },
-        // 续聊能力：守护进程按它判断「带老 sessionId 回来」是否安全
+        // 续聊能力：守护进程按它判断「带老 sessionId 回来」是否安全。
+        // `loadSession` 是守护进程真正读的字段（缺它则 `resume_reachable=false`，
+        // 前会话被 drop）；`sessionCapabilities.resume` 是新版 ACP 形状。
+        loadSession: true,
         sessionCapabilities: { resume: {} },
       },
       authMethods: [],
