@@ -1127,6 +1127,66 @@ describe("AgentLoop — 空转防护（重复调用 / 无进展 / 重复读 / wa
     ).toBe(false);
   });
 
+  test("工具失败日志：warn 级、单物理行、不铺原始内容（宿主误分类防线）", async () => {
+    const { options } = createTestSetup();
+    const mockLLM = options.llmClient as MockLLMClient;
+
+    // 复刻真机形态：工具失败内容是多行 pretty JSON 错误对象（zod invalid_type）
+    const jsonError = 'Error: [\n  {\n    "code": "invalid_type",\n    "expected": "string"\n  }\n]';
+    options.toolRegistry.register({
+      name: "json-fail",
+      description: "Fails with a pretty-printed JSON error",
+      inputSchema: z.object({}).passthrough(),
+      async execute() {
+        return { content: jsonError, isError: true };
+      },
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+    });
+
+    mockLLM.setResponses([
+      [toolCall("c1", "json-fail", {}), finish("tool_use")],
+      [textDelta("done"), finish("end_turn")],
+    ]);
+
+    const originalError = console.error;
+    const originalWarn = console.warn;
+    const errorLines: string[] = [];
+    const warnLines: string[] = [];
+    console.error = ((...args: unknown[]) => {
+      errorLines.push(args.map(String).join(" "));
+    }) as typeof console.error;
+    console.warn = ((...args: unknown[]) => {
+      warnLines.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+
+    try {
+      const loop = new AgentLoop(options);
+      const session = createSession("test-model");
+      session.messages.push(createUserMessage("触发一次工具失败"));
+      await collectEvents(loop.run(session));
+    } finally {
+      console.error = originalError;
+      console.warn = originalWarn;
+    }
+
+    const toolFailureWarns = warnLines.filter((l) => l.includes("tool result: error"));
+    expect(toolFailureWarns).toHaveLength(1);
+    // 可恢复的工具失败不再走 error 级（error 级在 ACP 宿主侧是最高危信号）
+    expect(errorLines.filter((l) => l.includes("tool result: error"))).toHaveLength(0);
+    // 单物理行：多行内容不得把日志行撕成碎片
+    expect(toolFailureWarns[0]!.includes("\n")).toBe(false);
+    // 归属信息保留长度，但原文里的 JSON 碎片不铺进日志行
+    expect(toolFailureWarns[0]).toContain("contentChars=");
+    expect(toolFailureWarns[0]).not.toContain('"code"');
+    expect(toolFailureWarns[0]).not.toContain('"invalid_type"');
+    // 标签本身不允许出现任何开括号（JSON 碎片信号）；日志格式自带的 `[WARN]` 不算
+    const label = toolFailureWarns[0]!.split("label=")[1] ?? "";
+    expect(label).not.toContain("[");
+    expect(label).not.toContain("{");
+    expect(label).not.toContain('"');
+  });
+
   test("防护阈值可注入：放宽后同样的空转不再触发（默认值才是防线）", async () => {
     const { options } = createTestSetup();
     const mockLLM = options.llmClient as MockLLMClient;

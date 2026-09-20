@@ -141,6 +141,23 @@ interface LLMRequest {
 | `memory-search` | `builtin/memory.ts` | ✅ | allow |
 | `skill` | `builtin/skill.ts` | ✅ | allow |
 
+#### `bash` 工具的解释器（方言契约）
+
+工具名叫 `bash` 是历史命名，**真正执行命令的解释器按平台解析**，且工具描述由同一份
+解析结果生成，保证「名字 / 描述 / 实现」三方一致：
+
+| 平台 | 解析顺序 | 参数 | 方言 |
+|------|----------|------|------|
+| Windows | `pwsh.exe`（PowerShell 7+）→ `powershell.exe`（Windows PowerShell 5.1）→ `ComSpec`（cmd.exe） | `-NoLogo -NoProfile -NonInteractive -Command` / `/c` | PowerShell 语法（原生 cmdlet + `ls`/`cat`/`pwd` 别名） |
+| Linux / macOS | `$SHELL` → `/bin/sh` | `-c` | POSIX shell |
+
+解析是**纯文件系统探测**（PATH + 常见安装位置），不起探针进程；`metadata.shell` 回带
+实际解释器（`pwsh` / `powershell` / `cmd` / `sh`），工具卡片前缀也据此显示
+（`powershell: Get-ChildItem -Name`）。
+
+Windows PowerShell 5.1 不支持 `&&`，描述里显式提示改用 `;`。每次调用都是新 shell，
+`cd` 与变量不跨调用保留。
+
 ### MCP 集成
 
 `mcp/mcp-client.ts` — 连接 MCP Server（stdio / SSE），自动发现工具并注册。MCP 工具名前缀：`mcp__<server>__<tool>`。

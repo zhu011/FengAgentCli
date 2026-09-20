@@ -46,7 +46,8 @@ export type { TruncateResult } from "./truncate.ts";
 export { fileRead } from "./builtin/file-read.ts";
 export { fileWrite } from "./builtin/file-write.ts";
 export { fileEdit } from "./builtin/file-edit.ts";
-export { bashTool } from "./builtin/bash.ts";
+export { bashTool, createBashTool, describeBashTool, resolveShell, isExecutableAvailable } from "./builtin/bash.ts";
+export type { ResolvedShell } from "./builtin/bash.ts";
 export { sandboxTool, disposeSandbox, disposeAllSandboxes } from "./builtin/sandbox-tool.ts";
 export { Sandbox, SandboxEscapeError, SANDBOX_ENV_MARKER } from "./sandbox.ts";
 export type {

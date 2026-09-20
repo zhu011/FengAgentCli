@@ -700,6 +700,32 @@ describe("ACP stdio — 失败详情单行化", () => {
     expect(lines[0]).toContain("Error: [");
     expect(lines[0]).not.toBe("[");
   });
+
+  it("error 级日志同样带 `[fengagent-acp] ` 前缀（宿主误分类防线）", () => {
+    const written: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      written.push(typeof chunk === "string" ? chunk : chunk.toString());
+      return true;
+    }) as typeof process.stderr.write;
+
+    // 复刻真机形态：shared logger 的 error 级走 console.error，内容是多行 JSON 碎片
+    const restore = redirectConsoleToStderr();
+    try {
+      console.error(`[ERROR] [agent-loop] [run] tool result: error, content=Error: [\n  {\n    "code": "boom"\n  }\n]`);
+    } finally {
+      restore();
+      process.stderr.write = originalWrite;
+    }
+
+    const lines = written.join("").split("\n").filter((l) => l.length > 0);
+    expect(lines.length).toBeGreaterThanOrEqual(3);
+    for (const line of lines) {
+      expect(line.startsWith("[fengagent-acp] ")).toBe(true);
+    }
+    // 还原后 console.error 回到原实现（不污染其它测试）
+    expect(console.error).not.toBe(console.log);
+  });
 });
 
 describe("ACP stdio — 协议通道纯净性", () => {

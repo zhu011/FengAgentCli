@@ -1032,6 +1032,14 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
  * 而 `console.log` 走 stdout —— 在 stdio ACP 模式下第一个字节就会污染协议帧，
  * 宿主的 JSON 解析失败后只会报「进程退出」，完全无法定位。
  *
+ * 为什么 `console.error` 也必须包：error 级日志（shared logger 的 error 走
+ * `console.error`，如 agent loop 的工具失败记录）虽天然落在 stderr、不污染协议，
+ * 但**不带 `[fengagent-acp] ` 前缀**。宿主按行采集 stderr 并做错误启发式，
+ * 无前缀行无法归属到本进程/本级别，实测被误分类为致命错误——22:33 那次
+ * `agent_error="hermes provider error: [...]"` 与可真机复现的
+ * `[ERROR] [agent-loop] [run] tool result: error, content=Error: [` 行逐字同源。
+ * 统一前缀后，error 级行与其它级别一样可归属、可过滤。
+ *
  * 返回的 `restore` 用于测试后还原。
  *
  * @returns 还原函数
@@ -1041,6 +1049,7 @@ export function redirectConsoleToStderr(): () => void {
   const originalInfo = console.info;
   const originalDebug = console.debug;
   const originalWarn = console.warn;
+  const originalError = console.error;
   const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 
   const toStderr = (...args: unknown[]): void => {
@@ -1057,6 +1066,7 @@ export function redirectConsoleToStderr(): () => void {
   console.info = toStderr;
   console.debug = toStderr;
   console.warn = toStderr;
+  console.error = toStderr;
 
   // 兜底：任何绕过 console 的 process.stdout.write 也改道 stderr。
   // 协议帧由 startAcpStdioServer 通过 rawStdoutWriter()（模块加载时捕获的原始
@@ -1075,6 +1085,7 @@ export function redirectConsoleToStderr(): () => void {
     console.info = originalInfo;
     console.debug = originalDebug;
     console.warn = originalWarn;
+    console.error = originalError;
     process.stdout.write = originalStdoutWrite;
   };
 }
