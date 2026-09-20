@@ -854,6 +854,17 @@ export function startAcpStdioServer(options: AcpStdioOptions): AcpStdioConnectio
           agentInfo: { name: agentInfo.name, version: agentInfo.version },
           agentCapabilities: {
             promptCapabilities: { image: false, audio: false, embeddedContext: false },
+            // `loadSession` 是 `agentCapabilities` 的直系字段（ACP `AgentCapabilities`），
+            // 也是 Multica 守护进程识别「本运行时能接老 sessionId」的那个字段：
+            // 守护进程 initialize 响应的结构体里 `AgentCapabilities` 只解
+            // `loadSession`，续聊可达性判定（日志 `resume_reachable` /
+            // `session_home_reachable`）以它为准。缺了它，即使桥已经实现
+            // `session/resume`，守护进程也会按「会话存储不可达」丢掉前会话
+            // （AGE-29 真机现场：同一 workdir 下 `dropping prior session ... session_home_reachable=false`，
+            // 而 kimi 同一 workdir 是 `resume_reachable=true`），生产 resume 永远走不到。
+            loadSession: true,
+            // 新 ACP 版本的续聊能力形状，与本桥 `session/resume` 实现一致；
+            // 两种形状同时声明，兼容只认其中一种的宿主。
             sessionCapabilities: { resume: {} },
           },
           authMethods: [],
