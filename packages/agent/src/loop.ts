@@ -31,6 +31,31 @@ import { llmEventToAgentEvents } from "./streaming.ts";
 const log = createLogger("agent-loop");
 
 /**
+ * 把工具失败内容压成一行**安全标签**，用于日志归属定位。
+ *
+ * 为什么不能直接铺原文：ACP stdio 宿主按行采集子进程 stderr 并做错误启发式，
+ * 而工具失败内容里常见 `Error: [` / `{ "code": "invalid_type", ... }` 这类
+ * JSON 碎片。AGE-29 真机现场里，一条带原文的 ERROR 行让宿主把已经
+ * `turn_completed` 的任务判成 `agent_error="hermes provider error: [...]"`。
+ *
+ * 因此标签只保留「人类可读的那一小段」，遇到 `[` / `{` 起的负载部分直接折叠为
+ * `[payload]`，长度也压到 60 字符，并把残留的开括号替换掉。
+ *
+ * @param raw 工具结果原文
+ * @returns 单行、无 JSON 负载的简短标签
+ */
+export function sanitizeFailureLabel(raw: string): string {
+  let text = String(raw).replace(/\r\n|\r|\n/g, " ");
+  text = text.replace(/[[{][\s\S]*$/g, " [payload]");
+  text = text.replace(/[\u0000-\u001F]/g, " ");
+  text = text.replace(/\s+/g, " ").trim();
+  const clipped = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+  // 截断可能把 JSON 片段切在中间，留下孤立的 `[` / `{` —— 正是宿主启发式的诱因，
+  // 所以最后一道防线：标签里不允许出现任何开括号。
+  return clipped.replace(/[[{]/g, "(");
+}
+
+/**
  * 连续「全工具失败」轮次上限 — 死循环防护。
  *
  * 当模型反复调用同一批工具且每次都全部失败（如 task 工具参数名错误导致
@@ -474,7 +499,18 @@ export class AgentLoop {
         // 转发工具结果事件
         for (const { toolUseId, result } of toolResults) {
           if (result.isError) {
-            log.error("run", `tool result: error, content=${String(result.content).slice(0, 50)}`);
+            // 工具失败是**可恢复**事件（模型看得到结果、可以换写法重试），因此：
+            // 1) 用 warn 而非 error —— error 级日志走 console.error，在 ACP stdio 宿主
+            //    的错误启发式里属于最高危的「致命错误」信号（AGE-29 真机误分类现场：
+            //    turn 已 completed 的任务被判 `hermes provider error`）；
+            // 2) 行内只留长度 + 标签，不铺原文（连单行化预览也不留）——原文里的
+            //    `Error: [` / `{ "code": ... }` 一类 JSON 碎片正是宿主误判的诱因，
+            //    预览无论如何都可能留下这种碎片，因此只做「可定位」不「可复现」。
+            const content = String(result.content);
+            log.warn(
+              "run",
+              `tool result: error, toolUseId=${toolUseId}, contentChars=${content.length}, label=${sanitizeFailureLabel(content)}`,
+            );
           } else {
             log.debug("run", `tool result: success, content=${String(result.content).slice(0, 50)}`);
           }

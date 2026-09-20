@@ -14,7 +14,7 @@
  */
 
 // Agent Loop
-export { AgentLoop, resolveLoopGuards } from "./loop.ts";
+export { AgentLoop, resolveLoopGuards, sanitizeFailureLabel } from "./loop.ts";
 export type { AgentLoopOptions, LoopGuardOptions } from "./loop.ts";
 
 // Agent 类

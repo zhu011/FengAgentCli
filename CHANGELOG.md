@@ -4,6 +4,47 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — bash 工具方言统一（PowerShell）+ 工具失败日志不再触发宿主误分类（main 适配）
+
+### 修复
+
+- **`bash` 工具「名 / 描述 / 实现」三方不一致（真机暴露的既有缺陷）** — Windows 上
+  实现走 `process.env.ComSpec`（cmd.exe），描述却写「PowerShell on Windows」。模型
+  按描述写 `Get-Content`，在 cmd.exe 里报 `'Get-Content' is not recognized`，连续
+  3 轮全败触发死循环防护，整轮对话白费（feng小弟 生产现场）。现在
+  （`packages/tools/src/builtin/bash.ts`）：
+  - **实现**：Windows 按 `pwsh.exe` → `powershell.exe` → `ComSpec`(cmd.exe) 的次序
+    解析解释器（纯文件系统探测，不起探针进程）；其它平台仍是 `$SHELL` → `/bin/sh`。
+    参数为 `-NoLogo -NoProfile -NonInteractive -Command`，与描述宣称的引擎严格一致；
+  - **描述**：由同一份解析结果生成，点名本机实际解释器与方言，并显式声明「工具名叫
+    bash 只是历史命名」、PowerShell 5.1 不支持 `&&`（改用 `;`）、每次调用是新 shell；
+  - **可核对**：工具结果带 `metadata.shell`（`pwsh`/`powershell`/`cmd`/`sh`），工具
+    卡片前缀也显示真实解释器（`powershell: Get-ChildItem -Name`）而非谎称 `bash`；
+  - POSIX 侧语义不变（`$SHELL` + `-c`），工具名与 `ask` 审批语义不变。
+- **工具失败日志触发宿主误分类**（`packages/agent/src/loop.ts`）— 工具失败属**可恢复**
+  事件，却用 error 级打印并铺 50 字符原文；原文里的 `Error: [` / `{ "code": ... }`
+  JSON 碎片正是 ACP 宿主错误启发式的诱因（真机：turn 已 `turn_completed` 的任务被判
+  `agent_error="hermes provider error: [...]"`）。现在降为 warn 级，行内只留
+  `toolUseId` / `contentChars` / 经 `sanitizeFailureLabel()` 消毒的短标签（遇
+  `[` `{` 起的负载折叠为 `[payload]`，截断后再把开括号替换掉），不再携带原始内容。
+- **`console.error` 未加 `[fengagent-acp] ` 前缀**（`packages/server/src/acp-stdio.ts`）
+  — `redirectConsoleToStderr` 只包了 `console.log/info/debug/warn`，而 shared logger 的
+  error 级走 `console.error`：error 行虽天然落在 stderr、不污染协议，但无前缀无法在
+  宿主侧归属。现在补包 `console.error`（含 `restore()` 还原），error 级行与其它级别
+  一样逐行带前缀。
+
+### 测试
+
+- `packages/tools/src/__tests__/bash-dialect.test.ts`：描述宣布的解释器 = 真正 spawn
+  的解释器（PowerShell 档 / cmd 档）、cmd 档描述不得给 PowerShell 方言承诺、
+  win32 上有 PowerShell 就必须解析到 PowerShell、POSIX `$SHELL -c` 不变、
+  `metadata.shell` 回带、探测函数认识真命令名并否决不存在的命令名、spawn 失败时报出
+  解释器名与路径。受限沙箱（禁止管道 stdio 起进程）下自动跳过硬执行断言，静态断言仍跑。
+- `packages/agent/src/__tests__/loop.test.ts`：工具失败日志用 warn 级、单物理行、
+  标签内不含 `[`/`{`/`"` 与原始 JSON 碎片，长度信息保留。
+- `packages/server/src/__tests__/acp-stdio.test.ts`：error 级日志同样逐行带
+  `[fengagent-acp] ` 前缀，且 `restore()` 后 `console.error` 还原。
+
 ## [Unreleased] — ACP 权限桥：Multica 路径下 bash 等审批类工具可用（main 适配）
 
 ### 修复

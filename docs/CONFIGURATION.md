@@ -63,7 +63,7 @@
 | `FENG_AUTO_APPROVE_TOOLS` | `autoApproveTools` | `false` | 自动批准所有工具执行 |
 | `FENG_ALLOWED_TOOLS` | `allowedTools` | `*` | 允许的工具列表（逗号分隔） |
 | `FENG_DENIED_TOOLS` | `deniedTools` | — | 禁止的工具列表（逗号分隔） |
-| `FENG_BASH_TIMEOUT` | `bashTimeout` | `120000` | Bash 命令超时（毫秒） |
+| `FENG_BASH_TIMEOUT` | `bashTimeout` | `120000` | `bash` 工具命令超时（毫秒）。该工具在 Windows 上由 PowerShell 执行（`pwsh` → `powershell.exe` → `cmd.exe` 次序解析），其它平台由 `$SHELL` 执行，详见 `docs/MODULES.md` 的「`bash` 工具的解释器」 |
 | `FENG_MAX_TOOL_CONCURRENCY` | `maxToolConcurrency` | `10` | 工具最大并行数 |
 | `FENG_MAX_TURNS` | `maxTurns` | `50` | 单次对话最大轮次 |
 
