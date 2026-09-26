@@ -33,6 +33,16 @@ export type AgentEvent =
       type: "tool-call-result";
       toolUseId: string;
       result: ToolResult;
+      /**
+       * 产生该工具调用的助手消息 id。
+       *
+       * 事件在**助手消息入历史之前**就 yield（结果先回流、消息在回合内后续步骤
+       * 才 push），因此消费方（如 cordis 的改参落事实桥接）不能靠「历史里已有
+       * tool-use 块」反查归属；loop 直接把归属随事件带出。
+       */
+      messageId?: string;
+      /** 工具名（同上：随事件带出，消费方无需回查历史） */
+      toolName?: string;
       /** 实际执行的入参 — 与模型原始入参不同时携带（用户改参后执行，human-in-the-loop） */
       input?: unknown;
     }
