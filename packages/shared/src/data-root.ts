@@ -53,6 +53,32 @@ export function resolveLogsDir(opts: DataRootOptions = {}): string {
 }
 
 /**
+ * 解析「会话仓」根目录 —— 守护进程指定时以它为准。
+ *
+ * Multica 守护进程为每个 (runtime, agent, thread) 建一个会话仓
+ * （`~/.multica/profiles/<profile>/hermes-sessions/<agent_id>/default/<thread_id>/`），
+ * 并在下一轮任务开始时据此判定 `session_home_reachable`。判定为 false 时守护进程
+ * 直接丢掉前一个会话（`dropping prior session: session store not reachable from this
+ * run`），于是 `session/resume` 永远走不到 —— 即使桥已经实现了 resume 并声明了
+ * `agentCapabilities.loadSession`。
+ *
+ * 守护进程把仓的位置通过 `MULTICA_DSH_SESSION_ROOT` 交给运行时；运行时的会话库必须
+ * 落在那里，否则守护进程看不到、续聊可达性恒为 false。变量缺失时退回 `resolveDataRoot()`，
+ * 行为与之前完全一致（当前生产路径就是这种情形，见 `docs/verify/AGE-29-session-resume-probe.md`）。
+ *
+ * @param opts - 与 `resolveDataRoot` 相同的选项
+ * @returns 会话仓绝对路径
+ */
+export function resolveSessionStoreRoot(opts: DataRootOptions = {}): string {
+  const env = opts.env ?? process.env;
+  const designated = env.MULTICA_DSH_SESSION_ROOT;
+  if (designated && designated !== "") {
+    return expandTilde(designated);
+  }
+  return resolveDataRoot(opts);
+}
+
+/**
  * main 遗留数据根探测顺序（导入源）：
  * `FENG_MAIN_DATA_DIR` → `<workdir>/.fengagent` → `~/.fengagent` → `<workdir>/data`（旧 cordis 遗留）。
  */

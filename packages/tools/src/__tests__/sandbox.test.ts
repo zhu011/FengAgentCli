@@ -109,7 +109,6 @@ describe("Sandbox env scrubbing", () => {
       OPENAI_API_KEY: "sk-123",
       GITHUB_TOKEN: "ghp_xxx",
       FENG_MODEL: "claude-sonnet-4",
-      MULTICA_TOKEN: "mat_xxx",
       DEEPSEEK_API_KEY: "sk-ds",
       HOME: "/home/user",
       LANG: "en_US.UTF-8",
@@ -120,10 +119,35 @@ describe("Sandbox env scrubbing", () => {
     expect(scrubbed.OPENAI_API_KEY).toBeUndefined();
     expect(scrubbed.GITHUB_TOKEN).toBeUndefined();
     expect(scrubbed.FENG_MODEL).toBeUndefined();
-    expect(scrubbed.MULTICA_TOKEN).toBeUndefined();
     expect(scrubbed.DEEPSEEK_API_KEY).toBeUndefined();
     // HOME 不属于敏感类，保留（沙箱实例会另行覆盖为沙箱内目录）
     expect(scrubbed.HOME).toBe("/home/user");
+  });
+
+  test("scrubEnv 透传平台运行时契约变量（multica CLI 的必要条件）", () => {
+    const scrubbed = Sandbox.scrubEnv({
+      PATH: "/usr/bin",
+      MULTICA_TOKEN: "mat_xxx",
+      MULTICA_TASK_ID: "01a0ddfa-ba5e-79cb-a51c-ddfbaddadf17",
+      MULTICA_AGENT_ID: "ef81dfc3-e30f-4e3e-82e5-bf6d5aaf8ba0",
+      MULTICA_WORKSPACE_ID: "37bd52b3-114d-450a-ac77-85ba6cf71b5c",
+      MULTICA_SERVER_URL: "https://api.multica.ai",
+      MULTICA_DAEMON_PORT: "19681",
+      MULTICA_DSH_SESSION_ROOT: "C:/sessions/agent/default/thread",
+      // 非契约的 MULTICA_* 仍按运行时内部配置剥离
+      MULTICA_GC_INTERVAL: "60",
+    });
+    // 少一个 CLI 就直接拒绝工作：agent execution context requires
+    // MULTICA_TOKEN to be a task-scoped mat_ token
+    expect(scrubbed.MULTICA_TOKEN).toBe("mat_xxx");
+    expect(scrubbed.MULTICA_TASK_ID).toBe("01a0ddfa-ba5e-79cb-a51c-ddfbaddadf17");
+    expect(scrubbed.MULTICA_AGENT_ID).toBe("ef81dfc3-e30f-4e3e-82e5-bf6d5aaf8ba0");
+    expect(scrubbed.MULTICA_WORKSPACE_ID).toBe("37bd52b3-114d-450a-ac77-85ba6cf71b5c");
+    expect(scrubbed.MULTICA_SERVER_URL).toBe("https://api.multica.ai");
+    expect(scrubbed.MULTICA_DAEMON_PORT).toBe("19681");
+    // 守护进程→运行时的会话仓契约同样要透传
+    expect(scrubbed.MULTICA_DSH_SESSION_ROOT).toBe("C:/sessions/agent/default/thread");
+    expect(scrubbed.MULTICA_GC_INTERVAL).toBeUndefined();
   });
 
   test("scrubEnv 支持追加脱敏规则", () => {

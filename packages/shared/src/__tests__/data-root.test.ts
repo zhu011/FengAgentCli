@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   resolveDataRoot,
+  resolveSessionStoreRoot,
   resolveLogsDir,
   resolveMainDataRoots,
   importMainData,
@@ -74,6 +75,30 @@ describe("resolveDataRoot", () => {
     const workdir = makeTempDir();
     expect(resolveLogsDir({ workdir })).toBe(
       join(resolve(workdir), ".fengagent-cordis", "logs"),
+    );
+  });
+});
+
+describe("resolveSessionStoreRoot", () => {
+  test("守护进程指定会话仓时以它为准，且优先于 FENG_DATA_DIR", () => {
+    const workdir = makeTempDir();
+    const designated = join(workdir, "hermes-sessions", "agent", "default", "thread");
+    expect(
+      resolveSessionStoreRoot({
+        workdir,
+        env: { MULTICA_DSH_SESSION_ROOT: designated, FENG_DATA_DIR: join(workdir, "data") },
+      }),
+    ).toBe(resolve(designated));
+  });
+
+  test("未指定会话仓时退回 resolveDataRoot（当前生产路径行为不变）", () => {
+    const workdir = makeTempDir();
+    expect(resolveSessionStoreRoot({ workdir, env: {} })).toBe(
+      resolveDataRoot({ workdir, env: {} }),
+    );
+    // 空串等同于未设置，不得把会话库写到当前目录
+    expect(resolveSessionStoreRoot({ workdir, env: { MULTICA_DSH_SESSION_ROOT: "" } })).toBe(
+      resolveDataRoot({ workdir, env: {} }),
     );
   });
 });
