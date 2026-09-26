@@ -475,6 +475,9 @@ export class AgentLoop {
         // 不先留一份，改参前后就再也追不回来了（图投影的「改参历史可溯源」依赖它）。
         const correctedToolUses = new Map<string, unknown>();
         const originalInputs = new Map<string, unknown>();
+        // toolUseId → 工具名：随 tool-call-result 事件带出，消费方无需回查历史
+        const toolNames = new Map<string, string>();
+        for (const tc of toolCalls) toolNames.set(tc.id, tc.name);
         for (let i = 0; i < toolCalls.length; i++) {
           const tc = toolCalls[i]!;
           const callIdx = callToToolCallIndex.indexOf(i);
@@ -512,6 +515,9 @@ export class AgentLoop {
         }
 
         // 转发工具结果事件
+        // 事件自带 messageId / toolName：结果的 yield 发生在助手消息入历史**之前**
+        // （消息在 loop.ts 末尾才 push），消费方（cordis 改参桥接）不能靠回查历史
+        // 定位归属，否则必然 MISS。
         for (const { toolUseId, result } of toolResults) {
           if (result.isError) {
             // 工具失败是**可恢复**事件（模型看得到结果、可以换写法重试），因此：
@@ -533,6 +539,11 @@ export class AgentLoop {
             type: "tool-call-result",
             toolUseId,
             result,
+            // 归属随事件带出（见上：消息尚未入历史，消费方无法反查）
+            messageId,
+            ...(toolNames.has(toolUseId)
+              ? { toolName: toolNames.get(toolUseId) }
+              : {}),
             ...(correctedToolUses.has(toolUseId)
               ? {
                   input: correctedToolUses.get(toolUseId),

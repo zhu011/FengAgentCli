@@ -45,6 +45,37 @@ export function projectGraph(events: AnySessionEvent[]): ProjectedGraph | null {
   const nodeById = new Map<string, ConversationNode>();
   let head: ConversationNode | undefined;
 
+  /**
+   * 改参事实（`tool/corrected`）的负载。
+   *
+   * 生产写入序是「改参事实 → 助手消息的 step/start」：工具结果 yield 时助手消息
+   * 还没双写落事件（消息在回合收尾才 saveMessages）。因此按 seq 重放到改参事实
+   * 时，归属节点往往尚未派生 —— 就地丢弃会让节点永远标不上「已改参」（真实
+   * 断链现场）。这里先挂起，节点派生出来时再应用，重放结果与事件顺序无关。
+   */
+  const pendingCorrections = new Map<
+    string,
+    Array<Extract<AnySessionEvent, { type: "tool/corrected" }>>
+  >();
+
+  /** 把一条改参事实应用到助手节点（`seq`/`timestamp` 保留事件序，可溯源） */
+  const applyCorrection = (
+    node: ConversationNode,
+    e: Extract<AnySessionEvent, { type: "tool/corrected" }>,
+  ) => {
+    node.meta.userCorrectedInput = true;
+    const corrections = (node.meta.inputCorrections ??= []);
+    corrections.push({
+      toolUseId: e.payload.toolUseId,
+      toolName: e.payload.toolName,
+      originalInput: e.payload.originalInput,
+      correctedInput: e.payload.correctedInput,
+      source: e.payload.source,
+      seq: e.seq,
+      timestamp: e.timestamp,
+    });
+  };
+
   const addNode = (node: ConversationNode) => {
     nodeById.set(node.id, node);
     if (node.parentId) {
@@ -103,25 +134,27 @@ export function projectGraph(events: AnySessionEvent[]): ProjectedGraph | null {
           addNode(node);
         }
         if (e.payload.model) node.meta.model = e.payload.model;
+        // 节点刚派生：应用早于本事件到达的改参事实（生产写入序即如此）
+        const pending = pendingCorrections.get(e.payload.messageId);
+        if (pending) {
+          for (const fact of pending) applyCorrection(node, fact);
+          pendingCorrections.delete(e.payload.messageId);
+        }
         head = node;
         break;
       }
       case "tool/corrected": {
         // 改参事实：挂到产生该工具调用的助手节点上（改参前后可溯源）。
-        // 节点尚未派生（如 step/start 缺失的遗留流）时保守跳过，不影响其它节点。
+        // 节点尚未派生（生产序：消息回合收尾才落 step/start）时先挂起，
+        // 待 step/start 派生节点后再应用；始终无节点（遗留流）则自然丢弃。
         const node = nodeById.get(assistantNodeId(sessionId, e.payload.messageId));
-        if (!node) break;
-        node.meta.userCorrectedInput = true;
-        const corrections = (node.meta.inputCorrections ??= []);
-        corrections.push({
-          toolUseId: e.payload.toolUseId,
-          toolName: e.payload.toolName,
-          originalInput: e.payload.originalInput,
-          correctedInput: e.payload.correctedInput,
-          source: e.payload.source,
-          seq: e.seq,
-          timestamp: e.timestamp,
-        });
+        if (node) {
+          applyCorrection(node, e);
+        } else {
+          const pending = pendingCorrections.get(e.payload.messageId) ?? [];
+          pending.push(e);
+          pendingCorrections.set(e.payload.messageId, pending);
+        }
         break;
       }
       case "node/quality": {

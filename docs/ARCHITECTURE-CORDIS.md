@@ -203,6 +203,12 @@ interface ConversationNode {
   3. 改参溯源：`tool/corrected` 事件（原始入参 / 实际入参 / 来源）→ 图投影写入节点
      `meta.userCorrectedInput` + `meta.inputCorrections` → 图节点标「✏️ 已改参」，
      悬停可见改参前后；步级回退的分支点带 `stepLevel`，图上与轮级回退可辨。
+     链路时序（③ 修复）：`tool-call-result` 事件**自带 `messageId` / `toolName`**
+     —— 结果 yield 早于助手消息入历史，桥接不能靠回查历史定位归属；且助手节点由
+     回合收尾的 `step/start` 派生（晚于改参事实），投影对「节点尚未派生」的改参
+     事实先挂起、节点出现时再应用，重放结果与事件顺序无关。
+     回归：`packages/cordis/src/__tests__/input-correction-bridge.test.ts`
+     （真 executor + EventGraphStore，graph / hitl 两个来源各一条）。
 - **Phase 5（规划中）**：用户插件热装载（`cordis.yml` 风格 profile），发布
   `docs/EXTENDING-CORDIS.md`。当前已支持在 `createRuntime` 配置中以「模块路径」加载用户插件
   （`packages/cordis/src/runtime.ts` 的 `resolvePluginFactory`，测试见

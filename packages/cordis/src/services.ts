@@ -492,13 +492,23 @@ export class LoopServiceImpl extends Service implements LoopService {
         case "tool-call-result": {
           // 改参事实落事件（可溯源）：与消息事件同源同序，图投影据此标「已改参」。
           // 只在真的改过参时落，普通工具结果不产生额外事件。
+          //
+          // 归属（messageId / toolName）**直接取自事件**：loop 在 yield 工具结果的
+          // 那一刻还没有把助手消息压进历史（消息要到回合内后续步骤才 push），
+          // 靠 `findToolCall(session, toolUseId)` 回查历史必然 MISS —— 改参事实
+          // 会静默丢失（图节点永远不出现「已改参」）。保留历史回查仅作旧事件源
+          // （不带归属字段的第三方 loop 实现）的兜底。
           if (event.userCorrectedInput === true) {
-            const call = findToolCall(session, event.toolUseId);
-            if (call) {
+            const fallback = event.messageId
+              ? undefined
+              : findToolCall(session, event.toolUseId);
+            const messageId = event.messageId ?? fallback?.messageId;
+            const toolName = event.toolName ?? fallback?.toolName;
+            if (messageId && toolName) {
               graph.recordInputCorrection(conversationId, {
-                messageId: call.messageId,
+                messageId,
                 toolUseId: event.toolUseId,
-                toolName: call.toolName,
+                toolName,
                 originalInput: event.originalInput,
                 correctedInput: event.input,
                 source: event.correctionSource ?? "hitl",
@@ -565,9 +575,9 @@ export class LoopServiceImpl extends Service implements LoopService {
 /**
  * 从会话消息历史里定位一次工具调用（toolUseId → 所属助手消息 + 工具名）。
  *
- * tool-call-result 事件本身不带 messageId（该字段在 cordis LoopEvent 里是历史
- * 占位），而 loop 在 yield 结果**之前**已把助手消息压入历史，因此从后向前即可
- * 稳定命中；找不到（工具未注册等边界）时返回 undefined，调用方跳过落事件。
+ * **兜底路径**：正常事件源由 loop 在 `tool-call-result` 上直接带 `messageId` /
+ * `toolName`（结果 yield 早于助手消息入历史，历史回查必然 MISS）。这里只为
+ * 不带归属字段的旧/第三方事件源保留，找不到时返回 undefined，调用方跳过落事件。
  */
 function findToolCall(
   session: Session,

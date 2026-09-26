@@ -179,6 +179,74 @@ describe("图投影 — userCorrectedInput（改参可溯源）", () => {
     expect(graph.nodes.some((n) => n.meta.userCorrectedInput === true)).toBe(false);
     expect(graph.nodes).toHaveLength(4); // u-1 / a-1 / u-2 / a-2
   });
+
+  test("生产写入序（改参事实先于 step/start）→ 节点派生后仍标「已改参」且改参前后可追", () => {
+    const { store } = setup();
+    const sid = "s-corr-order";
+    store.append({
+      sessionId: sid,
+      type: "session/created",
+      payload: { title: "改参时序", status: "created" },
+      timestamp: "2026-09-26T00:00:00.000Z",
+    });
+    store.append({
+      sessionId: sid,
+      type: "user/message",
+      payload: { messageId: "u-1", content: [{ type: "text", text: "查一下目录" }] },
+      timestamp: "2026-09-26T00:00:01.000Z",
+    });
+
+    // 工具结果 yield 时助手消息还没双写落事件 —— 改参事实先到（真实生产序）
+    store.append({
+      sessionId: sid,
+      type: "tool/corrected",
+      payload: {
+        messageId: "a-1",
+        toolUseId: "toolu-1",
+        toolName: "bash",
+        originalInput: { command: "ls" },
+        correctedInput: { command: "ls -la" },
+        source: "graph",
+      },
+      timestamp: "2026-09-26T00:00:02.000Z",
+    });
+
+    // 回合收尾才落助手消息（step/start 派生节点）
+    store.append({
+      sessionId: sid,
+      type: "step/start",
+      payload: { messageId: "a-1", model: "deepseek-chat" },
+      timestamp: "2026-09-26T00:00:03.000Z",
+    });
+    store.append({
+      sessionId: sid,
+      type: "assistant/chunk",
+      payload: {
+        messageId: "a-1",
+        index: 0,
+        delta: { type: "tool-use", id: "toolu-1", name: "bash", input: { command: "ls -la" } },
+      },
+      timestamp: "2026-09-26T00:00:03.100Z",
+    });
+    store.append({
+      sessionId: sid,
+      type: "step/end",
+      payload: { messageId: "a-1" },
+      timestamp: "2026-09-26T00:00:03.200Z",
+    });
+
+    const graph = projectGraph(store.replay(sid))!;
+    const node = graph.nodeById.get(assistantNodeId(sid, "a-1"))!;
+    expect(node.meta.userCorrectedInput).toBe(true);
+    expect(node.meta.inputCorrections).toHaveLength(1);
+    expect(node.meta.inputCorrections![0]!.originalInput).toEqual({ command: "ls" });
+    expect(node.meta.inputCorrections![0]!.correctedInput).toEqual({ command: "ls -la" });
+    expect(node.meta.inputCorrections![0]!.source).toBe("graph");
+    // 其它节点不被误标
+    expect(
+      graph.nodeById.get(userNodeId(sid, "u-1"))!.meta.userCorrectedInput,
+    ).toBeUndefined();
+  });
 });
 
 describe("EventGraphStore — recordInputCorrection（图写入侧的改参事实）", () => {

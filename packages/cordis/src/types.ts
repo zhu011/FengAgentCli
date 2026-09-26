@@ -191,8 +191,11 @@ export type LoopEvent =
   | { type: "tool-call"; messageId: string; name: string; input: unknown }
   | {
       type: "tool-call-result";
+      /** 产生该工具调用的助手消息 id（由 loop 随事件带出） */
       messageId: string;
       toolUseId: string;
+      /** 工具名（由 loop 随事件带出） */
+      toolName?: string;
       result: ToolResult;
       /** 实际执行的入参（改参后执行时携带） */
       input?: unknown;
