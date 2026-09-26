@@ -37,6 +37,8 @@ export const SESSION_EVENT_TYPES = [
   "step/end",
   "assistant/chunk",
   "assistant/message",
+  // 工具入参被用户改写后执行的事实（HITL 审批改参 / 图上改参重放）
+  "tool/corrected",
   "turn/end",
   // #6 图导入事实（quality 为事实；active/rolledBack/branch 为派生态）
   "node/quality",
@@ -91,6 +93,27 @@ export interface SessionEventPayloads {
   "assistant/chunk": { messageId: string; index: number; delta: unknown };
   /** #2：默认不单独落事实，由 assistant/chunk 投影组装；FENG_EVENT_FULL_REQUEST=1 时落 assembled */
   "assistant/message": { messageId: string; assembled: unknown };
+  /**
+   * 工具入参被用户改写后执行的事实（改参可溯源）。
+   *
+   * 两个入口共用本事实：审批弹窗改参（hitl）、图上改参重放（graph）。
+   * 原始入参必须显式落在这里 —— 会话消息里该 tool-use 块会被同步覆写为
+   * 实际执行入参，不落此事实则「改参前后」再也追不回来。
+   */
+  "tool/corrected": {
+    /** 产生该工具调用的助手消息 id（图节点归属） */
+    messageId: string;
+    /** 工具调用 id */
+    toolUseId: string;
+    /** 工具名 */
+    toolName: string;
+    /** 模型给出的原始入参 */
+    originalInput: unknown;
+    /** 用户改写后实际执行的入参 */
+    correctedInput: unknown;
+    /** 改参来源：hitl=审批弹窗改参；graph=图上改参重放 */
+    source?: "hitl" | "graph";
+  };
   "turn/end": { messageId: string; tokenCount?: number; assembled?: unknown };
   /** #6：事实事件（quality/note）；active/rolledBack/branch 由投影重算，不字面写入 */
   "node/quality": {
@@ -98,7 +121,15 @@ export interface SessionEventPayloads {
     quality: "good" | "poor" | "unrated";
     note?: string;
   };
-  "rollback": { targetNodeId: string; reason?: string; supersededNodeIds: string[] };
+  "rollback": {
+    targetNodeId: string;
+    reason?: string;
+    supersededNodeIds: string[];
+    /** 回退粒度：turn=轮级（缺省/历史事件）；step=步级续跑 */
+    granularity?: "turn" | "step";
+    /** 回退后的续跑语义：replay=重放该步；resume=从该步之后续跑 */
+    mode?: "replay" | "resume";
+  };
   "fork": { parentNodeId: string; branch: string };
 }
 

@@ -106,6 +106,24 @@ export function projectGraph(events: AnySessionEvent[]): ProjectedGraph | null {
         head = node;
         break;
       }
+      case "tool/corrected": {
+        // 改参事实：挂到产生该工具调用的助手节点上（改参前后可溯源）。
+        // 节点尚未派生（如 step/start 缺失的遗留流）时保守跳过，不影响其它节点。
+        const node = nodeById.get(assistantNodeId(sessionId, e.payload.messageId));
+        if (!node) break;
+        node.meta.userCorrectedInput = true;
+        const corrections = (node.meta.inputCorrections ??= []);
+        corrections.push({
+          toolUseId: e.payload.toolUseId,
+          toolName: e.payload.toolName,
+          originalInput: e.payload.originalInput,
+          correctedInput: e.payload.correctedInput,
+          source: e.payload.source,
+          seq: e.seq,
+          timestamp: e.timestamp,
+        });
+        break;
+      }
       case "node/quality": {
         const node = nodeById.get(e.payload.nodeId);
         if (node) {
@@ -138,6 +156,8 @@ export function projectGraph(events: AnySessionEvent[]): ProjectedGraph | null {
             branch: `rollback-${e.seq}`,
             active: true,
             qualityNote: e.payload.reason,
+            // 步级续跑（回退点在一轮之内）——图上据此标「步级续跑」而非「回退重答」
+            ...(e.payload.granularity === "step" ? { stepLevel: true } : {}),
           },
         };
         addNode(bp);

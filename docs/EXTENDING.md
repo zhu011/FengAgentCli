@@ -307,9 +307,17 @@ await runtime.start();
 
 ### 扩展点：对话图回退策略
 
-实现 `RollbackStrategy` 接口（`packages/graph/src/types.ts`）：
-`shouldRollback(signal)` / `chooseTarget(node)`，替换 `feng.strategy` 的默认
-`DefaultRollbackStrategy`，即可把回退策略换成 LLM-as-judge 自动评估。
+实现 `RollbackStrategy` 接口（`packages/graph/src/rollback.ts`）：
+`shouldRollback(signal)` / `chooseTarget(node)`，替换 `feng.strategy` 的默认策略，
+即可把回退策略换成 LLM-as-judge 自动评估。
+
+增量扩展点 `chooseRollbackTarget(request)`（可选实现）负责**粒度感知的目标解析**：
+- `granularity: "turn"` —— 轮级（既有语义，`DefaultRollbackStrategy` 已实现）；
+- `granularity: "step"` —— 步级续跑/重放（`StepAwareRollbackStrategy` 实现：点工具步 →
+  续跑到该步的工具结果，已执行的工具不重跑；点回答步 → 重放该步）。
+
+返回 `null` 表示该策略不接管该次请求，调用方回落轮级语义——因此**不实现该方法
+的第三方策略行为完全不变**。默认装配的是 `StepAwareRollbackStrategy`。
 
 ### 扩展点：事件类型注册
 

@@ -7,7 +7,7 @@
 
 import type { Role } from "./types.ts";
 import type { FinishReason } from "./types.ts";
-import type { ToolResult } from "./tool.ts";
+import type { ToolResult, ToolInputCorrectionSource } from "./tool.ts";
 import type { Session } from "./session.ts";
 
 /** 可序列化的错误（Error 不可 JSON 序列化） */
@@ -35,6 +35,12 @@ export type AgentEvent =
       result: ToolResult;
       /** 实际执行的入参 — 与模型原始入参不同时携带（用户改参后执行，human-in-the-loop） */
       input?: unknown;
+      /** 本次执行是否经过用户改参（审批改参 / 图上改参重放） */
+      userCorrectedInput?: boolean;
+      /** 模型给出的原始入参 — 仅在改参时携带（改参前后可溯源） */
+      originalInput?: unknown;
+      /** 改参来源：hitl=审批弹窗改参；graph=图上改参重放 */
+      correctionSource?: ToolInputCorrectionSource;
     }
   | { type: "message-end"; messageId: string }
   | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }

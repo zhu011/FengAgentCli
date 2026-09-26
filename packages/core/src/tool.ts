@@ -10,6 +10,30 @@ import type { PermissionResult } from "./permission.ts";
 import type { SubagentRunner } from "./agent.ts";
 
 /**
+ * 改参来源 — 同一条改参执行路径的两个入口：
+ * - `hitl`：工具需要审批时用户在权限卡片上改参后放行；
+ * - `graph`：用户在对话图上选中工具节点改参后重放该轮。
+ */
+export type ToolInputCorrectionSource = "hitl" | "graph";
+
+/**
+ * 工具入参改写规则（图上改参重放 / 批量改参重试）。
+ *
+ * 匹配规则：`toolName` 相同，且（`from` 缺省 = 匹配该工具的任何调用，或 `from`
+ * 与本次调用的原始入参深度相等）。命中后以 `to` 作为实际执行入参 —— 与 HITL
+ * 审批改参（{@link PermissionResult} 的 `allow` + `input`）走**同一条执行路径**：
+ * 同一份入参校验、同一份 `userCorrectedInput` 留痕、同样的历史同步。
+ */
+export interface ToolInputOverride {
+  /** 工具名 */
+  toolName: string;
+  /** 匹配的原始入参（缺省 = 匹配该工具的任何调用） */
+  from?: unknown;
+  /** 改写后的入参（实际执行） */
+  to: unknown;
+}
+
+/**
  * 工具执行上下文 — 传递给 tool.execute() 的运行时信息。
  */
 export interface ToolContext {
@@ -27,6 +51,11 @@ export interface ToolContext {
       reason?: string;
     },
   ) => Promise<PermissionResult>;
+  /**
+   * 本次运行的入参改写规则（图上「改参并重放」）。
+   * 命中后以改写入参执行，并打 `userCorrectedInput` 留痕（可溯源）。
+   */
+  inputOverrides?: ToolInputOverride[];
   /** 子 Agent 派遣函数（由 agent 层注入，task 工具使用） */
   spawnSubagent?: SubagentRunner;
   /** 当前 Agent 深度（0 = 顶层 Agent，子 Agent 为 1+） */

@@ -18,6 +18,8 @@ import type {
   AgentEvent,
   ToolDefinition,
   ToolContext,
+  ToolInputOverride,
+  ToolInputCorrectionSource,
   FinishReason,
   SubagentRunner,
 } from "@fengagent/core";
@@ -258,6 +260,14 @@ export class AgentLoop {
     session: Session,
     options?: {
       requestPermission?: ToolContext["requestPermission"];
+      /**
+       * 本次运行的入参改写规则（图上「改参并重放」）。
+       * 命中后工具以改写入参执行，并沿既有改参留痕链路（`userCorrectedInput`）
+       * 回带原始入参 —— 结果与审批弹窗改参完全同构。
+       */
+      inputOverrides?: ToolInputOverride[];
+      /** 改参来源标记（默认 hitl；图上重放传 graph），用于图投影溯源 */
+      correctionSource?: ToolInputCorrectionSource;
     },
   ): AsyncGenerator<AgentEvent> {
     let needsContinuation = true;
@@ -423,6 +433,7 @@ export class AgentLoop {
           sessionId: session.id,
           messageId,
           requestPermission: options?.requestPermission,
+          inputOverrides: options?.inputOverrides,
           spawnSubagent: this.options.spawnSubagent,
           agentDepth: this.options.agentDepth,
         };
@@ -460,7 +471,10 @@ export class AgentLoop {
         // 按原始工具调用顺序映射结果
         // 同时记录「用户改参后执行」的调用（executor 在结果 metadata 打 userCorrectedInput 标记）：
         // tool-call-result 事件携带实际执行入参，历史 tool-use 块同步为实际入参（可溯源）
+        // `originalInputs` 保存**改写前**的模型原始入参 —— 该块马上会被覆写，
+        // 不先留一份，改参前后就再也追不回来了（图投影的「改参历史可溯源」依赖它）。
         const correctedToolUses = new Map<string, unknown>();
+        const originalInputs = new Map<string, unknown>();
         for (let i = 0; i < toolCalls.length; i++) {
           const tc = toolCalls[i]!;
           const callIdx = callToToolCallIndex.indexOf(i);
@@ -485,6 +499,7 @@ export class AgentLoop {
               | undefined;
             if (meta?.userCorrectedInput === true) {
               correctedToolUses.set(tc.id, execResult.input);
+              originalInputs.set(tc.id, tc.input);
               // 历史 tool-use 块同步为实际执行入参（用户改参后执行的是新参数）
               const block = assistantContent.find(
                 (b) => b.type === "tool-use" && b.id === tc.id,
@@ -519,7 +534,12 @@ export class AgentLoop {
             toolUseId,
             result,
             ...(correctedToolUses.has(toolUseId)
-              ? { input: correctedToolUses.get(toolUseId) }
+              ? {
+                  input: correctedToolUses.get(toolUseId),
+                  userCorrectedInput: true,
+                  originalInput: originalInputs.get(toolUseId),
+                  correctionSource: options?.correctionSource ?? "hitl",
+                }
               : {}),
           };
         }

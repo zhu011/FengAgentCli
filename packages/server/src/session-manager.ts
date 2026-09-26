@@ -25,12 +25,15 @@ export interface GraphAgentLike {
     session: Session,
     nodeId?: string,
     reason?: string,
+    options?: RollbackRunOptions,
   ): {
     ok: boolean;
     message: string;
     target?: import("@fengagent/graph").ConversationNode;
     rollbackToNode?: import("@fengagent/graph").ConversationNode;
     truncatedToMessageId?: string;
+    granularity?: "turn" | "step";
+    mode?: "replay" | "resume";
   };
   /** 回退并自动重答（SSE 流；RuntimeAgent 提供，普通 Agent 无此能力） */
   rollbackAndRetry?(
@@ -45,8 +48,25 @@ export interface GraphAgentLike {
           reason?: string;
         },
       ) => Promise<PermissionResult>;
+      granularity?: "turn" | "step";
+      mode?: "replay" | "resume";
+      toolOverrides?: Array<{ toolName: string; from?: unknown; to: unknown }>;
     },
   ): AsyncGenerator<AgentEvent>;
+}
+
+/**
+ * 回退 / 续跑请求选项（增量）。
+ *
+ * - `granularity`：`turn`（缺省，既有轮级语义）/ `step`（步级续跑，回退点精确到一轮内的一步）；
+ * - `toolOverrides`：图上「改参并重放」的入参改写规则 —— 命中后该工具以新入参执行，
+ *   走的是与 HITL 审批改参同一条执行/留痕链路。
+ */
+export interface RollbackRunOptions {
+  granularity?: "turn" | "step";
+  /** 续跑语义（缺省由策略判断；图上改参重放固定 replay） */
+  mode?: "replay" | "resume";
+  toolOverrides?: Array<{ toolName: string; from?: unknown; to: unknown }>;
 }
 
 /** 权限请求记录 */
@@ -776,12 +796,15 @@ export class SessionManager {
     sessionId: string,
     nodeId?: string,
     reason = "用户回退",
+    options: RollbackRunOptions = {},
   ): {
     ok: boolean;
     message: string;
     target?: import("@fengagent/graph").ConversationNode;
     rollbackToNode?: import("@fengagent/graph").ConversationNode;
     truncatedToMessageId?: string;
+    granularity?: "turn" | "step";
+    mode?: "replay" | "resume";
     graph?: ReturnType<NonNullable<GraphAgentLike["getGraphData"]>>;
   } {
     const session = this.sessions.get(sessionId);
@@ -793,7 +816,7 @@ export class SessionManager {
     if (!graphAgent?.rollback) {
       return { ok: false, message: "当前 Agent 未接入 Graph 机制（非运行时装配）。" };
     }
-    const result = graphAgent.rollback(session, nodeId, reason);
+    const result = graphAgent.rollback(session, nodeId, reason, options);
     if (!result.ok) return result;
     // 同步内存缓存中的会话状态
     this.sessions.set(sessionId, session);
@@ -816,8 +839,9 @@ export class SessionManager {
     sessionId: string,
     nodeId?: string,
     reason = "用户回退并重答",
+    options: RollbackRunOptions = {},
   ): AsyncGenerator<AgentEvent> {
-    const created = this.createRollbackRetryTask(sessionId, nodeId, reason);
+    const created = this.createRollbackRetryTask(sessionId, nodeId, reason, options);
     if (!created.ok) {
       if (created.code === "session_not_found") {
         throw new SessionNotFoundError(sessionId);
@@ -856,6 +880,7 @@ export class SessionManager {
     sessionId: string,
     nodeId?: string,
     reason = "用户回退并重答",
+    options: RollbackRunOptions = {},
   ):
     | { ok: true; task: RunningTask }
     | {
@@ -898,6 +923,9 @@ export class SessionManager {
 
     const generator = graphAgent.rollbackAndRetry(session, nodeId, reason, {
       requestPermission,
+      granularity: options.granularity,
+      mode: options.mode,
+      toolOverrides: options.toolOverrides,
     });
     const task: RunningTask = {
       aborted: false,
@@ -921,6 +949,7 @@ export class SessionManager {
     sessionId: string,
     nodeId?: string,
     reason = "用户回退并重答",
+    options: RollbackRunOptions = {},
   ):
     | { ok: true }
     | {
@@ -928,7 +957,7 @@ export class SessionManager {
         code: "session_not_found" | "no_graph" | "busy";
         message: string;
       } {
-    const created = this.createRollbackRetryTask(sessionId, nodeId, reason);
+    const created = this.createRollbackRetryTask(sessionId, nodeId, reason, options);
     if (!created.ok) {
       log.info(
         "startRollbackRetryRun",

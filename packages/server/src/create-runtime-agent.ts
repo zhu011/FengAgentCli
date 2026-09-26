@@ -26,6 +26,7 @@ import type {
   Session,
   AgentEvent,
   ToolContext,
+  ToolInputOverride,
   SubagentRunner,
 } from "@fengagent/core";
 import { createSession, createUserMessage, loadConfig, ConfigSchema } from "@fengagent/core";
@@ -53,7 +54,10 @@ import {
 import { createRuntime } from "../../cordis/src/runtime.ts";
 import { BUILTIN_PLUGINS } from "../../cordis/src/types.ts";
 import type { FengRuntime, SessionStoreLike } from "../../cordis/src/types.ts";
-import type { ConversationNode } from "../../graph/src/types.ts";
+import type {
+  ConversationNode,
+  RollbackGranularity,
+} from "../../graph/src/types.ts";
 import {
   DualWriteSessionStore,
   EventGraphStore,
@@ -624,33 +628,49 @@ export class RuntimeAgent extends AgentClass {
     session: Session,
     nodeId?: string,
     reason = "用户回退",
+    options: RollbackRequestOptions = {},
   ): {
     ok: boolean;
     message: string;
     target?: ConversationNode;
     rollbackToNode?: ConversationNode;
     truncatedToMessageId?: string;
+    /** 实际生效的粒度（增量：step 时才与请求一致，否则回落 turn） */
+    granularity: RollbackGranularity;
+    /** 续跑语义：replay=重放该步（工具会重跑）；resume=从该步之后续跑（工具不重跑） */
+    mode: "replay" | "resume";
   } {
     const ctx = this.runtime.ctx;
+    const granularity: RollbackGranularity = options.granularity ?? "turn";
     let target: ConversationNode | undefined;
     if (nodeId) {
       target = ctx.graph.getNode(nodeId);
       if (!target || target.conversationId !== session.id) {
-        return { ok: false, message: `节点 ${nodeId} 不存在或不属于当前会话。` };
+        return {
+          ok: false,
+          message: `节点 ${nodeId} 不存在或不属于当前会话。`,
+          granularity,
+          mode: "replay",
+        };
       }
     } else {
       // 未指定 → 取活跃路径上最后一个 assistant 节点
       const active = ctx.graph.getActivePath(session.id);
       target = [...active].reverse().find((n) => n.type === "assistant");
       if (!target) {
-        return { ok: false, message: "没有可回退的助手回答节点（先对话一轮）。" };
+        return {
+          ok: false,
+          message: "没有可回退的助手回答节点（先对话一轮）。",
+          granularity,
+          mode: "replay",
+        };
       }
     }
 
-    // 决定回退点：解析「被点击节点所属轮次」的真实提问节点。
+    // 节点性质判定（策略层与轮级解析共用）：
     // 事件溯源图中工具结果以 role=user 的 tool-result 消息落 user/message 事件，
     // 会派生「工具结果 user 节点」——它不是真实提问，回退点必须跳过它继续上溯，
-    // 否则会截断到工具结果消息（上一版行为，导致重答不再重跑工具、粒度错乱）。
+    // 否则会截断到工具结果消息（导致重答不再重跑工具、粒度错乱）。
     const isRealQuestion = (n: ConversationNode): boolean => {
       if (n.type !== "user") return false;
       const msg = session.messages.find((m) => m.id === n.messageId);
@@ -660,34 +680,93 @@ export class RuntimeAgent extends AgentClass {
       // 真实提问带文本；工具结果 user 消息只含 tool-result 块
       return msg.content.some((b) => b.type === "text");
     };
+    const isToolResult = (n: ConversationNode): boolean => {
+      if (n.type !== "user") return false;
+      const msg = session.messages.find((m) => m.id === n.messageId);
+      if (!msg) return false;
+      return (
+        msg.content.some((b) => b.type === "tool-result") &&
+        !msg.content.some((b) => b.type === "text")
+      );
+    };
+
     let rollbackTargetId: string | undefined;
-    let cursor: ConversationNode | undefined = target;
-    let questionFallback: string | undefined;
-    while (cursor) {
-      if (cursor.type === "user") {
-        questionFallback ??= cursor.id;
-        if (isRealQuestion(cursor)) {
-          rollbackTargetId = cursor.id;
-          break;
-        }
+    /** 会话消息截断点（保留到该消息为止）；缺省 = 图回退点自身的消息 */
+    let truncateToMessageId: string | undefined;
+    let mode: "replay" | "resume" = "replay";
+
+    // ① 步级（增量）：交给策略层解析「一轮之内的一步」。解析不出（点到提问等）
+    //    则静默回落轮级语义 —— 不改变既有回退边界。
+    //    改参重放必须走 replay（截断到该步之前，工具才会以新入参重新执行）。
+    if (granularity === "step") {
+      const requestedMode =
+        options.mode ?? (options.toolOverrides?.length ? "replay" : undefined);
+      const choice = ctx.strategy?.rollback?.chooseRollbackTarget?.({
+        node: target,
+        granularity: "step",
+        ...(requestedMode ? { mode: requestedMode } : {}),
+        getNode: (id) => ctx.graph.getNode(id),
+        isQuestion: isRealQuestion,
+        isToolResult,
+      });
+      if (choice) {
+        rollbackTargetId = choice.targetId;
+        truncateToMessageId = choice.truncateToMessageId;
+        mode = choice.mode;
       }
-      cursor = cursor.parentId ? ctx.graph.getNode(cursor.parentId) : undefined;
     }
-    rollbackTargetId ??= questionFallback ?? target.id;
+
+    // ② 轮级（既有语义，逐字保留）：沿父链上溯到该节点所属轮次的真实提问处。
     if (!rollbackTargetId) {
-      return { ok: false, message: "该节点没有父节点可回退。" };
+      let cursor: ConversationNode | undefined = target;
+      let questionFallback: string | undefined;
+      while (cursor) {
+        if (cursor.type === "user") {
+          questionFallback ??= cursor.id;
+          if (isRealQuestion(cursor)) {
+            rollbackTargetId = cursor.id;
+            break;
+          }
+        }
+        cursor = cursor.parentId ? ctx.graph.getNode(cursor.parentId) : undefined;
+      }
+      rollbackTargetId ??= questionFallback ?? target.id;
+    }
+    if (!rollbackTargetId) {
+      return {
+        ok: false,
+        message: "该节点没有父节点可回退。",
+        granularity,
+        mode,
+      };
     }
 
-    ctx.graph.store.markQuality(target.id, "poor", reason);
-    const result = ctx.graph.store.rollbackTo(rollbackTargetId, reason);
+    // 质量标记：轮级沿用既有行为（点谁谁「回答不佳」）；步级续跑是「从这里继续」
+    // 而非「这个回答不好」，默认不落质量事实（可由调用方显式打开）。
+    const markQuality = options.markQuality ?? granularity === "turn";
+    if (markQuality) ctx.graph.store.markQuality(target.id, "poor", reason);
+
+    const result = ctx.graph.store.rollbackTo(
+      rollbackTargetId,
+      reason,
+      // 只有步级才携带上下文 → 轮级事件负载逐字不变（既有投影/对账不受影响）
+      granularity === "step" ? { granularity, mode } : undefined,
+    );
     if (!result) {
-      return { ok: false, message: "回退失败：目标节点不在活跃路径上。" };
+      return {
+        ok: false,
+        message: "回退失败：目标节点不在活跃路径上。",
+        granularity,
+        mode,
+      };
     }
 
-    // 会话消息截断到回退点（保留回退点消息，其后的消息移除）
-    let truncatedToMessageId: string | undefined;
-    const keepUntil = result.target.messageId;
+    // 会话消息截断到回退点（保留回退点消息，其后的消息移除）。
+    // 步级续跑时截断点可以**晚于**图回退点（工具结果仍留在上下文里 → 工具不重跑），
+    // 因此截断点优先取策略层给出的 truncateToMessageId。
+    const keepUntil = truncateToMessageId ?? result.target.messageId;
     const idx = session.messages.findIndex((m) => m.id === keepUntil);
+    let truncated = false;
     if (idx !== -1) {
       session.messages = session.messages.slice(0, idx + 1);
       session.tokenCount = ctx.context.estimateTokens(session.messages);
@@ -701,7 +780,7 @@ export class RuntimeAgent extends AgentClass {
       } else {
         session.updatedAt = Date.now();
       }
-      truncatedToMessageId = keepUntil;
+      truncated = true;
       ctx.storage.saveSession(session);
       ctx.storage.saveMessages?.(session.id, session.messages);
     }
@@ -709,14 +788,18 @@ export class RuntimeAgent extends AgentClass {
     return {
       ok: true,
       message:
-        `已回退到节点 ${result.target.id.slice(0, 12)}（${result.target.type}）` +
+        (granularity === "step"
+          ? `已回退到步骤节点 ${result.target.id.slice(0, 12)}（${mode === "resume" ? "步级续跑" : "步骤重放"}）`
+          : `已回退到节点 ${result.target.id.slice(0, 12)}（${result.target.type}）`) +
         `，作废旧分支 ${result.superseded.length} 个节点（保留可溯源），` +
-        (truncatedToMessageId
-          ? "会话已截断，正在重答。"
-          : "会话未找到对应消息，请手动重发。"),
+        (truncated ? "会话已截断，正在重答。" : "会话未找到对应消息，请手动重发。"),
       target,
       rollbackToNode: result.target,
-      truncatedToMessageId,
+      truncatedToMessageId: truncated ? keepUntil : undefined,
+      granularity: rollbackTargetId && granularity === "step" && truncateToMessageId !== undefined
+        ? "step"
+        : "turn",
+      mode,
     };
   }
 
@@ -725,15 +808,28 @@ export class RuntimeAgent extends AgentClass {
    *
    * 1) 回退（旧分支作废保留）→ 2) 会话截断 → 3) 经 ctx.loop 重新回答。
    * 新的回答以 branch-point 为父节点长出分支（可溯源）。
+   *
+   * 增量（AGE-29 图三件套）：
+   * - `granularity: "step"` —— 步级续跑（回退点精确到一轮之内的一步）；
+   * - `toolOverrides` —— 图上「改参并重放」：命中改写规则的工具以新入参执行，
+   *   复用既有改参留痕链路（`userCorrectedInput`）与 rollback-retry 重放，
+   *   改参事实经 `tool/corrected` 事件落到图上（可溯源）。
    */
   async *rollbackAndRetry(
     session: Session,
     nodeId?: string,
     reason = "用户回退",
-    options?: { requestPermission?: ToolContext["requestPermission"] },
+    options?: {
+      requestPermission?: ToolContext["requestPermission"];
+      granularity?: RollbackGranularity;
+      toolOverrides?: ToolInputOverride[];
+    },
   ): AsyncGenerator<AgentEvent> {
     const ctx = this.runtime.ctx;
-    const rb = this.rollback(session, nodeId, reason);
+    const rb = this.rollback(session, nodeId, reason, {
+      granularity: options?.granularity,
+      toolOverrides: options?.toolOverrides,
+    });
     if (!rb.ok) {
       yield { type: "error", error: { message: rb.message } };
       return;
@@ -744,7 +840,14 @@ export class RuntimeAgent extends AgentClass {
     // 收尾（复位 idle + 持久化）放 finally：中断（生成器 .return()）时同样复位，
     // 与 prompt() 语义一致（AGE-29 R2）
     try {
-      for await (const event of ctx.loop.run(session, options)) {
+      for await (const event of ctx.loop.run(session, {
+        requestPermission: options?.requestPermission,
+        inputOverrides: options?.toolOverrides,
+        correctionSource:
+          options?.toolOverrides && options.toolOverrides.length > 0
+            ? "graph"
+            : "hitl",
+      })) {
         yield event as unknown as AgentEvent;
       }
     } finally {
@@ -756,4 +859,16 @@ export class RuntimeAgent extends AgentClass {
 
     yield { type: "session-end" };
   }
+}
+
+/** {@link RuntimeAgent.rollback} 的增量选项 */
+export interface RollbackRequestOptions {
+  /** 回退粒度：turn（缺省 = 既有轮级语义）/ step（步级续跑） */
+  granularity?: RollbackGranularity;
+  /** 续跑语义（缺省由策略按节点形态判断；改参重放固定 replay） */
+  mode?: "replay" | "resume";
+  /** 是否给被点节点落「回答不佳」质量事实（缺省：轮级 true、步级 false） */
+  markQuality?: boolean;
+  /** 图上改参重放的入参改写规则（存在即隐含 step + replay） */
+  toolOverrides?: ToolInputOverride[];
 }

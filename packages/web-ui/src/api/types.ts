@@ -149,6 +149,20 @@ export type ConversationNodeType =
 
 export type NodeQuality = "good" | "poor" | "unrated";
 
+/** 回退粒度：turn=轮级（既有语义）；step=步级续跑 */
+export type RollbackGranularity = "turn" | "step";
+
+/** 工具入参改写记录（改参可溯源：原始入参 → 实际执行入参） */
+export interface ToolInputCorrection {
+  toolUseId: string;
+  toolName: string;
+  originalInput: unknown;
+  correctedInput: unknown;
+  source?: "hitl" | "graph";
+  seq?: number;
+  timestamp?: string;
+}
+
 export interface ConversationNodeMeta {
   model?: string;
   toolCalls?: Array<{ id: string; name: string }>;
@@ -159,6 +173,12 @@ export interface ConversationNodeMeta {
   branch?: string;
   active?: boolean;
   rolledBack?: boolean;
+  /** 该节点内的工具有过「用户改参后执行」（图上标「✏️ 已改参」） */
+  userCorrectedInput?: boolean;
+  /** 改参明细（改参前后可溯源） */
+  inputCorrections?: ToolInputCorrection[];
+  /** 分支点粒度：true=步级续跑（回退点在一轮之内） */
+  stepLevel?: boolean;
 }
 
 export interface ConversationNode {

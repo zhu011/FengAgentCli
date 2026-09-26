@@ -444,13 +444,27 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
         )}
       </footer>
 
-      {/* 对话图面板（Phase 4：分支可视化 + 回退；点击节点 = 回退到该轮提问并自动重答） */}
+      {/* 对话图面板（Phase 4：分支可视化 + 回退；点击节点 = 回退到该轮提问并自动重答）
+          AGE-29 图三件套：步级续跑（onStepResume）+ 图上改参并重放（onReplayWithInput） */}
       {showGraph && session.activeSession && session.graph && (
         <GraphPanel
           graph={session.graph}
           messages={session.activeSession.messages}
           busy={session.isStreaming}
           onRollback={(nodeId) => void session.rollbackRetry(nodeId)}
+          onStepResume={(nodeId) =>
+            void session.rollbackRetry(nodeId, "用户步级续跑", {
+              granularity: "step",
+            })
+          }
+          onReplayWithInput={(nodeId, override) =>
+            void session.rollbackRetry(
+              nodeId,
+              `用户改参重放：${override.toolName}`,
+              // replay：必须重放该步，工具才会以改写入参重新执行
+              { granularity: "step", mode: "replay", toolOverride: override },
+            )
+          }
         />
       )}
       {showGraph && session.activeSession && !session.graph && (

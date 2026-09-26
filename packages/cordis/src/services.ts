@@ -34,7 +34,7 @@ import type {
   GraphStore,
   RollbackStrategy,
 } from "@fengagent/graph";
-import { DefaultRollbackStrategy, MemoryGraphStore } from "@fengagent/graph";
+import { StepAwareRollbackStrategy, MemoryGraphStore } from "@fengagent/graph";
 import { generateId, resolveDataRoot } from "@fengagent/shared";
 import { rebuildAll, rebuildSession } from "@fengagent/events";
 import type {
@@ -286,7 +286,7 @@ export class StrategyServiceImpl extends Service implements StrategyService {
       options.toolChoice ?? {
         choose: (tools) => tools,
       };
-    this.rollback = options.rollback ?? new DefaultRollbackStrategy();
+    this.rollback = options.rollback ?? new StepAwareRollbackStrategy();
   }
 
   setCompaction(strategy: CompactionStrategy): void {
@@ -407,6 +407,8 @@ export class LoopServiceImpl extends Service implements LoopService {
     session: Session,
     runOptions?: {
       requestPermission?: ToolContext["requestPermission"];
+      inputOverrides?: import("@fengagent/core").ToolInputOverride[];
+      correctionSource?: import("@fengagent/core").ToolInputCorrectionSource;
     },
   ): AsyncGenerator<LoopEvent> {
     const { model, tools, context, graph, strategy, config, workdir } =
@@ -488,6 +490,21 @@ export class LoopServiceImpl extends Service implements LoopService {
     for await (const event of loop.run(session, runOptions)) {
       switch (event.type) {
         case "tool-call-result": {
+          // 改参事实落事件（可溯源）：与消息事件同源同序，图投影据此标「已改参」。
+          // 只在真的改过参时落，普通工具结果不产生额外事件。
+          if (event.userCorrectedInput === true) {
+            const call = findToolCall(session, event.toolUseId);
+            if (call) {
+              graph.recordInputCorrection(conversationId, {
+                messageId: call.messageId,
+                toolUseId: event.toolUseId,
+                toolName: call.toolName,
+                originalInput: event.originalInput,
+                correctedInput: event.input,
+                source: event.correctionSource ?? "hitl",
+              });
+            }
+          }
           // 工具结果也沉淀为图上的事件（溯源工具链路）
           if (event.result.isError) {
             const target = graph.store.getActiveHead(conversationId);
@@ -545,8 +562,30 @@ export class LoopServiceImpl extends Service implements LoopService {
   }
 }
 
-/* ------------------------------ 图服务 ------------------------------ */
+/**
+ * 从会话消息历史里定位一次工具调用（toolUseId → 所属助手消息 + 工具名）。
+ *
+ * tool-call-result 事件本身不带 messageId（该字段在 cordis LoopEvent 里是历史
+ * 占位），而 loop 在 yield 结果**之前**已把助手消息压入历史，因此从后向前即可
+ * 稳定命中；找不到（工具未注册等边界）时返回 undefined，调用方跳过落事件。
+ */
+function findToolCall(
+  session: Session,
+  toolUseId: string,
+): { messageId: string; toolName: string } | undefined {
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const message = session.messages[i]!;
+    if (message.role !== "assistant") continue;
+    for (const block of message.content) {
+      if (block.type === "tool-use" && block.id === toolUseId) {
+        return { messageId: message.id, toolName: block.name };
+      }
+    }
+  }
+  return undefined;
+}
 
+/* ------------------------------ 图服务 ------------------------------ */
 export class GraphServiceImpl extends Service implements GraphService {
   constructor(ctx: Context, readonly store: GraphStore) {
     super(ctx, "graph");
@@ -607,6 +646,32 @@ export class GraphServiceImpl extends Service implements GraphService {
   forkBranch(parentNodeId: string, branch?: string): ConversationNode | undefined {
     const result = this.store.fork(parentNodeId, branch);
     return result?.branchPoint;
+  }
+
+  /**
+   * 记录一次「用户改参后执行」的事实。
+   *
+   * 事件溯源图（EventGraphStore）落 `tool/corrected` 事件 → 图投影据此把对应
+   * 助手节点标为「已改参」并保留改参前后；纯内存图无事件词汇 → no-op。
+   */
+  recordInputCorrection(
+    conversationId: string,
+    correction: {
+      messageId: string;
+      toolUseId: string;
+      toolName: string;
+      originalInput: unknown;
+      correctedInput: unknown;
+      source?: "hitl" | "graph";
+    },
+  ): void {
+    const store = this.store as GraphStore & {
+      recordInputCorrection?: (
+        conversationId: string,
+        correction: Parameters<GraphService["recordInputCorrection"]>[1],
+      ) => void;
+    };
+    store.recordInputCorrection?.(conversationId, correction);
   }
 
   getNode(nodeId: string): ConversationNode | undefined {

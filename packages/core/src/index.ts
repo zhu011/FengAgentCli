@@ -30,6 +30,8 @@ export type {
   ToolResult,
   ToolContext,
   ToolCall,
+  ToolInputOverride,
+  ToolInputCorrectionSource,
 } from "./tool.ts";
 
 // Agent 类型

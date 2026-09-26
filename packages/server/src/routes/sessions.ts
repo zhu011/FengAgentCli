@@ -6,7 +6,7 @@
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { SessionManager } from "../session-manager.ts";
+import type { SessionManager, RollbackRunOptions } from "../session-manager.ts";
 import type { SessionEvent } from "../session-manager.ts";
 import { agentEventToSSE } from "../sse.ts";
 import type { AgentEvent } from "@fengagent/core";
@@ -44,6 +44,51 @@ function createEventQueue() {
   };
 
   return { push, wake, next };
+}
+
+/**
+ * 解析回退/续跑请求的可选增量字段（向后兼容：老客户端不带这些字段 → 轮级语义）。
+ *
+ * 支持两种入参形状（互为别名，图上改参重放两种写法都能用）：
+ * - `{ granularity: "step", mode: "replay", toolOverride: { toolName, from, to } }`
+ * - `{ granularity: "step", mode: "replay", toolOverrides: [{ toolName, from, to }] }`
+ *
+ * `mode` 缺省时由策略按节点形态判断；带 toolOverride 时 Agent 侧固定按 replay 处理
+ * （必须重放该步，改写入参才会被那次调用命中）。
+ *
+ * @param body - 请求体（已解析 JSON；非法字段一律忽略而非报错）
+ * @returns 回退运行选项
+ */
+function parseRollbackOptions(body: unknown): RollbackRunOptions {
+  const raw = (body ?? {}) as Record<string, unknown>;
+  const options: RollbackRunOptions = {};
+
+  if (raw.granularity === "step" || raw.granularity === "turn") {
+    options.granularity = raw.granularity;
+  }
+  if (raw.mode === "replay" || raw.mode === "resume") {
+    options.mode = raw.mode;
+  }
+
+  const candidates: unknown[] = [];
+  if (Array.isArray(raw.toolOverrides)) candidates.push(...raw.toolOverrides);
+  if (raw.toolOverride !== undefined) candidates.push(raw.toolOverride);
+
+  const overrides: NonNullable<RollbackRunOptions["toolOverrides"]> = [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const entry = candidate as Record<string, unknown>;
+    if (typeof entry.toolName !== "string" || !entry.toolName) continue;
+    if (entry.to === undefined) continue;
+    overrides.push({
+      toolName: entry.toolName,
+      ...(entry.from !== undefined ? { from: entry.from } : {}),
+      to: entry.to,
+    });
+  }
+  if (overrides.length > 0) options.toolOverrides = overrides;
+
+  return options;
 }
 
 /** 写一条 AgentEvent 形状的 SSE 帧 */
@@ -240,6 +285,7 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
   });
 
   // POST /:id/rollback — 回退到目标节点（旧分支保留可溯源，Phase 4；仅截断不重答）
+  // 增量：body.granularity = "step" 时回退点精确到一轮之内的一步（步级续跑）。
   app.post("/:id/rollback", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
@@ -247,13 +293,18 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
       typeof body.nodeId === "string" && body.nodeId ? body.nodeId : undefined;
     const reason =
       typeof body.reason === "string" && body.reason ? body.reason : "用户回退";
-    log.info("rollback", `sessionId=${id}, nodeId=${nodeId ?? "(last assistant)"}, reason=${reason}`);
-    const result = sessionManager.rollbackSession(id, nodeId, reason);
+    const options = parseRollbackOptions(body);
+    log.info("rollback", `sessionId=${id}, nodeId=${nodeId ?? "(last assistant)"}, reason=${reason}, granularity=${options.granularity ?? "turn"}`);
+    const result = sessionManager.rollbackSession(id, nodeId, reason, options);
     return c.json(result, result.ok ? 200 : 400);
   });
 
   // POST /:id/rollback-retry — 回退到目标节点并自动重答（SSE 流；WebUI 图面板「回退并重答」闭环）
   // 与 CLI /rollback <节点id> 同一语义：回退（旧分支作废保留）→ 截断 → 重答（新回答挂在分支点下）
+  // 增量（AGE-29 图三件套）：
+  // - body.granularity = "step" → 步级续跑：回退点落在一轮之内的一步（已执行的工具不重跑）；
+  // - body.toolOverride = { toolName, from, to } → 图上「改参并重放」：命中该工具调用后
+  //   以新入参执行（复用 HITL allowWithInput 同一条留痕链路），改参事实落到图上可溯源。
   // 并发语义与 POST /:id/messages 一致：后台泵送 + 按会话订阅（见该路由注释）。
   app.post("/:id/rollback-retry", (c) => {
     const id = c.req.param("id");
@@ -272,6 +323,7 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
         typeof body.reason === "string" && body.reason
           ? body.reason
           : "用户回退并重答";
+      const options = parseRollbackOptions(body);
 
       // 订阅该会话的事件流（先订阅再启动）
       const queue = createEventQueue();
@@ -285,7 +337,7 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
       });
 
       try {
-        const started = sessionManager.startRollbackRetryRun(id, nodeId, reason);
+        const started = sessionManager.startRollbackRetryRun(id, nodeId, reason, options);
         if (!started.ok) {
           log.info("rollbackRetry", `rejected ${started.code} sessionId=${id}`);
           await writeAgentEventSSE(stream, {

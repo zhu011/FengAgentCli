@@ -191,6 +191,18 @@ interface ConversationNode {
     经 `POST /:id/rollback-retry`（SSE）回退截断后**自动重新回答**并刷新会话与图
     （与 CLI `/rollback <节点id>` 同一语义：旧分支作废保留、新回答挂分支点下）。
   - 回归：`RuntimeAgent` 单测（回退截断/重答分支/幂等/热切换）+ 服务端图端点单测全绿。
+- **Phase 4 增量（图三件套，纯加法）**：在**不动轮级回退语义**的前提下补齐三件事——
+  1. 图上工具节点「改参并重放」：`POST /:id/rollback-retry` 支持
+     `toolOverride:{toolName,from,to}`（隐含 `granularity:"step"` + `mode:"replay"`——
+     必须重放该步，改写入参才会被那次调用命中），经 `ToolContext.inputOverrides` 在
+     **执行器内部**改写入参——与 HITL 审批改参（`allowWithInput`）走同一条路径
+     （同一份校验、同一份 `userCorrectedInput` 留痕、同样的历史同步）；
+  2. 步级续跑：`RollbackStrategy.chooseRollbackTarget`（新增可选方法）按粒度解析回退点，
+     `granularity:"step"` 时截断点落在一轮之内的**某一步之后**（该步已执行的工具不重跑）；
+     轮级路径逐字未改，未实现该方法的第三方策略行为不变；
+  3. 改参溯源：`tool/corrected` 事件（原始入参 / 实际入参 / 来源）→ 图投影写入节点
+     `meta.userCorrectedInput` + `meta.inputCorrections` → 图节点标「✏️ 已改参」，
+     悬停可见改参前后；步级回退的分支点带 `stepLevel`，图上与轮级回退可辨。
 - **Phase 5（规划中）**：用户插件热装载（`cordis.yml` 风格 profile），发布
   `docs/EXTENDING-CORDIS.md`。当前已支持在 `createRuntime` 配置中以「模块路径」加载用户插件
   （`packages/cordis/src/runtime.ts` 的 `resolvePluginFactory`，测试见

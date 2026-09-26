@@ -10,13 +10,32 @@
  *   + 所用工具名；分支点标注「回退重答」；
  * - head 节点高亮（描边/光晕 + ← 当前），活跃路径底色强调。
  *
+ * AGE-29 图三件套（本轮增量）：
+ * - ① 图上工具节点「改参并重放」：展开某工具调用 → 改入参 → 重放该步
+ *   （走后端 rollback-retry + 改参改写规则，与 HITL 审批改参同一执行/留痕链路）；
+ * - ② 步级续跑：助手步骤节点可「从此步续跑」（回退点精确到一轮内的一步，
+ *   已执行的工具不重复执行）；分支点据此标「步级续跑」；
+ * - ③ 改参溯源：节点标「✏️ 已改参」，悬停可见改参前后的原始/新入参。
+ *
  * Round 2：颜色全部改用 CSS 变量（--accent / --success / --danger /
  * --text-* / --border-* 等），三套主题（深空/日光/赛博）自动适配。
  */
 
 import { useMemo, useState } from "react";
-import { GitBranch, RotateCcw } from "lucide-react";
-import type { ConversationNode, GraphData, Message } from "../api/types.ts";
+import { GitBranch, Pencil, Play, RotateCcw } from "lucide-react";
+import type {
+  ConversationNode,
+  GraphData,
+  Message,
+  ToolInputCorrection,
+} from "../api/types.ts";
+
+/** 图上改参重放的入参改写规则（镜像 core ToolInputOverride） */
+export interface GraphToolOverride {
+  toolName: string;
+  from?: unknown;
+  to: unknown;
+}
 
 interface GraphPanelProps {
   graph: GraphData;
@@ -24,6 +43,10 @@ interface GraphPanelProps {
   messages?: Message[];
   busy: boolean;
   onRollback: (nodeId: string) => void;
+  /** 步级续跑：回退点精确到该步（已执行的工具不重复执行） */
+  onStepResume?: (nodeId: string) => void;
+  /** 图上改参并重放：把该工具调用的入参改为新值后重放该步 */
+  onReplayWithInput?: (nodeId: string, override: GraphToolOverride) => void;
 }
 
 const NODE_ICON: Record<string, string> = {
@@ -70,12 +93,43 @@ function messageSnippet(node: ConversationNode, messagesById: Map<string, Messag
 
 /** 提取助手消息所用工具名 */
 function toolNamesOf(node: ConversationNode, messagesById: Map<string, Message>): string[] {
+  return toolUsesOf(node, messagesById).map((t) => t.name);
+}
+
+/** 节点消息里的工具调用（id / 名称 / 入参）— 图上改参重放的编辑目标 */
+function toolUsesOf(
+  node: ConversationNode,
+  messagesById: Map<string, Message>,
+): Array<{ id: string; name: string; input: unknown }> {
   const msg = messagesById.get(node.messageId);
   if (!msg) return [];
   return msg.content
-    .filter((b) => b.type === "tool-use")
-    .map((b) => (b.type === "tool-use" ? b.name : ""))
-    .filter(Boolean);
+    .filter(
+      (b): b is Extract<Message["content"][number], { type: "tool-use" }> =>
+        b.type === "tool-use",
+    )
+    .map((b) => ({ id: b.id, name: b.name, input: b.input }));
+}
+
+/** 紧凑展示任意入参（改参前后溯源用） */
+function compactValue(value: unknown, max = 80): string {
+  const text =
+    typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+  const oneLine = text.replace(/\s+/g, " ");
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
+/** 改参明细 → 悬停说明（原始入参 → 新入参，可溯源） */
+function correctionsTitle(corrections: ToolInputCorrection[] | undefined): string {
+  if (!corrections || corrections.length === 0) return "该步执行时用户改过工具入参";
+  return corrections
+    .map(
+      (c, i) =>
+        `${i + 1}. ${c.toolName}${c.source === "graph" ? "（图上改参重放）" : "（审批改参）"}\n` +
+        `   原始: ${compactValue(c.originalInput, 200)}\n` +
+        `   实际: ${compactValue(c.correctedInput, 200)}`,
+    )
+    .join("\n");
 }
 
 /** 节点展示信息（序号 / 步骤 / 摘要 / 工具） */
@@ -166,7 +220,8 @@ function buildNodeInfo(
     if (node.type === "branch-point") {
       info.set(node.id, {
         icon: base,
-        label: "回退重答",
+        // 步级续跑（回退点在一轮之内）与轮级回退重答区分开
+        label: node.meta.stepLevel ? "步级续跑" : "回退重答",
         sub: node.meta.qualityNote
           ? String(node.meta.qualityNote).slice(0, 24)
           : "分支点",
@@ -184,8 +239,22 @@ function buildNodeInfo(
   return info;
 }
 
-export function GraphPanel({ graph, messages, busy, onRollback }: GraphPanelProps) {
+export function GraphPanel({
+  graph,
+  messages,
+  busy,
+  onRollback,
+  onStepResume,
+  onReplayWithInput,
+}: GraphPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
+  /** 正在改参的工具调用 id（null = 未编辑） */
+  const [editingTool, setEditingTool] = useState<string | null>(null);
+  /** 改参草稿（JSON 文本） */
+  const [draft, setDraft] = useState("");
+  /** 草稿解析错误（就地提示，不发请求） */
+  const [draftError, setDraftError] = useState<string | null>(null);
+
   const activeIds = useMemo(
     () => new Set(graph.activePath.map((n) => n.id)),
     [graph.activePath],
@@ -228,6 +297,38 @@ export function GraphPanel({ graph, messages, busy, onRollback }: GraphPanelProp
       active &&
       !busy;
     const nfo = nodeInfo.get(node.id);
+    const toolUses = toolUsesOf(node, messagesById);
+    /** 该步是否可作为「步级续跑」起点（助手步骤节点，且非 head 末端亦可续跑） */
+    const canStepResume =
+      node.type === "assistant" && active && !busy && !!onStepResume;
+    /** 图上改参重放：仅活跃路径上的助手步骤、且该步确实有工具调用 */
+    const canEditInput =
+      node.type === "assistant" &&
+      active &&
+      !busy &&
+      !!onReplayWithInput &&
+      toolUses.length > 0;
+
+    /** 提交改参并重放（草稿必须是合法 JSON 且与原入参不同） */
+    const submitOverride = (toolId: string, toolName: string, original: unknown) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(draft);
+      } catch (err) {
+        setDraftError(
+          `入参不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      setDraftError(null);
+      setEditingTool(null);
+      onReplayWithInput?.(node.id, { toolName, from: original, to: parsed });
+      void toolId;
+    };
+
+    const corrections = node.meta.inputCorrections;
+    const correctionHint =
+      node.meta.userCorrectedInput || (corrections && corrections.length > 0);
 
     return (
       <div key={node.id}>
@@ -257,6 +358,15 @@ export function GraphPanel({ graph, messages, busy, onRollback }: GraphPanelProp
               {node.meta.quality === "poor" ? "回答不佳" : "良好"}
             </span>
           )}
+          {correctionHint && (
+            <span
+              className="graph-node__corrected"
+              title={correctionsTitle(corrections)}
+              data-testid="graph-node-corrected"
+            >
+              ✏️ 已改参
+            </span>
+          )}
           {rolledBack && (
             <span className="graph-node__rolledback">已作废（保留可溯源）</span>
           )}
@@ -273,7 +383,87 @@ export function GraphPanel({ graph, messages, busy, onRollback }: GraphPanelProp
               回退并重答
             </button>
           )}
+          {canStepResume && (
+            <button
+              type="button"
+              className="graph-node__step-resume"
+              title="回退点精确到这一步：该步之前已执行的工具不会重复执行"
+              onClick={() => onStepResume?.(node.id)}
+            >
+              <Play size={11} />
+              从此步续跑
+            </button>
+          )}
         </div>
+        {canEditInput && (
+          <div
+            className="graph-node__tools"
+            style={{ marginLeft: depth * 18 + 18 }}
+            data-testid="graph-node-tools"
+          >
+            {toolUses.map((tool) => (
+              <div key={tool.id} className="graph-tool-row">
+                <span className="graph-tool-row__name">{tool.name}</span>
+                <span className="graph-tool-row__input" title={compactValue(tool.input, 300)}>
+                  {compactValue(tool.input)}
+                </span>
+                {editingTool === tool.id ? (
+                  <div className="graph-tool-row__editor">
+                    <textarea
+                      className="graph-tool-row__textarea"
+                      aria-label={`改参 ${tool.name}`}
+                      value={draft}
+                      spellCheck={false}
+                      rows={4}
+                      onChange={(e) => setDraft(e.target.value)}
+                    />
+                    {draftError && (
+                      <p className="graph-tool-row__error" role="alert">
+                        {draftError}
+                      </p>
+                    )}
+                    <div className="graph-tool-row__actions">
+                      <button
+                        type="button"
+                        className="graph-tool-row__confirm"
+                        onClick={() => submitOverride(tool.id, tool.name, tool.input)}
+                      >
+                        改参并重放
+                      </button>
+                      <button
+                        type="button"
+                        className="graph-tool-row__cancel"
+                        onClick={() => {
+                          setEditingTool(null);
+                          setDraftError(null);
+                        }}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="graph-tool-row__edit"
+                    onClick={() => {
+                      setEditingTool(tool.id);
+                      setDraftError(null);
+                      setDraft(
+                        typeof tool.input === "string"
+                          ? tool.input
+                          : JSON.stringify(tool.input ?? {}, null, 2),
+                      );
+                    }}
+                  >
+                    <Pencil size={11} />
+                    改参
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {(childrenOf.get(node.id) ?? []).map((child) => renderNode(child, depth + 1))}
       </div>
     );
@@ -314,8 +504,9 @@ export function GraphPanel({ graph, messages, busy, onRollback }: GraphPanelProp
             <>
               {roots.map((node) => renderNode(node, 0))}
               <p className="graph-panel__hint">
-                💡 点「回退并重答」：回退到该节点所属那一轮的提问处并自动重答
-                （含该轮工具调用会重跑），旧分支作废但保留，可随时溯源。
+                💡 「回退并重答」回到该节点所属那一轮的提问处重跑；「从此步续跑」把回退点
+                精确到这一步（该步之前已执行的工具不重复执行）；助手步骤下的工具可「改参」
+                后重放该步（✏️ 标出改过参的步骤，悬停可见改参前后）。
               </p>
             </>
           )}

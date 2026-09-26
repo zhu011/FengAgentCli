@@ -124,8 +124,21 @@ export interface UseSessionResult {
   refreshSession: () => Promise<void>;
   refreshGraph: () => Promise<void>;
   rollback: (nodeId?: string, reason?: string) => Promise<void>;
-  /** 回退到目标节点并自动重答（SSE 流；图面板「回退并重答」闭环） */
-  rollbackRetry: (nodeId?: string, reason?: string) => Promise<void>;
+  /**
+   * 回退到目标节点并自动重答（SSE 流；图面板「回退并重答」闭环）。
+   *
+   * 增量：`extras.granularity = "step"` 走步级续跑；`extras.toolOverride`
+   * 走图上「改参并重放」（该工具以新入参执行）。
+   */
+  rollbackRetry: (
+    nodeId?: string,
+    reason?: string,
+    extras?: {
+      granularity?: "turn" | "step";
+      mode?: "replay" | "resume";
+      toolOverride?: { toolName: string; from?: unknown; to: unknown };
+    },
+  ) => Promise<void>;
 }
 
 export function useSession(client: ApiClient): UseSessionResult {
@@ -742,7 +755,15 @@ export function useSession(client: ApiClient): UseSessionResult {
    * 消息列表，随后按常规轮次流式渲染新回答。
    */
   const rollbackRetry = useCallback(
-    async (nodeId?: string, reason = "用户回退并重答") => {
+    async (
+      nodeId?: string,
+      reason = "用户回退并重答",
+      extras?: {
+        granularity?: "turn" | "step";
+        mode?: "replay" | "resume";
+        toolOverride?: { toolName: string; from?: unknown; to: unknown };
+      },
+    ) => {
       const sessionId = activeSessionIdRef.current;
       if (!sessionId) return;
       // 该会话已有流式任务在跑时拒绝重复操作（其它会话后台运行不受影响）
@@ -803,6 +824,7 @@ export function useSession(client: ApiClient): UseSessionResult {
           nodeId,
           reason,
           controller.signal,
+          extras,
         )) {
           firstEventReceived = true;
           if (isRunEnd(event)) break;

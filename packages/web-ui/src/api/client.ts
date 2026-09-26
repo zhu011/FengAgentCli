@@ -161,18 +161,33 @@ export class ApiClient {
    * POST /api/sessions/:id/rollback-retry — 回退到目标节点并自动重答（SSE 流）。
    *
    * 与 CLI /rollback <节点id> 同一语义：回退（旧分支作废保留）→ 截断 → 重答。
+   *
+   * 增量（AGE-29 图三件套）：
+   * - `granularity: "step"` → 步级续跑（回退点精确到一轮内的一步，已执行工具不重跑）；
+   * - `toolOverride` → 图上「改参并重放」：该工具调用以新入参执行（与 HITL 审批改参同链路），
+   *   同时会带 `mode: "replay"`（必须重放该步，改写入参才会被那次调用命中）。
    */
   async *rollbackRetry(
     sessionId: string,
     nodeId?: string,
     reason = "用户回退并重答",
     signal?: AbortSignal,
+    extras?: {
+      granularity?: "turn" | "step";
+      mode?: "replay" | "resume";
+      toolOverride?: { toolName: string; from?: unknown; to: unknown };
+    },
   ): AsyncGenerator<AgentEvent> {
+    // 改参重放必须重放该步（否则改写入参等不到匹配的那次调用）
+    const mode = extras?.mode ?? (extras?.toolOverride ? "replay" : undefined);
     yield* this.postSSE(
       `/api/sessions/${sessionId}/rollback-retry`,
       {
         ...(nodeId ? { nodeId } : {}),
         ...(reason ? { reason } : {}),
+        ...(extras?.granularity ? { granularity: extras.granularity } : {}),
+        ...(mode ? { mode } : {}),
+        ...(extras?.toolOverride ? { toolOverride: extras.toolOverride } : {}),
       },
       signal,
     );

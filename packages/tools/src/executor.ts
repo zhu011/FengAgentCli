@@ -12,7 +12,7 @@
  * 6. 截断输出
  * 7. 触发 post-tool-use hooks（可修改结果）
  */
-import type { ToolDefinition, ToolResult, ToolContext } from "@fengagent/core/tool";
+import type { ToolDefinition, ToolResult, ToolContext, ToolInputOverride } from "@fengagent/core/tool";
 import { BASH_TIMEOUT, MAX_TOOL_CONCURRENCY } from "@fengagent/shared/constants";
 import { getEnvNumber, toSingleLine } from "@fengagent/shared/utils";
 import type { PermissionChecker } from "./permission.ts";
@@ -36,6 +36,51 @@ export interface ExecutedToolResult {
   input: unknown;
   result: ToolResult;
   error?: Error;
+}
+
+/**
+ * 入参深度相等（键序无关）——改参判定用。
+ *
+ * 为什么不能直接 `JSON.stringify` 比较：图上改参重放时入参由用户在前端编辑，
+ * 键序可能与模型原始调用不同，但语义相同（那种情况不算改参，避免误标「已改参」）。
+ *
+ * @param a - 左值
+ * @param b - 右值
+ * @returns 语义是否相等
+ */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  return canonicalJson(a) === canonicalJson(b);
+}
+
+/** 规范化 JSON（对象键排序，递归） */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+}
+
+/**
+ * 找出命中本次工具调用的入参改写规则。
+ *
+ * @param overrides - 改写规则表（本次运行注入）
+ * @param toolName - 本次调用的工具名
+ * @param input - 模型给出的原始入参
+ * @returns 命中的规则；无命中返回 undefined
+ */
+function matchInputOverride(
+  overrides: ToolInputOverride[] | undefined,
+  toolName: string,
+  input: unknown,
+): ToolInputOverride | undefined {
+  if (!overrides || overrides.length === 0) return undefined;
+  return overrides.find(
+    (rule) =>
+      rule.toolName === toolName &&
+      (rule.from === undefined || jsonEqual(rule.from, input)),
+  );
 }
 
 export interface ToolExecutor {
@@ -186,6 +231,14 @@ export function createToolExecutor(
     const originalInput = input;
     // 用户是否在审批环节修改了入参（用于上层把「实际执行入参」同步进历史/卡片）
     let correctedByUser = false;
+    // 图上「改参并重放」：命中改写规则即以新入参执行。走的是与审批改参
+    // **同一条**路径（同一份校验 + 同一份 userCorrectedInput 留痕），
+    // 因此下游（loop 事件 / 图投影 / 卡片）无需区分来源即可溯源。
+    const override = matchInputOverride(context.inputOverrides, tool.name, input);
+    if (override && !jsonEqual(override.to, originalInput)) {
+      input = override.to;
+      correctedByUser = true;
+    }
     // 非交互宿主（ACP）预授权放行（用于结果留痕，见 ToolExecutorOptions）
     let preAuthorized = false;
     // 0. 入参校验 — 失败且工具本就需要人工审批（ask）时，先给用户改参机会；

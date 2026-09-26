@@ -132,6 +132,32 @@ export class EventGraphStore implements GraphStore {
   /* ------------------------------ GraphStore 写路径（事件溯源） ------------------------------ */
 
   /**
+   * 记录一次「用户改参后执行」的事实（改参可溯源）。
+   *
+   * @param conversationId - 会话 id
+   * @param correction - 改参事实（原始入参 / 实际执行入参）
+   * @returns 落盘的事件；会话无事件流（纯遗留会话）时返回 undefined（不补事件）
+   */
+  recordInputCorrection(
+    conversationId: string,
+    correction: {
+      messageId: string;
+      toolUseId: string;
+      toolName: string;
+      originalInput: unknown;
+      correctedInput: unknown;
+      source?: "hitl" | "graph";
+    },
+  ): void {
+    if (!this.projectConversation(conversationId)) return;
+    this.events.append({
+      sessionId: conversationId,
+      type: "tool/corrected",
+      payload: correction,
+    });
+  }
+
+  /**
    * 追加节点。
    * - 用户/助手节点：走事件派生 — 已有派生节点幂等返回；无事件时补消息事件
    *   （运行时正常路径由双写先落消息事件，不会走到补事件分支）；
@@ -209,7 +235,11 @@ export class EventGraphStore implements GraphStore {
    * 以 rollback 事件落盘（事实），分支点/head/active·rolledBack 由投影派生。
    * @returns 回退结果；目标不在活跃路径 / 会话无事件时返回 undefined
    */
-  rollbackTo(nodeId: string, reason?: string): RollbackResult | undefined {
+  rollbackTo(
+    nodeId: string,
+    reason?: string,
+    context?: { granularity?: "turn" | "step"; mode?: "replay" | "resume" },
+  ): RollbackResult | undefined {
     const target = this.getNode(nodeId);
     if (!target) return undefined;
     const g = this.projectConversation(target.conversationId);
@@ -225,6 +255,8 @@ export class EventGraphStore implements GraphStore {
         targetNodeId: nodeId,
         reason,
         supersededNodeIds: superseded,
+        ...(context?.granularity ? { granularity: context.granularity } : {}),
+        ...(context?.mode ? { mode: context.mode } : {}),
       },
     });
 

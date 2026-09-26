@@ -256,9 +256,9 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 
 | 文件 | 职责 |
 |------|------|
-| `types.ts` | `ConversationNode`、`GraphStore` 接口、`RollbackStrategy` |
+| `types.ts` | `ConversationNode`、`GraphStore` 接口、`RollbackStrategy`、`ToolInputCorrection`（改参溯源） |
 | `store.ts` | `MemoryGraphStore`：appendNode / getChain / getActivePath / markQuality / rollbackTo，JSONL 落盘 |
-| `rollback.ts` | `DefaultRollbackStrategy`、`qualityToSignal` |
+| `rollback.ts` | `DefaultRollbackStrategy`（轮级语义）、`StepAwareRollbackStrategy`（增量：`granularity:"step"` 步级续跑，解析出 resume/replay 截断点）、`qualityToSignal` |
 
 ### 节点类型
 
@@ -281,10 +281,10 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | `types.ts` | 事件类型 + `SessionEventBase` 信封（version/sessionId/seq/type/timestamp/hash/prevHash） |
 | `registry.ts` | 运行时校验注册表（`registerEventType`）+ 核心事件名常量 |
 | `projection.ts` | `projectSession` 投影（逻辑复现 + 生命周期元数据）+ head 推导 |
-| `graph-projection.ts` | 事件 → 对话图节点投影（active/rolledBack 派生态重算） |
+| `graph-projection.ts` | 事件 → 对话图节点投影（active/rolledBack 派生态重算；`tool/corrected` → 节点「已改参」+ 改参前后可溯源；步级回退 → 分支点 `stepLevel`） |
 | `dual-write.ts` | `DualWriteSessionStore`：旧存储 + 事件日志并行写，rollback/fork 截断同步 |
 | `reconcile.ts` | 双写对账（事件投影 === SQLite 读模型逐条等价） |
-| `event-graph-store.ts` | `EventGraphStore`：事件为事实源，graph.jsonl 为派生视图 |
+| `event-graph-store.ts` | `EventGraphStore`：事件为事实源，graph.jsonl 为派生视图；`recordInputCorrection` 落 `tool/corrected`（改参可溯源） |
 | `migration.ts` | 事件导出/导入（可移植文件 + 校验链 + 幂等去重）+ 整库迁移 |
 | `rebuild.ts` | `rebuildSession` / `rebuildAll`：以事件为准重建读模型（脱双写依赖） |
 | `node-ids.ts` | 节点 id 确定性方案 |
@@ -356,8 +356,8 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | GET | `/api/sessions/:id/export` | 导出会话 |
 | DELETE | `/api/sessions/:id` | 销毁会话 |
 | GET | `/api/sessions/:id/graph` | 获取对话图（节点/活跃路径） |
-| POST | `/api/sessions/:id/rollback` | 回退到目标节点（截断，旧分支保留） |
-| POST | `/api/sessions/:id/rollback-retry` | 回退并自动重答（SSE 流；WebUI 图面板「回退并重答」闭环） |
+| POST | `/api/sessions/:id/rollback` | 回退到目标节点（截断，旧分支保留）；`granularity:"step"` → 步级续跑 |
+| POST | `/api/sessions/:id/rollback-retry` | 回退并自动重答（SSE 流；WebUI 图面板「回退并重答」闭环）；`granularity:"step"` 步级续跑、`toolOverride:{toolName,from,to}` 图上改参重放 |
 | GET | `/api/models` | 获取可用模型列表 |
 
 ---
@@ -374,7 +374,7 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | Markdown Renderer | `components/markdown-renderer.tsx` | Markdown + 代码高亮 |
 | Model Selector | `components/model-selector.tsx` | 模型下拉选择 |
 | Session Sidebar | `components/session-sidebar.tsx` | 会话列表侧边栏 |
-| Graph Panel | `components/graph-panel.tsx` | ★ 对话图可视化（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显；assistant/tool/user 节点均可「回退并重答」） |
+| Graph Panel | `components/graph-panel.tsx` | ★ 对话图可视化（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显；assistant/tool/user 节点均可「回退并重答」；助手步骤可「从此步续跑」、步骤下的工具可「改参并重放」，改过参的节点标 ✏️ 并可溯源改参前后） |
 
 ### Hooks
 

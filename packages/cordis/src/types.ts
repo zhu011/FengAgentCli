@@ -28,6 +28,8 @@ import type {
   SessionMeta,
   ToolContext,
   ToolDefinition,
+  ToolInputCorrectionSource,
+  ToolInputOverride,
   ToolResult,
 } from "@fengagent/core";
 import type {
@@ -187,7 +189,20 @@ export type LoopEvent =
   | { type: "message-end"; messageId: string }
   | { type: "text-delta"; messageId: string; text: string }
   | { type: "tool-call"; messageId: string; name: string; input: unknown }
-  | { type: "tool-call-result"; messageId: string; toolUseId: string; result: ToolResult }
+  | {
+      type: "tool-call-result";
+      messageId: string;
+      toolUseId: string;
+      result: ToolResult;
+      /** 实际执行的入参（改参后执行时携带） */
+      input?: unknown;
+      /** 本次执行是否经过用户改参（审批改参 / 图上改参重放） */
+      userCorrectedInput?: boolean;
+      /** 模型给出的原始入参（改参前后可溯源） */
+      originalInput?: unknown;
+      /** 改参来源 */
+      correctionSource?: "hitl" | "graph";
+    }
   | { type: "turn-end"; reason: string }
   | { type: "compaction-start" }
   | { type: "compaction-end"; summary?: string }
@@ -199,7 +214,13 @@ export interface LoopService {
   /** 运行一轮完整 agent loop */
   run(
     session: Session,
-    options?: { requestPermission?: ToolContext["requestPermission"] },
+    options?: {
+      requestPermission?: ToolContext["requestPermission"];
+      /** 本次运行的入参改写规则（图上「改参并重放」）；命中即以新入参执行 */
+      inputOverrides?: ToolInputOverride[];
+      /** 改参来源标记（缺省 hitl） */
+      correctionSource?: ToolInputCorrectionSource;
+    },
   ): AsyncGenerator<LoopEvent>;
 }
 
@@ -230,6 +251,24 @@ export interface GraphService {
    * @returns 分支点节点（新 head）；节点不存在/不在活跃路径时 undefined
    */
   forkBranch(parentNodeId: string, branch?: string): ConversationNode | undefined;
+
+  /**
+   * 记录一次「用户改参后执行」的事实（改参可溯源；图上标「✏️ 已改参」）。
+   *
+   * 事件溯源图（EventGraphStore）落 `tool/corrected` 事件；纯内存图无事件词汇，
+   * 为 no-op（对应节点 meta 由调用方自行维护）。
+   */
+  recordInputCorrection(
+    conversationId: string,
+    correction: {
+      messageId: string;
+      toolUseId: string;
+      toolName: string;
+      originalInput: unknown;
+      correctedInput: unknown;
+      source?: "hitl" | "graph";
+    },
+  ): void;
 
   /* ---- 溯源 / 分支读取（CLI /rollback、/graph 与 WebUI 可视化共用） ---- */
 

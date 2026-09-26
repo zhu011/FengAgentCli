@@ -14,6 +14,7 @@ import type {
   ConversationNodeType,
   GraphStore,
   NodeQuality,
+  RollbackGranularity,
   RollbackResult,
 } from "./types.ts";
 import { generateId } from "@fengagent/shared/utils";
@@ -113,7 +114,11 @@ export class MemoryGraphStore implements GraphStore {
     }
   }
 
-  rollbackTo(nodeId: string, reason?: string): RollbackResult | undefined {
+  rollbackTo(
+    nodeId: string,
+    reason?: string,
+    context?: { granularity?: RollbackGranularity; mode?: "replay" | "resume" },
+  ): RollbackResult | undefined {
     const target = this.nodes.get(nodeId);
     if (!target) return undefined;
 
@@ -146,6 +151,8 @@ export class MemoryGraphStore implements GraphStore {
         branch: `rollback-${Date.now()}`,
         active: true,
         qualityNote: reason,
+        // 步级续跑（回退点在一轮之内）— 图上据此区分「回退重答 / 步级续跑」
+        ...(context?.granularity === "step" ? { stepLevel: true } : {}),
       },
     };
     this.appendNode(branchPoint);
