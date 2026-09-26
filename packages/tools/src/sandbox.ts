@@ -61,6 +61,42 @@ const SECRET_PATTERN =
   /(API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY|AUTH|SIGNING|SESSION[_-]?KEY)/i;
 
 /**
+ * 平台运行时契约变量 —— 必须透传给工具子进程，不参与脱敏。
+ *
+ * Multica 的 agent 工作流要求 agent 用 `bash` / `pwsh` 工具调用 `multica` CLI 读写
+ * issue。任务上下文里 CLI 只认守护进程注入的 task-scoped `mat_` 凭据，缺了它就
+ * 直接拒绝工作（`agent execution context requires MULTICA_TOKEN to be a task-scoped
+ * mat_ token`），于是 agent 只能靠记忆或读文件回答 —— AGE-29 现场就是这样丢掉
+ * 对话闭环的。
+ *
+ * 这些名字不是「可脱敏的第三方密钥」，而是平台交给本次运行的运行凭据与契约句柄：
+ * - `MULTICA_TOKEN` / `MULTICA_TASK_ID` / `MULTICA_AGENT_ID` / `MULTICA_WORKSPACE_ID`
+ *   —— CLI 的作用域校验与鉴权；
+ * - `MULTICA_SERVER_URL` / `MULTICA_DAEMON_PORT` —— CLI 与守护进程的寻址；
+ * - `MULTICA_DSH_SESSION_ROOT` / `MULTICA_DSH_PLUGIN_PATH` —— 守护进程→运行时的
+ *   会话仓契约（见 `resolveSessionStoreRoot`）；
+ * - `MULTICA_TASK_CONFIG_ROOT` / `MULTICA_TASK_WORKSPACES_ROOT` / `MULTICA_AUTOPILOT_RUN_ID`
+ *   —— 运行时定位自身任务上下文。
+ *
+ * 注意 `MULTICA_TOKEN` 同时命中 SECRET_PATTERN，所以本名单必须在 SECRET_PATTERN
+ * 之前判定（见 `scrubEnv`）。
+ */
+const RUNTIME_CONTRACT_ENV: ReadonlySet<string> = new Set([
+  "MULTICA_TOKEN",
+  "MULTICA_TASK_ID",
+  "MULTICA_AGENT_ID",
+  "MULTICA_AGENT_NAME",
+  "MULTICA_WORKSPACE_ID",
+  "MULTICA_SERVER_URL",
+  "MULTICA_DAEMON_PORT",
+  "MULTICA_DSH_SESSION_ROOT",
+  "MULTICA_DSH_PLUGIN_PATH",
+  "MULTICA_TASK_CONFIG_ROOT",
+  "MULTICA_TASK_WORKSPACES_ROOT",
+  "MULTICA_AUTOPILOT_RUN_ID",
+]);
+
+/**
  * 路径逃逸错误 — 尝试访问沙箱根之外的路径时抛出。
  */
 export class SandboxEscapeError extends Error {
@@ -265,7 +301,8 @@ export class Sandbox {
    * 剔除：
    * - 名称命中 SECRET_PATTERN（API Key / Token / Secret / Password / 凭据…）；
    * - `FENG_*`（agent 自身配置，不应暴露给临时代码）；
-   * - `MULTICA_*`（运行时凭据/工作区信息）；
+   * - `MULTICA_*`（运行时凭据/工作区信息），但 `RUNTIME_CONTRACT_ENV` 列出的
+   *   平台契约变量例外 —— 它们是 agent 调用 `multica` CLI 的必要条件；
    * - 调用方 extraScrubPatterns 追加的规则。
    *
    * 保留 PATH 等基础变量，保证命令可执行。
@@ -277,6 +314,11 @@ export class Sandbox {
     const out: Record<string, string> = {};
     for (const [key, value] of Object.entries(env)) {
       if (value === undefined) continue;
+      // 平台契约变量优先保留（MULTICA_TOKEN 也命中 SECRET_PATTERN，必须先判）
+      if (RUNTIME_CONTRACT_ENV.has(key)) {
+        out[key] = value;
+        continue;
+      }
       if (key.startsWith("FENG_") || key.startsWith("MULTICA_")) continue;
       if (SECRET_PATTERN.test(key)) continue;
       if (options.extraPatterns?.some((p) => p.test(key))) continue;

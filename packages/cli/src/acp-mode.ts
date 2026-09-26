@@ -109,7 +109,7 @@ export function credentialHint(err: unknown, cwd: string = process.cwd()): strin
 export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpModeHandle> {
   const { loadConfig, createSession: createSessionFactory } = await import("@fengagent/core");
   const { Agent, SessionStore } = await import("@fengagent/agent");
-  const { resolveDataRoot } = await import("@fengagent/shared");
+  const { resolveSessionStoreRoot } = await import("@fengagent/shared");
   const { createClientFromEnv } = await import("@fengagent/llm");
   const {
     createToolRegistry,
@@ -165,8 +165,11 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
   /**
    * 取该 workdir 的会话库（按 workdir 缓存：进程级单写者，避免多连接互锁）。
    *
-   * 数据根与 serve / cordis 一致（`FENG_DATA_DIR` > 配置 `dataDir` >
-   * `<workdir>/.fengagent-cordis`），保证 ACP 路径与其它入口看到同一份会话库。
+   * 数据根优先级：守护进程指定的会话仓（`MULTICA_DSH_SESSION_ROOT`）> `FENG_DATA_DIR`
+   * > `<workdir>/.fengagent-cordis`（存在时）> `<workdir>/.fengagent`。前者是 Multica
+   * 守护进程判定 `session_home_reachable` / `resume_reachable` 的依据：会话库不落在
+   * 它指定的仓里，下一轮守护进程就会丢掉前会话，`session/resume` 永远走不到
+   * （AGE-29 的 A 项欠账）。
    *
    * @param workdir - 会话工作目录（宿主在 `session/new` / `session/resume` 里给的 cwd）
    * @returns 会话库；打不开（磁盘/权限/被占用）时返回 undefined，退回「不持久化但能对话」
@@ -175,7 +178,7 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
     const cached = stores.get(workdir);
     if (cached) return cached;
     try {
-      const dataRoot = resolveDataRoot({ workdir });
+      const dataRoot = resolveSessionStoreRoot({ workdir });
       mkdirSync(dataRoot, { recursive: true });
       const store = new SessionStore(join(dataRoot, "sessions.db"));
       stores.set(workdir, store);
