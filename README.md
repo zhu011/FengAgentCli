@@ -35,6 +35,7 @@
 | 🌐 | **WebUI** | React + Vite 三套主题，对话图可视化面板，KV Cache 统计 |
 | 🧠 | **记忆系统** | MEMORY.md + 分类记忆 + 向量检索 |
 | 📊 | **Agent 测评** | `bun run eval` 自动生成工具成功率 / KV Cache 命中率报告 |
+| 📡 | **观测与调用链** | trace 全量落盘，WebUI 四层调用链树（会话→消息→LLM 调用→工具调用）+ 图表与模型对比 |
 
 ## 🚀 快速开始
 
@@ -141,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 ### 可观测性 / 评测 / 自优化
 
 - **观测**：每次 LLM 调用自动落盘 trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`，含耗时 / token / 工具调用 / 错误，测试环境自动跳过）。WebUI 顶栏「📡 观测」页：日期切换 + 汇总指标卡 + **调用链树**（会话→消息→LLM 调用→工具调用四层展开，节点含参数 / 返回 / 耗时 / token 明细）+ 指标图表
-- **评测**：`bun run eval` 分析 trace 生成报告（`<数据根>/logs/eval-report-{date}.md`）；支持 `--date= / --all / --file= / --exclude-model=`；WebUI「🧪 评测」页：测试集管理（`<数据根>/testsets/*.json`）、报告浏览与导出
+- **评测**：`bun run eval` 分析 trace 生成报告（`<数据根>/logs/eval-report-{date}.md`，含概览 / 模型对比 / 工具分析等 8–9 块）；支持 `--date= / --all / --file= / --exclude-model=`；WebUI「🧪 评测」页：测试集管理（`<数据根>/testsets/*.json`）、报告浏览与导出，以及**一键生成报告**（「生成报告 / 生成报告 + 自优化」按钮等价再跑一次 eval，报告 date 为生成日、建议 date 为日志日）
 - **自优化**：`bun run eval --optimize` 评测后自动诊断；`bun run eval --judge` 跑「测试集→LLM-judge→diagnose→建议报告」全链路评测（自动加载 LLM 配置，测试集见 `<数据根>/testsets/*.json`），输出可执行调优建议（系统提示词 / 工具描述 / 上下文策略，含 LLM-judge 结论驱动规则）至 `<数据根>/optimizations/optimization-{date}.md`，WebUI 评测页可直接浏览
 - **每轮对话深链**：聊天页每条消息右侧「查看调用链」「查看评测」按钮，按每轮对话粒度跳转到观测/评测页（deep-link `?sessionId=X&messageId=Y`，用户消息自动解析到其后助手轮次，工具循环多步全部纳入）；会话列表每个会话行也有「查看观测 / 查看评测」入口，跳转后经消息选择器定位任意一轮；旧日志（无 messageId）自动按文本匹配回退
 - **中断会话回放**：若会话在 Loop 未收尾时被终止（服务被杀 / 死循环被终止），SQLite/事件日志可能只落了用户消息——消息选择器会**自动从 trace 日志补齐缺失的助手轮次**，保证每一轮调用链/评测仍可回放

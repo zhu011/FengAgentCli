@@ -533,7 +533,10 @@ bash scripts/demo.sh
 - **Token 统计栏**：消息区下方实时显示「📥 输入 / 📤 输出 / ⚡ 缓存命中 / 🎯 命中率 / 合计 tokens」（见第 12 节）；
 - **图面板**：对话同时右侧展示对话图（节点树 + 活跃高亮 + 回退按钮 + 作废分支灰显保留），点「回退并重答」即**回退到该轮提问处并自动重新回答**（SSE 流式重答，新回答挂分支点下）并自动刷新会话与图；
 - **权限审批（human-in-the-loop 改参）**：工具请求审批（破坏性工具 / ask 规则 / 入参校验失败）时，右上角「检查器」面板出现审批卡片——**入参 JSON 可编辑**，改好参数后点「以修改参数执行」= Allow + 修改后入参，工具以新参数执行（结果卡片标注「✏️ 已改参」）；不改参数直接 Allow = 原参数放行；Deny = 拒绝本次调用；
-- **主题切换**：右上角切换 3 套主题。
+- **主题切换**：右上角切换 3 套主题；
+- **📡 观测页**（顶栏「观测」）：按日期查看 AgentLoop 调用链树——「会话 → 消息 → LLM 调用 → 工具调用」四层可展开（展开 LLM 节点显示模型 / 耗时 / token / KV Cache / 完成原因 / 回复摘要，工具节点显示参数 JSON / 返回结果 / 耗时 / 成功失败标识），另有汇总指标卡、模型耗时与 token 对比图、工具使用分布、完成原因图与模型对比表；
+- **🧪 评测页**（顶栏「评测」）：测试集清单浏览 / JSON 查看 / 导出，`eval-report-{date}.md` 报告浏览 / 导出与**一键生成报告**（「生成报告 / 生成报告 + 自优化」，等价于再跑一次 `bun run eval`），`optimization-{date}.md` 自优化建议浏览 / 导出；
+- **聊天 ↔ 观测 / 评测 深链**：聊天页每条消息右侧「查看调用链 / 查看评测」、会话列表每行「查看观测 / 查看评测」，按每轮对话粒度直达对应页面（`?view=observability&sessionId=X&messageId=Y`，刷新 / 分享链接仍可定位同一会话与消息）；详见 [EVALUATION.md 第 2.5–2.6 节](./EVALUATION.md)。
 
 ![WebUI 对话 + 图面板](site/screenshots/16-conversation-with-graph.png)
 
@@ -581,6 +584,12 @@ bun run eval --file=.fengagent-cordis/logs/llm-trace-2026-08-16.jsonl
 
 # 排除某些模型（如测试 mock 模型）
 bun run eval --date=2026-08-16 --exclude-model=test-model,custom-model
+
+# 分析 + 自优化诊断（产出可执行调优建议，见下）
+bun run eval --optimize
+
+# 全链路评测：测试集 → analyze → LLM-judge → diagnose → 建议报告
+bun run eval --judge
 ```
 
 预期输出（以真实数据为例）：
@@ -620,6 +629,27 @@ KV Cache:
 报告同时保存为 Markdown：`<数据根>/logs/eval-report-{date}.md`，包含
 **模型准确率对比表**（每个模型的总调用、工具成功率、任务完成率、错误率、平均耗时、平均输入/输出、Cache 读取与命中率），
 可用于不同模型/不同提示词版本的横向对比，优化工具描述与系统提示词。
+
+### 13.1 报告结构与日期语义
+
+`eval-report-{date}.md` 实际包含 **8–9 块**（部分区块随数据条件出现）：概览 / 模型准确率对比 /
+KV Cache 命中率 / 工具调用分析（含工具使用分布）/ 完成原因分布 / 错误分析（含错误详情）/
+会话轨迹 / 优化建议 / 测评方法论。
+
+> **日期语义（两处 `{date}` 含义不同）**：`eval-report-{date}.md` 的 date 是**生成日**（跑 eval 的当天）；
+> `optimization-{date}.md` 的 date 是**被分析日志的日期**（`--all` 时逐日志各落一份）。
+> 因此「今天分析旧日志」时报告挂在今天、建议挂在日志日期，WebUI 评测页也按该规则分组展示。
+
+`bun run eval --optimize` 在分析之外追加**自优化诊断**（规则 + LLM-judge 结论，阈值触发），
+建议报告落盘 `<数据根>/optimizations/optimization-{date}.md`，每条建议含触发依据、样本证据
+与具体修改建议（系统提示词 / 工具描述 / 上下文与工作流三类归因）。
+
+### 13.2 WebUI 观测页 / 评测页（与命令行同源）
+
+命令行与 WebUI 看到的是同一份数据：观测页 / 评测页消费同一个 `AnalysisResult`（`@fengagent/eval` 分析器）
+与落盘报告文件。观测页可按日期展开调用链树并聚焦单条消息；评测页可浏览测试集、浏览 / 导出报告与建议，
+并支持一键「生成报告 / 生成报告 + 自优化」（见第 11 节）。完整用法、指标字典、诊断规则与
+judge 数据结构对齐见 [EVALUATION.md](./EVALUATION.md)。
 
 ---
 
@@ -846,3 +876,4 @@ WebUI 端切换会话即可重新加载。
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 本地开发、测试、构建 |
 | [EXTENDING.md](./EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent |
 | [MODULES.md](./MODULES.md) | 各包 API 接口 |
+| [EVALUATION.md](./EVALUATION.md) | 可观测性接入、`bun run eval` 全用法与报告解读、自优化流程 |

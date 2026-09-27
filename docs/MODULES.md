@@ -64,6 +64,9 @@ interface ToolDefinition<I = unknown, O = unknown> {
 | `safeJsonParse(str)` | 安全 JSON 解析（失败返回 null） |
 | `deepMerge(target, source)` | 深度合并对象 |
 | `getEnv(key, defaultValue?)` | 读取环境变量（带默认值） |
+| `resolveDataRoot(opts?)` | 解析数据根。refactor：`FENG_DATA_DIR` > 配置 `dataDir` > `<workdir>/.fengagent-cordis`；main：`FENG_DATA_DIR` > `<cwd>/.fengagent-cordis`（存在时）> `<cwd>/.fengagent` |
+| `resolveLogsDir(opts?)` | 解析日志目录 `<数据根>/logs`（写入方与读取方共用同一优先级，避免「写一处、读另一处」） |
+| `resolveSessionStoreRoot(opts?)` | 解析会话仓根（Multica 守护进程指定 `MULTICA_DSH_SESSION_ROOT` 时以它为准，否则同数据根） |
 
 | 常量 | 值 |
 |------|-----|
@@ -336,6 +339,8 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | Server | `server.ts` | Hono 应用创建、端口监听、静态文件 |
 | Session Routes | `routes/sessions.ts` | 会话 CRUD + 消息 SSE + 权限 + 图/回退端点 |
 | Model Routes | `routes/models.ts` | 模型列表 |
+| Observability Routes | `routes/observability.ts` | 观测面板数据源：trace 日志清单 / 日期分析（AnalysisResult）/ 调用链重建（四层树；per-message 过滤 + focus 解析；旧日志文本回退） |
+| Eval Routes | `routes/eval.ts` | 评测页数据：概览清单 / 生成报告（`POST`，复用 `runEval` 管线，落点与 CLI 一致）/ 报告与自优化建议 / 测试集 / 单条消息评测（`judgeMessage`） |
 | SSE | `sse.ts` | AgentEvent → SSE 帧转换 |
 | SessionManager | `session-manager.ts` | RuntimeAgent 实例池、权限桥接（含改参 allow）、getGraph / rollbackSession / rollbackRetrySession / getAgent |
 | ACP（HTTP） | `acp-server.ts` | 旧 HTTP + SSE 传输的 ACP 兼容层（`fengagent acp --acp-http`） |
@@ -358,6 +363,16 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | GET | `/api/sessions/:id/graph` | 获取对话图（节点/活跃路径） |
 | POST | `/api/sessions/:id/rollback` | 回退到目标节点（截断，旧分支保留）；`granularity:"step"` → 步级续跑 |
 | POST | `/api/sessions/:id/rollback-retry` | 回退并自动重答（SSE 流；WebUI 图面板「回退并重答」闭环）；`granularity:"step"` 步级续跑、`toolOverride:{toolName,from,to}` 图上改参重放 |
+| GET | `/api/observability/traces` | 列出 trace 日志文件（日期 / 规模 / 会话数） |
+| GET | `/api/observability/traces/:date` | 指定日期的分析结果（指标聚合；默认排除测试来源记录，`?includeTest=1` 回看） |
+| GET | `/api/observability/traces/:date/callchain` | 完整调用链（会话 → 消息 → LLM 调用 → 工具调用）；带 `sessionId` + `messageId` 时过滤到该轮并返回 `focus` 解析结果 |
+| GET | `/api/observability/traces/:date/messages` | 指定会话的按消息粒度摘要（deep-link 消息选择器；会话信息不全时按 trace 补齐） |
+| GET | `/api/eval/overview` | 评测清单三合一（报告 / 自优化建议 / 测试集） |
+| POST | `/api/eval/reports` | 生成评测报告，body `{date?, optimize?}`（复用 `runEval`，落点与 CLI 一致；生成中 409，无当日 trace 404） |
+| GET | `/api/eval/reports/:date` | 读取 `eval-report-{date}.md` |
+| GET | `/api/eval/optimizations/:date` | 读取 `optimization-{date}.md` |
+| GET | `/api/eval/testsets/:name` | 读取测试集 JSON |
+| GET | `/api/eval/messages/:date` | 单条消息评测：trace 指标摘要 + `judge`（`sessionId` + `messageId`） |
 | GET | `/api/models` | 获取可用模型列表 |
 
 ---
@@ -366,8 +381,13 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| App | `app.tsx` | 应用入口、主题切换、SessionSidebar + ChatPage |
+| App | `app.tsx` | 应用入口、主题切换、顶栏导航（对话 / 观测 / 评测三页切换）+ deep-link URL 解析（`?view=&sessionId=&messageId=`） |
 | Chat Page | `pages/chat.tsx` | 聊天页面、模型选择、Inspector 面板、Token 统计栏 |
+| Observability Page | `pages/observability.tsx` | 观测页：日期切换、汇总指标卡、调用链树、图表与模型对比表 |
+| Eval Page | `pages/eval.tsx` | 评测页：测试集清单 / 报告与建议浏览导出 / 一键生成报告（含 +自优化）/ 单条消息评测 |
+| Trace Tree | `components/trace-tree.tsx` | 四层调用链树（会话 → 消息 → LLM 调用 → 工具调用），节点展开 / 折叠 |
+| Metric Charts | `components/metric-charts.tsx` | 观测图表（模型耗时 / token 对比、工具使用分布、完成原因）+ 模型对比表 |
+| Message Picker | `components/message-picker.tsx` | 会话消息选择器（deep-link 后按消息定位调用链 / 评测结果） |
 | Message List | `components/message-list.tsx` | 消息列表（Markdown 渲染、流式指示器） |
 | Message Input | `components/message-input.tsx` | 多行输入框 |
 | Tool Call Card | `components/tool-call-card.tsx` | 工具调用卡片（展开/折叠） |
@@ -387,7 +407,9 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 ### API 客户端
 
 `api/client.ts` — `ApiClient` 类封装所有 HTTP 交互（fetch + ReadableStream 手动解析 SSE），
-新增 `getGraph` / `rollbackSession`。
+含图操作（`getGraph` / `rollbackSession`）、观测（`listTraces` / `getTraceAnalysis` / `getCallChains` /
+`getCallChainForMessage` / `getMessageTraces`）与评测（`getEvalOverview` / `getEvalReport` /
+`getOptimizationReport` / `getTestSet` / `getMessageEval` / `generateEvalReport`）方法。
 
 ### 构建
 
@@ -408,4 +430,16 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | KV Cache 命中率 | 缓存复用效率（读取/创建 token） |
 | 模型对比表 | 不同模型/提示词版本横向对比 |
 
-报告输出 `<数据根>/logs/eval-report-{date}.md`。命令：`bun run eval`（详见 CONFIGURATION.md）。
+### 源文件
+
+| 文件 | 职责 |
+|------|------|
+| `analyzer.ts` | trace 解析 + 指标聚合（`AnalysisResult`；含 `JudgeResult` 类型） |
+| `trace-source.ts` | trace 记录来源识别（生产 / 测试分流） |
+| `reporter.ts` | Markdown 评测报告生成（`eval-report-{生成日}.md`，8–9 块） |
+| `self-optimize.ts` | 规则 + judge 诊断（`diagnose` / `DEFAULT_THRESHOLDS`），建议落盘 `optimizations/optimization-{日志日期}.md` |
+| `testset.ts` | 测试集加载（`<数据根>/testsets/*.json`，AgentBench / DeepEval 风格宽容解析） |
+| `judge.ts` | LLM-judge（`judgeMessage()` 单条消息评判：完成度 / 正确性 / 结论 note） |
+| `index.ts` | 包导出 + `runEval()` 编排（CLI 与服务端 POST /api/eval/reports 共用） |
+
+命令：`bun run eval`（`--date` / `--all` / `--file` / `--exclude-model` / `--optimize` / `--judge`，详见 [CONFIGURATION.md](./CONFIGURATION.md) 与 [EVALUATION.md](./EVALUATION.md)）。
