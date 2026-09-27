@@ -9,9 +9,11 @@
  * 指标图表见「AgentLoop 观测」页（同一 AnalysisResult 数据源）。
  *
  * Deep-link（聊天页「查看评测」/ 会话列表「查看评测」）：
- * - ?sessionId=X&messageId=Y：单条消息评测视图（trace 指标摘要 + LLM-judge 扩展点）
+ * - ?sessionId=X&messageId=Y：单条消息评测视图（trace 指标摘要 + LLM-judge 结果）
  * - ?sessionId=X：该会话消息选择器，点击消息进入单条消息评测
- *   judge 字段（单条消息 LLM-judge 结果）由 KG 的 judgeMessage 在 R2/R3 接入。
+ *
+ * LLM-judge 结果由评测引擎 judgeMessage() 产出，服务端按 (date,sessionId,messageId)
+ * 落盘缓存；judgeStatus=pending 表示后台评审中，本页轮询等待（见下方轮询 effect）。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -34,6 +36,10 @@ import { MessagePicker } from "../components/message-picker.tsx";
 import { formatDuration, formatTokens } from "../lib/format.ts";
 import { findSessionTraceDate } from "../lib/trace-date.ts";
 import type { AppView, DeepLinkTarget } from "../app.tsx";
+
+/** judge 后台评审的轮询间隔 / 上限（3s × 40 ≈ 2 分钟，覆盖 10–33s 的实测评审耗时） */
+const JUDGE_POLL_INTERVAL_MS = 3000;
+const JUDGE_POLL_MAX_ATTEMPTS = 40;
 
 interface EvalPageProps {
   client: ApiClient;
@@ -73,10 +79,15 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
   // deep-link 状态：单条消息评测
   const [focusSessionId, setFocusSessionId] = useState<string | null>(null);
   const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
+  /** 该会话 trace 所在日期（judge 轮询需要） */
+  const [focusDate, setFocusDate] = useState<string | null>(null);
   const [messageEval, setMessageEval] = useState<MessageEvalResponse | null>(null);
   const [msgList, setMsgList] = useState<MessageTraceSummary[]>([]);
   const [focusLoading, setFocusLoading] = useState(false);
   const [focusError, setFocusError] = useState<string | null>(null);
+  /** 报告生成中（POST /api/eval/reports） */
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,9 +95,9 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
     try {
       const ov = await client.getEvalOverview();
       setOverview(ov);
-      // 默认选中最近一份
+      // 默认只选中最近一份评测报告；自优化建议/测试集查看器由用户点击后打开，
+      // 避免两个查看器同时展开（AGE-29 观测/评测信息缺口 ③）。
       if (ov.reports.length > 0) setReportDate((prev) => prev ?? ov.reports[ov.reports.length - 1]!.date);
-      if (ov.optimizations.length > 0) setOptDate((prev) => prev ?? ov.optimizations[ov.optimizations.length - 1]!.date);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -97,6 +108,50 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** 三块查看器互斥，避免叠加展示 */
+  const openReport = useCallback((date: string | null) => {
+    setReportDate(date);
+    if (date) {
+      setOptDate(null);
+      setTestSetName(null);
+    }
+  }, []);
+  const openOptimization = useCallback((date: string | null) => {
+    setOptDate(date);
+    if (date) {
+      setReportDate(null);
+      setTestSetName(null);
+    }
+  }, []);
+  const openTestSet = useCallback((name: string | null) => {
+    setTestSetName(name);
+    if (name) {
+      setReportDate(null);
+      setOptDate(null);
+    }
+  }, []);
+
+  /** 触发生成评测报告（复用 CLI 评测管线，落点与 `bun run eval` 一致） */
+  const generateReport = useCallback(
+    async (optimize: boolean) => {
+      setGenerating(true);
+      setGenerateError(null);
+      try {
+        const ov = await client.generateEvalReport(undefined, { optimize });
+        setOverview(ov);
+        const latest = ov.reports[ov.reports.length - 1];
+        if (latest) openReport(latest.date);
+        const latestOpt = ov.optimizations[ov.optimizations.length - 1];
+        if (optimize && latestOpt) openOptimization(latestOpt.date);
+      } catch (err) {
+        setGenerateError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setGenerating(false);
+      }
+    },
+    [client, openReport, openOptimization],
+  );
 
   // 加载报告内容
   useEffect(() => {
@@ -139,6 +194,7 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
     if (!deepLinkSession) {
       setFocusSessionId(null);
       setFocusMessageId(null);
+      setFocusDate(null);
       setMessageEval(null);
       setMsgList([]);
       setFocusError(null);
@@ -154,6 +210,7 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
         if (!date) {
           setFocusSessionId(deepLinkSession);
           setFocusMessageId(deepLinkMessage ?? null);
+          setFocusDate(null);
           setMessageEval(null);
           setMsgList([]);
           setFocusError("未找到该会话的 trace 日志（可能该会话尚无对话产生调用链）");
@@ -163,6 +220,7 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
         if (cancelled) return;
         setMsgList(msgs.messages);
         setFocusSessionId(deepLinkSession);
+        setFocusDate(date);
         if (deepLinkMessage) {
           const evalRes = await client.getMessageEval(date, deepLinkSession, deepLinkMessage);
           if (cancelled) return;
@@ -183,6 +241,36 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
       cancelled = true;
     };
   }, [client, deepLinkSession, deepLinkMessage]);
+
+  // judge 后台评审中（judgeStatus=pending）→ 轮询等待缓存命中。
+  // 服务端把 10–33s 的真实模型调用移出请求周期并以 (date,sessionId,messageId) 落盘缓存，
+  // 这里只需轮询到缓存出现即可（未命中缓存的连点不会再重复烧 token）。
+  useEffect(() => {
+    if (!focusDate || !focusSessionId || !focusMessageId) return;
+    if (messageEval?.judgeStatus !== "pending") return;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      if (cancelled) return;
+      attempts++;
+      try {
+        const res = await client.getMessageEval(focusDate, focusSessionId, focusMessageId);
+        if (cancelled) return;
+        setMessageEval(res);
+        if (res.judgeStatus !== "pending") return;
+      } catch {
+        // 网络抖动：继续重试直至上限
+      }
+      if (attempts >= JUDGE_POLL_MAX_ATTEMPTS) return;
+      timer = setTimeout(() => void tick(), JUDGE_POLL_INTERVAL_MS);
+    };
+    timer = setTimeout(() => void tick(), JUDGE_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [client, focusDate, focusSessionId, focusMessageId, messageEval?.judgeStatus]);
 
   /** 选择消息 → 单条消息评测（更新 URL deep-link） */
   const pickMessage = (m: MessageTraceSummary) => {
@@ -316,7 +404,7 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
                 {messageEval ? (
                   <>
                     {/* 消息上下文 */}
-                    {messageEval.message && (
+                    {messageEval.message ? (
                       <div className="eval-msg-card">
                         <div className="eval-msg-card__head">
                           <span className={`obs-msg-picker__role obs-msg-picker__role--${messageEval.message.role}`}>
@@ -325,6 +413,15 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
                           <span className="eval-msg-card__label">消息内容</span>
                         </div>
                         <p className="eval-msg-card__text">{messageEval.message.text}</p>
+                      </div>
+                    ) : (
+                      <div className="eval-msg-card">
+                        <div className="eval-msg-card__head">
+                          <span className="eval-msg-card__label">消息内容</span>
+                        </div>
+                        <p className="eval-deeplink__empty">
+                          该消息没有文本内容（例如纯工具调用轮次或中断的空回复）；下方指标来自其 trace 记录。
+                        </p>
                       </div>
                     )}
 
@@ -352,11 +449,14 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
                       )}
                     </div>
 
-                    {/* LLM-judge 评测结果（KG judgeMessage 扩展点） */}
+                    {/* LLM-judge 评测结果 */}
                     <div className="eval-msg-card">
                       <div className="eval-msg-card__head">
                         <Sparkles size={14} />
                         <span className="eval-msg-card__label">LLM-judge 单条消息评测</span>
+                        {messageEval.judgeStatus === "cached" && (
+                          <span className="eval-msg-card__label">（缓存结果）</span>
+                        )}
                       </div>
                       {messageEval.judge ? (
                         <div className="eval-judge">
@@ -369,16 +469,24 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
                             <p className="eval-judge__note">{messageEval.judge.note}</p>
                           )}
                         </div>
+                      ) : messageEval.judgeStatus === "pending" ? (
+                        <div className="eval-judge eval-judge--pending">
+                          <p>
+                            <Loader2 size={13} className="eval-page__loading-icon" />
+                            {" "}LLM-judge 评审中…（单条消息评审是一次真实模型调用，通常 10–30 秒）
+                          </p>
+                          <p className="eval-judge__hint">
+                            评审在后台进行，结果会按 (日期, 会话, 消息) 落盘缓存，完成后此处自动显示；
+                            重复查看同一条消息不再重复评审。
+                          </p>
+                        </div>
                       ) : (
                         <div className="eval-judge eval-judge--pending">
                           <p>
-                            单条消息的 LLM-judge 评测结果将在评测引擎接入
-                            <code> judgeMessage(sessionId, messageId) </code>
-                            后展示（数据层由 KG 提供，R2/R3 落地）。
+                            该消息暂无 LLM-judge 结果：未配置模型客户端，或该消息没有对应的 trace 步骤。
                           </p>
                           <p className="eval-judge__hint">
-                            当前已展示该轮对话的 trace 指标；接入后此处自动显示
-                            完成度 / 正确性 / 结论 / 判定依据。
+                            当前已展示该轮对话的 trace 指标；配置模型后重新打开即可评审。
                           </p>
                         </div>
                       )}
@@ -424,7 +532,7 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
                     <button
                       type="button"
                       className={`eval-page__list-main ${testSetName === ts.name ? "eval-page__list-main--active" : ""}`}
-                      onClick={() => setTestSetName(ts.name)}
+                      onClick={() => openTestSet(ts.name)}
                       title={ts.path}
                     >
                       <span className="eval-page__list-name">{ts.name}</span>
@@ -481,10 +589,39 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
               <FileText size={16} />
               <h2>评测报告</h2>
               <span className="eval-page__count">{overview.reports.length}</span>
+              <button
+                type="button"
+                className="eval-page__export"
+                onClick={() => void generateReport(false)}
+                disabled={generating}
+                title="分析今天的 trace 日志并生成评测报告（等价于 bun run eval）"
+              >
+                {generating ? (
+                  <Loader2 size={13} className="eval-page__loading-icon" />
+                ) : (
+                  <RefreshCw size={13} />
+                )}
+                生成报告
+              </button>
+              <button
+                type="button"
+                className="eval-page__export"
+                onClick={() => void generateReport(true)}
+                disabled={generating}
+                title="生成报告并运行自优化诊断（等价于 bun run eval --optimize）"
+              >
+                <Sparkles size={13} />
+                生成报告 + 自优化
+              </button>
             </div>
+            {generateError && (
+              <p className="eval-page__empty">
+                <AlertTriangle size={13} className="eval-page__bad" /> 生成失败：{generateError}
+              </p>
+            )}
             {overview.reports.length === 0 ? (
               <p className="eval-page__empty">
-                暂无评测报告。运行 <code>bun run eval</code> 生成
+                暂无评测报告。点击上方「生成报告」，或运行 <code>bun run eval</code> 生成
                 <code> eval-report-{`{date}`}.md</code>。
               </p>
             ) : (
@@ -494,7 +631,7 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
                     <button
                       type="button"
                       className={`eval-page__list-main ${reportDate === r.date ? "eval-page__list-main--active" : ""}`}
-                      onClick={() => setReportDate(r.date)}
+                      onClick={() => openReport(r.date)}
                       title={r.path}
                     >
                       <span className="eval-page__list-name">{r.date}</span>
@@ -561,7 +698,7 @@ export function EvalPage({ client, deepLink, onNavigate }: EvalPageProps) {
                     <button
                       type="button"
                       className={`eval-page__list-main ${optDate === o.date ? "eval-page__list-main--active" : ""}`}
-                      onClick={() => setOptDate(o.date)}
+                      onClick={() => openOptimization(o.date)}
                       title={o.path}
                     >
                       <span className="eval-page__list-name">{o.date}</span>

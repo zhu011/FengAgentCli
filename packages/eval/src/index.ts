@@ -37,10 +37,18 @@ export {
   mergeJudgeResults,
   buildSessionSummary,
   parseJudgeResponse,
+  LLM_FAILURE_NOTE_PREFIX,
 } from "./judge.ts";
 export type { JudgeOptions, MessageTraceInfo } from "./judge.ts";
 export { parseTestSet, listTestSets } from "./testset.ts";
 export type { TestCase, TestSet } from "./testset.ts";
+export {
+  NON_PRODUCTION_SOURCES,
+  traceSourceOf,
+  isTestTraceRecord,
+  splitTraceRecords,
+} from "./trace-source.ts";
+export type { TraceFilterResult } from "./trace-source.ts";
 
 import { findLogFile, findAllLogFiles, parseLogFile, analyzeRecords } from "./analyzer.ts";
 import { outputReport } from "./reporter.ts";
@@ -71,6 +79,13 @@ export async function runEval(options?: {
   llmClient?: LLMClient;
   /** 测试集目录（默认 <dataRoot>/testsets） */
   testsetsDir?: string;
+  /**
+   * 找不到日志文件时抛错而不是 `process.exit(1)`。
+   *
+   * CLI 入口需要 exit（脚本语义），但被服务端嵌入调用（WebUI「生成评测报告」）
+   * 时 exit 会直接杀掉 HTTP 服务进程，故嵌入方传 true 走异常路径。
+   */
+  throwOnMissingLog?: boolean;
 }): Promise<void> {
   let files: string[];
 
@@ -85,8 +100,12 @@ export async function runEval(options?: {
 
   if (files.length === 0) {
     const date = options?.date ?? new Date().toISOString().slice(0, 10);
+    const logsDir = options?.logDir ?? join(resolveDataRoot(), "logs");
+    if (options?.throwOnMissingLog) {
+      throw new Error(`未找到日志文件 llm-trace-${date}.jsonl（日志目录: ${logsDir}）`);
+    }
     console.error(`未找到日志文件。请先运行对话生成 llm-trace-${date}.jsonl`);
-    console.error(`日志目录: ${options?.logDir ?? join(resolveDataRoot(), "logs")}`);
+    console.error(`日志目录: ${logsDir}`);
     console.error(`也可使用 --file=<路径> 指定日志文件`);
     process.exit(1);
   }

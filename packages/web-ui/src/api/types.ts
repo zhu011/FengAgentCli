@@ -291,8 +291,11 @@ export interface SerializedAnalysis {
   totalOutputTokens: number;
   avgInputTokens: number;
   avgOutputTokens: number;
+  /** 含工具调用的响应轮次数（与 toolCallRate 同口径） */
   toolCallCount: number;
   toolCallRate: number;
+  /** 真实工具调用次数（Σ toolUsage），与「工具使用分布」同口径 */
+  toolInvocationCount: number;
   toolUsage: Record<string, number>;
   errorCount: number;
   errorRate: number;
@@ -315,7 +318,10 @@ export interface SerializedAnalysis {
   modelComparisons: Array<{
     model: string;
     totalCalls: number;
+    /** 含工具调用的响应轮次数 */
     toolCallCount: number;
+    /** 真实工具调用次数（Σ toolCalls），与工具使用分布同口径 */
+    toolInvocationCount: number;
     toolSuccessCount: number;
     toolFailureCount: number;
     errorCount: number;
@@ -340,6 +346,8 @@ export interface TraceAnalysisResponse {
   date: string;
   file: string;
   analysis: SerializedAnalysis;
+  /** 因来源为测试/非生产而被排除的记录数（?includeTest=1 时为 0） */
+  testRecordsExcluded?: number;
 }
 
 /** 调用链响应 */
@@ -401,7 +409,7 @@ export interface MessageEvalResponse {
     finishReasons: string[];
     errors: string[];
   } | null;
-  /** 单条消息 LLM-judge 结果（KG judgeMessage 扩展点；当前为 null，接入后自动渲染） */
+  /** 单条消息 LLM-judge 结果（judgeStatus=pending 时为 null，前端轮询等待） */
   judge: {
     messageId: string;
     sessionId: string;
@@ -410,6 +418,14 @@ export interface MessageEvalResponse {
     conclusion: string;
     note?: string;
   } | null;
+  /**
+   * judge 状态：
+   * - cached     命中落盘缓存（未调用模型）
+   * - fresh      本次请求内新评审完成
+   * - pending    后台评审中（前端应轮询，稍后返回 cached）
+   * - unavailable 未配置 LLM 客户端或该消息无 trace 步骤
+   */
+  judgeStatus: "cached" | "fresh" | "pending" | "unavailable";
 }
 
 // ──────────────────────────────────────────────

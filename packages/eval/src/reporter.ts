@@ -46,24 +46,24 @@ export function generateMarkdownReport(result: AnalysisResult): string {
     const hasCache = result.totalCacheReadTokens > 0 || result.totalCacheCreationTokens > 0;
     if (hasCache) {
       lines.push(
-        "| 模型 | 总调用 | 工具调用 | 工具成功率 | 错误率 | 任务完成率 | 平均耗时 | 平均输入 | 平均输出 | Cache 读取 | Cache 命中率 |",
+        "| 模型 | 总调用 | 工具调用次数 | 工具成功率 | 错误率 | 任务完成率 | 平均耗时 | 平均输入 | 平均输出 | Cache 读取 | Cache 命中率 |",
       );
       lines.push(
-        "|------|--------|---------|-----------|--------|-----------|---------|---------|---------|-----------|-------------|",
+        "|------|--------|-------------|-----------|--------|-----------|---------|---------|---------|-----------|-------------|",
       );
     } else {
       lines.push(
-        "| 模型 | 总调用 | 工具调用 | 工具成功率 | 错误率 | 任务完成率 | 平均耗时 | 平均输入 | 平均输出 |",
+        "| 模型 | 总调用 | 工具调用次数 | 工具成功率 | 错误率 | 任务完成率 | 平均耗时 | 平均输入 | 平均输出 |",
       );
       lines.push(
-        "|------|--------|---------|-----------|--------|-----------|---------|---------|---------|",
+        "|------|--------|-------------|-----------|--------|-----------|---------|---------|---------|",
       );
     }
     for (const m of result.modelComparisons) {
       const row = [
         m.model,
         String(m.totalCalls),
-        String(m.toolCallCount),
+        String(m.toolInvocationCount),
         `${m.toolSuccessRate}%`,
         `${m.errorRate}%`,
         `${m.taskCompletionRate}%`,
@@ -100,8 +100,14 @@ export function generateMarkdownReport(result: AnalysisResult): string {
   lines.push("");
   lines.push("| 指标 | 值 |");
   lines.push("|------|-----|");
+  lines.push(`| 工具调用次数 | ${result.toolInvocationCount} |`);
   lines.push(`| 工具调用轮次 | ${result.toolCallCount} |`);
   lines.push(`| 工具调用率 | ${result.toolCallRate}% |`);
+  lines.push("");
+  lines.push(
+    "> 工具调用次数 = 各工具逐次累加（与下方「工具使用分布」合计一致）；" +
+      "工具调用轮次 = 含工具调用的响应轮次数（工具调用率 = 轮次 / 总 LLM 调用）。",
+  );
   lines.push("");
 
   if (result.toolUsage.size > 0) {
@@ -188,12 +194,12 @@ export function generateMarkdownReport(result: AnalysisResult): string {
     suggestions.push(`- 📝 平均输出 ${result.avgOutputTokens} tokens 偏长，考虑在系统提示中要求简洁回复`);
   }
 
-  // 工具使用集中度
-  if (result.toolUsage.size > 0) {
+  // 工具使用集中度（口径：单一工具调用次数 / 真实工具调用总次数，两者同口径）
+  if (result.toolUsage.size > 0 && result.toolInvocationCount > 0) {
     const sorted = Array.from(result.toolUsage.entries()).sort((a, b) => b[1] - a[1]);
     const topTool = sorted[0];
-    if (topTool && topTool[1] > result.toolCallCount * 0.5) {
-      suggestions.push(`- 🎯 工具 "${topTool[0]}" 占 ${Math.round((topTool[1] / result.toolCallCount) * 100)}% 的调用，考虑是否其他工具描述需要优化以平衡使用`);
+    if (topTool && topTool[1] > result.toolInvocationCount * 0.5) {
+      suggestions.push(`- 🎯 工具 "${topTool[0]}" 占 ${Math.round((topTool[1] / result.toolInvocationCount) * 100)}% 的调用，考虑是否其他工具描述需要优化以平衡使用`);
     }
   }
 
@@ -245,7 +251,7 @@ export function outputReport(result: AnalysisResult, outputDir?: string): string
   console.log(`平均耗时: ${result.avgDurationMs}ms`);
   console.log(`输入 Token: ${result.totalInputTokens} (avg ${result.avgInputTokens})`);
   console.log(`输出 Token: ${result.totalOutputTokens} (avg ${result.avgOutputTokens})`);
-  console.log(`工具调用: ${result.toolCallCount} (${result.toolCallRate}%)`);
+  console.log(`工具调用: ${result.toolInvocationCount} 次 / ${result.toolCallCount} 轮 (${result.toolCallRate}%)`);
   console.log(`错误: ${result.errorCount} (${result.errorRate}%)`);
 
   if (result.modelComparisons.length > 1) {

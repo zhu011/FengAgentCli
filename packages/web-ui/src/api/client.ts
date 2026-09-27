@@ -381,9 +381,13 @@ export class ApiClient {
   }
 
   /** GET /api/observability/traces/:date — 指定日期的指标分析 */
-  async getTraceAnalysis(date: string): Promise<TraceAnalysisResponse> {
+  async getTraceAnalysis(
+    date: string,
+    options?: { includeTest?: boolean },
+  ): Promise<TraceAnalysisResponse> {
+    const qs = options?.includeTest ? "?includeTest=1" : "";
     const res = await fetch(
-      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}`,
+      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}${qs}`,
     );
     if (!res.ok) {
       throw await this.toApiError(res, "Failed to get trace analysis");
@@ -392,9 +396,13 @@ export class ApiClient {
   }
 
   /** GET /api/observability/traces/:date/callchain — 指定日期的完整调用链 */
-  async getCallChains(date: string): Promise<CallChainResponse> {
+  async getCallChains(
+    date: string,
+    options?: { includeTest?: boolean },
+  ): Promise<CallChainResponse> {
+    const qs = options?.includeTest ? "?includeTest=1" : "";
     const res = await fetch(
-      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}/callchain`,
+      `${this.baseUrl}/api/observability/traces/${encodeURIComponent(date)}/callchain${qs}`,
     );
     if (!res.ok) {
       throw await this.toApiError(res, "Failed to get call chains");
@@ -476,7 +484,7 @@ export class ApiClient {
     return await res.json();
   }
 
-  /** GET /api/eval/messages/:date?sessionId&messageId — 单条消息评测（trace 摘要 + judge 扩展点） */
+  /** GET /api/eval/messages/:date?sessionId&messageId — 单条消息评测（trace 指标 + judge 状态） */
   async getMessageEval(
     date: string,
     sessionId: string,
@@ -490,6 +498,26 @@ export class ApiClient {
       throw await this.toApiError(res, "Failed to get message eval");
     }
     return (await res.json()) as MessageEvalResponse;
+  }
+
+  /**
+   * POST /api/eval/reports — 触发生成评测报告（复用 CLI 评测管线）。
+   *
+   * 服务端为真实 LLM/CPU 工作，耗时较长；成功时返回刷新后的三合一清单。
+   */
+  async generateEvalReport(
+    date?: string,
+    options?: { optimize?: boolean },
+  ): Promise<EvalOverview & { date: string }> {
+    const res = await fetch(`${this.baseUrl}/api/eval/reports`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, optimize: options?.optimize === true }),
+    });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to generate eval report");
+    }
+    return (await res.json()) as EvalOverview & { date: string };
   }
 
   // ──────────────────────────────────────────────

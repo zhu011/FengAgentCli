@@ -38,6 +38,11 @@ export interface ServerOptions {
   sessionStore?: import("@fengagent/agent").SessionStore;
   /** LLM 客户端（可选；评测模块 per-message judgeMessage 使用，缺失时 judge 返回 null） */
   llmClient?: LLMClient;
+  /**
+   * per-message judge 缓存根目录（可选；默认 <数据根>/judge-cache）。
+   * 测试用它隔离缓存，避免用例间互相命中。
+   */
+  judgeCacheRoot?: string;
 }
 
 /**
@@ -57,7 +62,7 @@ export function createApp(options: ServerOptions): {
   app: Hono;
   sessionManager: SessionManager;
 } {
-  const { config, createAgent, staticDir, sessionStore, llmClient } = options;
+  const { config, createAgent, staticDir, sessionStore, llmClient, judgeCacheRoot } = options;
 
   // 创建会话管理器
   const sessionManager = new SessionManager({ createAgent, sessionStore });
@@ -104,6 +109,7 @@ export function createApp(options: ServerOptions): {
     },
     // per-message LLM-judge：llmClient 缺失时 judge 返回 null（评测页展示等待接入提示）
     llmClient,
+    ...(judgeCacheRoot ? { judgeCacheRoot } : {}),
   }));
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）
@@ -134,6 +140,11 @@ export function startServer(options: ServerOptions): {
     port: config.serverPort,
     hostname: config.serverHost,
     fetch: app.fetch,
+    // 请求超时（秒，Bun 默认 10s）。评测路由的 per-message LLM-judge 是真实模型调用
+    // （实测 10–33s+），默认 10s 会在评审完成前掐断连接（HTTP 000），而服务端仍跑完 →
+    // 前端永远停在「加载中」且白烧 token。评审已改为「缓存 + 默认异步」，这里的 120s
+    // 只是给 `?sync=1` 同步路径和报告生成（runEval）留足余量。
+    idleTimeout: 120,
   });
 
   console.log(
