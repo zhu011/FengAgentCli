@@ -62,6 +62,9 @@ interface ToolDefinition<I = unknown, O = unknown> {
 | `safeJsonParse(str)` | 安全 JSON 解析（失败返回 null） |
 | `deepMerge(target, source)` | 深度合并对象 |
 | `getEnv(key, defaultValue?)` | 读取环境变量（带默认值） |
+| `resolveDataRoot(opts?)` | 解析数据根。main：`FENG_DATA_DIR` > `<cwd>/.fengagent-cordis`（存在时）> `<cwd>/.fengagent`；refactor：`FENG_DATA_DIR` > 配置 `dataDir` > `<workdir>/.fengagent-cordis` |
+| `resolveLogsDir(opts?)` | 解析日志目录 `<数据根>/logs`（写入方与读取方共用同一优先级，避免「写一处、读另一处」） |
+| `resolveSessionStoreRoot(opts?)` | 解析会话仓根（Multica 守护进程指定 `MULTICA_DSH_SESSION_ROOT` 时以它为准，否则同数据根） |
 
 | 常量 | 值 |
 |------|-----|
@@ -248,6 +251,8 @@ while (needsContinuation && step < maxTurns) {
 | Server | `server.ts` | Hono 应用创建、端口监听、静态文件 |
 | Session Routes | `routes/sessions.ts` | 会话 CRUD + 消息 SSE + 权限 |
 | Model Routes | `routes/models.ts` | 模型列表 |
+| Observability Routes | `routes/observability.ts` | 观测面板数据源：trace 日志清单 / 日期分析（AnalysisResult）/ 调用链重建（四层树；per-message 过滤 + focus 解析；旧日志文本回退） |
+| Eval Routes | `routes/eval.ts` | 评测页数据：概览清单 / 报告与自优化建议 / 测试集 / 单条消息评测（trace 指标 + `judge` 扩展点） |
 | SSE | `sse.ts` | AgentEvent → SSE 帧转换 |
 | SessionManager | `session-manager.ts` | Agent 实例池、权限桥接 |
 | ACP（HTTP） | `acp-server.ts` | 旧 HTTP + SSE 传输的 ACP 兼容层（`fengagent acp --acp-http`） |
@@ -267,6 +272,15 @@ while (needsContinuation && step < maxTurns) {
 | GET | `/api/sessions/:id/permissions` | 获取待处理权限请求 |
 | GET | `/api/sessions/:id/export` | 导出会话 |
 | DELETE | `/api/sessions/:id` | 销毁会话 |
+| GET | `/api/observability/traces` | 列出 trace 日志文件（日期 / 规模 / 会话数） |
+| GET | `/api/observability/traces/:date` | 指定日期的分析结果（指标聚合） |
+| GET | `/api/observability/traces/:date/callchain` | 完整调用链（会话 → 消息 → LLM 调用 → 工具调用）；带 `sessionId` + `messageId` 时过滤到该轮并返回 `focus` 解析结果 |
+| GET | `/api/observability/traces/:date/messages` | 指定会话的按消息粒度摘要（deep-link 消息选择器；会话信息不全时按 trace 补齐） |
+| GET | `/api/eval/overview` | 评测清单三合一（报告 / 自优化建议 / 测试集） |
+| GET | `/api/eval/reports/:date` | 读取 `eval-report-{date}.md` |
+| GET | `/api/eval/optimizations/:date` | 读取 `optimization-{date}.md` |
+| GET | `/api/eval/testsets/:name` | 读取测试集 JSON |
+| GET | `/api/eval/messages/:date` | 单条消息评测：trace 指标摘要 + `judge`（`sessionId` + `messageId`；main 分支 judge 暂为 null） |
 | GET | `/api/models` | 获取可用模型列表 |
 
 ---
@@ -275,8 +289,13 @@ while (needsContinuation && step < maxTurns) {
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| App | `app.tsx` | 应用入口、主题切换、SessionSidebar + ChatPage |
+| App | `app.tsx` | 应用入口、主题切换、顶栏导航（对话 / 观测 / 评测三页切换）+ deep-link URL 解析（`?view=&sessionId=&messageId=`） |
 | Chat Page | `pages/chat.tsx` | 聊天页面、模型选择、Inspector 面板 |
+| Observability Page | `pages/observability.tsx` | 观测页：日期切换、汇总指标卡、调用链树、图表与模型对比表 |
+| Eval Page | `pages/eval.tsx` | 评测页：测试集清单 / 报告与建议浏览导出 / 单条消息评测 |
+| Trace Tree | `components/trace-tree.tsx` | 四层调用链树（会话 → 消息 → LLM 调用 → 工具调用），节点展开 / 折叠 |
+| Metric Charts | `components/metric-charts.tsx` | 观测图表（模型耗时 / token 对比、工具使用分布、完成原因）+ 模型对比表 |
+| Message Picker | `components/message-picker.tsx` | 会话消息选择器（deep-link 后按消息定位调用链 / 评测结果） |
 | Message List | `components/message-list.tsx` | 消息列表（Markdown 渲染、流式指示器） |
 | Message Input | `components/message-input.tsx` | 多行输入框 |
 | Tool Call Card | `components/tool-call-card.tsx` | 工具调用卡片（展开/折叠） |
@@ -294,10 +313,38 @@ while (needsContinuation && step < maxTurns) {
 
 ### API 客户端
 
-`api/client.ts` — `ApiClient` 类封装所有 HTTP 交互（fetch + ReadableStream 手动解析 SSE）。
+`api/client.ts` — `ApiClient` 类封装所有 HTTP 交互（fetch + ReadableStream 手动解析 SSE），
+含观测（`listTraces` / `getTraceAnalysis` / `getCallChains` / `getCallChainForMessage` / `getMessageTraces`）与
+评测（`getEvalOverview` / `getEvalReport` / `getOptimizationReport` / `getTestSet` / `getMessageEval`）方法。
 
 ### 构建
 
 - Vite 6+ 构建配置
 - Dev 模式：Vite proxy 转发 `/api` 到后端 server
 - Prod 模式：构建产物由 server 静态托管
+
+---
+
+## `@fengagent/eval` — Agent 测评模块
+
+读取 LLM Trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`）自动分析：
+
+| 指标 | 说明 |
+|------|------|
+| 工具调用成功率 / 任务完成率 / 错误率 | 模型工具选择质量 |
+| Token 用量（输入/输出） | 成本分析 |
+| KV Cache 命中率 | 缓存复用效率（读取/创建 token） |
+| 模型对比表 | 不同模型/提示词版本横向对比 |
+
+### 源文件
+
+| 文件 | 职责 |
+|------|------|
+| `analyzer.ts` | trace 解析 + 指标聚合（`AnalysisResult`；含 `JudgeResult` 类型） |
+| `reporter.ts` | Markdown 评测报告生成（`eval-report-{生成日}.md`，8–9 块） |
+| `self-optimize.ts` | 规则 + judge 诊断（`diagnose` / `DEFAULT_THRESHOLDS`），建议落盘 `optimizations/optimization-{日志日期}.md` |
+| `testset.ts` | 测试集加载（`<数据根>/testsets/*.json`，AgentBench / DeepEval 风格宽容解析） |
+| `judge.ts` | LLM-judge（`judgeMessage()` 单条消息评判：完成度 / 正确性 / 结论 note） |
+| `index.ts` | 包导出 + `runEval()` 编排（CLI 入口） |
+
+命令：`bun run eval`（`--date` / `--all` / `--file` / `--exclude-model` / `--optimize` / `--judge`，详见 [CONFIGURATION.md](./CONFIGURATION.md) 与 [EVALUATION.md](./EVALUATION.md)）。

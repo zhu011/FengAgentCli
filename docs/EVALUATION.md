@@ -2,7 +2,7 @@
 
 > 覆盖三块内容：**可观测性接入指南**（如何采集与解读 LLM trace）、**评测模块使用手册**（`bun run eval` 全用法与报告解读）、**自优化流程说明**（基于评测结果自动生成调优建议）。
 >
-> 数据根说明：本分支（`refactor/cordis-graph-architecture`）数据根为 `.fengagent-cordis/`，main 分支为 `.fengagent/`，下文以「数据根」统称。
+> 数据根说明：本分支（`main`）数据根为 `.fengagent/`，refactor/cordis 分支为 `.fengagent-cordis/`，下文以「数据根」统称。
 
 ## 一、可观测性接入指南
 
@@ -68,15 +68,19 @@ bun run eval --judge                                # 全链路评测：测试�
 
 ### 2.2 报告解读
 
-报告包含五块：
+报告实际包含 8–9 块（部分区块随数据条件出现）：
 
 | 区块 | 内容 | 定位（参考美团四层归因） |
 |------|------|------------------------|
 | 概览 | 会话数 / LLM 调用 / 总耗时 / 平均耗时 / token 用量 | 效率层 |
 | 模型准确率对比 | 每模型：工具调用次数、工具成功率、错误率、任务完成率、平均耗时、平均 token、Cache 命中率 | 结果 + 效率层 |
-| KV Cache | 读取 / 创建 token、命中率 | 效率层（成本） |
-| 工具使用分布 | 各工具调用次数 | 过程层 |
+| KV Cache 命中率 | 读取 / 创建 token、命中率（有缓存数据时出现） | 效率层（成本） |
+| 工具调用分析 | 工具调用率 + 工具使用分布（各工具调用次数） | 过程层（ToolCorrectness） |
 | 完成原因分布 | end_turn / tool_use / max_tokens / error 计数 | 过程层 |
+| 错误分析 | 错误次数 / 错误率 + 错误详情 | 结果 + 风险层 |
+| 会话轨迹 | 每会话完整请求 / 回复配对轨迹 | 过程层 |
+| 优化建议 | 规则诊断产出的可执行建议（见第三章） | 结果 + 过程 + 效率 |
+| 测评方法论 | 轨迹评估（Trajectory Evaluation）方法说明 | — |
 
 ### 2.3 指标字典（AnalysisResult）
 
@@ -120,8 +124,10 @@ bun run serve        # 生产模式（后端 + 静态前端）
 | 区块 | 操作 | 说明 |
 |------|------|------|
 | 测试集管理 | 清单浏览 / JSON 查看 / 导出 | 展示 `<数据根>/testsets/*.json`（AgentBench / DeepEval 风格），宽容解析各类结构 |
-| 评测报告 | 按日期浏览 + 导出 | `bun run eval` 生成的 `eval-report-{date}.md` Markdown 渲染 |
+| 评测报告 | 按日期浏览 + 导出（refactor 分支另有「生成报告」按钮） | `bun run eval` 生成的 `eval-report-{date}.md` Markdown 渲染；refactor 分支的「生成报告 / 生成报告 + 自优化」按钮等价于再跑一次 `bun run eval`（`POST /api/eval/reports`，复用同一管线、落点一致） |
 | 自优化建议 | 按日期浏览 + 导出 | `bun run eval --optimize` 生成的 `optimization-{date}.md` 渲染（含 LLM-judge 结论驱动建议） |
+
+> 日期语义（两处 `{date}` 含义不同）：`eval-report-{date}.md` 的 date 是**生成日**（跑 eval 的当天），`optimization-{date}.md` 的 date 是**被分析日志的日期**（`--all` 时逐日志各落一份）。因此「今天分析旧日志」时报告挂在今天、建议挂在日志日期，WebUI 也按该规则分组展示。
 
 > 数据源约定：观测页与评测页消费同一 `AnalysisResult`（`@fengagent/eval` 分析器）与落盘报告文件，命令行与 WebUI 看到的是同一份数据。
 
@@ -132,7 +138,7 @@ bun run serve        # 生产模式（后端 + 静态前端）
 | 入口 | 位置 | 效果 |
 |------|------|------|
 | **查看调用链** | 聊天页每条消息右侧 | 跳转观测页并聚焦该消息所属轮次的调用链（用户消息会解析到其后的助手轮次，工具循环多步全部纳入） |
-| **查看评测** | 聊天页每条消息右侧 | 跳转评测页展示该轮对话的 trace 指标（LLM 调用 / 工具 / 耗时 / token / 完成原因 / 错误）与 LLM-judge 单条消息评测结果（`judgeMessage` 自动评判：完成度/正确性分数条 + 判定结论 + 依据 note） |
+| **查看评测** | 聊天页每条消息右侧 | 跳转评测页展示该轮对话的 trace 指标（LLM 调用 / 工具 / 耗时 / token / 完成原因 / 错误）与 LLM-judge 单条消息评测结果（refactor 分支接入 `judgeMessage` 自动评判：完成度/正确性分数条 + 判定结论 + 依据 note；main 分支 judge 字段为 null，仅展示 trace 指标） |
 | **查看观测 / 查看评测** | 会话列表每个会话行 | 跳转后展示该会话的全部消息列表（消息选择器），点击任意消息定位其调用链 / 评测结果 |
 
 跳转通过 deep-link URL 实现：`?view=observability&sessionId=X&messageId=Y`（或 `view=eval`），刷新 / 分享链接后仍可定位到同一会话与消息。
@@ -145,11 +151,13 @@ bun run serve        # 生产模式（后端 + 静态前端）
 | `GET /api/observability/traces/:date/messages?sessionId=X` | 返回该会话的按消息粒度摘要（消息选择器数据源） |
 | `GET /api/eval/messages/:date?sessionId=X&messageId=Y` | 返回单条消息评测：trace 指标摘要 + `judge` 字段（单条消息 LLM-judge 结果；路由层从该轮次调用链提取 model + 工具名/参数构建 `MessageTraceInfo`，调用 `judgeMessage()` 后合并 `{ ...judgeResult, messageId }` 填充；未配置 LLM 客户端时为 null） |
 
+> **分支差异（judge 接入）**：refactor 分支已接通单条消息 judge（`packages/eval/src/judge.ts` 的 `judgeMessage()` 在 per-message 路由内调用）；main 分支的该路由仍返回 `judge: null`（judge 尚未接入）。两分支的其余 per-message 行为一致。
+
 **数据层约定**：`llm-trace` 记录已携带 `messageId`（Agent Loop 每个循环步写入，见 1.2 记录格式），无需重建数据层；旧记录无 `messageId` 时，per-message 查询自动回退为按消息文本匹配定位（`focus.legacyMatch=true`），无法匹配时返回空步骤提示。
 
 **中断会话回放（AGE-29 修复）**：会话在 Loop 未收尾时被终止（服务被杀 / 死循环被防护终止）时，SQLite/事件日志可能只持久化了用户消息（旧实现只在回合收尾整批保存）。两条兜底保证回放完整：
 
-1. **增量持久化**：`RuntimeAgent.prompt` 在每个 `turn-end` 即调用 `ctx.storage.saveMessages`，中断前已完成的轮次全部落盘（事件日志按 messageId 幂等，重复保存不产生重复事件）。
+1. **增量持久化**：`RuntimeAgent.prompt` 在每个 `turn-end` 即调用 `sessionStore.saveMessages` 增量保存（main 分支；refactor 分支经 `ctx.storage` 落事件日志 + 读模型，事件按 messageId 幂等），中断前已完成的轮次全部落盘。
 2. **trace 补齐**：`buildMessageSummaries`（`/traces/:date/messages` 消息选择器数据源）在会话消息不完整时，按 trace 顺序自动追加 trace 中缺失的助手轮次——即使旧数据根里的会话已损坏，选择器仍能点出每一轮调用链/评测。
 
 ## 三、自优化流程说明
@@ -215,7 +223,7 @@ bun run eval --optimize
 - **结论枚举驱动归因**：`tool_misused` → 工具描述问题、`unsafe` → 安全约束、`inefficient` → 步骤效率、其余未完成 → 系统提示词规划问题；
 - 评测引擎产出 `JudgeResult[]` 后调用 `diagnose(result)`（result.judgeResults 合并即可），自优化侧无需改动接口。
 
-### 3.3 阈值配置
+### 3.4 阈值配置
 
 阈值可编程覆盖（CLI 暂用默认值）：
 
@@ -231,7 +239,7 @@ const suggestions = diagnose(result, {
 
 统计基数小于 `minSamples`（默认 10）时不触发规则，避免小样本误报。
 
-### 3.4 建议落地与回归
+### 3.5 建议落地与回归
 
 1. 审阅 `<数据根>/optimizations/` 下建议报告，按严重度（高 → 低）逐条处理；
 2. 系统提示词修改：`packages/context/src/system-context.ts` 相关组装逻辑；
@@ -239,8 +247,8 @@ const suggestions = diagnose(result, {
 4. Skill 修改：`.fengagent/skills/*.md`；
 5. 回归：重新对话产生新日志 → `bun run eval --optimize` 对比指标变化。
 
-### 3.5 设计取舍与扩展
+### 3.6 设计取舍与扩展
 
 - **规则驱动优先**：确定性、零成本、可解释——适合常规场景；LLM-judge 存在长度偏差 / 自偏好 / 非确定性等失败模式（DeepEval 实践结论），默认不启用。
 - **LLM-judge 扩展点**：`diagnose()` 输入为 `AnalysisResult`（评测引擎输出），未来可接入 KG 评测引擎的 LLM-judge 深度分析结果（如错误样本语义归类、计划质量评分），作为新增诊断规则输入，接口不变。
-- **观测面板衔接**：建议报告 Markdown 落盘于数据根，WebUI 观测面板（DSH 实现）可直接读取展示。
+- **WebUI 衔接**：建议报告 Markdown 落盘于数据根 `optimizations/`，WebUI **评测页**「自优化建议」区块可直接浏览 / 导出（观测页展示的是调用链与图表，不含建议报告）。

@@ -366,6 +366,12 @@ trigger: review|审查|code review
 | `bun run eval --all` | 分析全部日志 |
 | `bun run eval --file=<路径>` | 分析指定文件 |
 | `bun run eval --exclude-model=test-model,custom-model` | 排除某些模型（如测试 mock） |
+| `bun run eval --optimize` | 分析 + 自优化诊断（建议落盘 `<数据根>/optimizations/optimization-{日志日期}.md`） |
+| `bun run eval --judge` | 全链路评测：测试集 → analyze → LLM-judge → diagnose → 建议报告 |
+
+> 两处 `{date}` 含义不同：`eval-report-{date}.md` 的 date 是**生成日**（跑 eval 的当天），
+> `optimization-{date}.md` 的 date 是**被分析日志的日期**（`--all` 时逐日志各落一份）。
+> 观测 / 调用链章节与调试入口见 [EVALUATION.md](./EVALUATION.md)（WebUI 观测页 / 评测页与命令行同源）。
 
 ## 事件溯源 CLI（`scripts/events-migrate.ts`）
 

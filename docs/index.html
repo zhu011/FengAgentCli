@@ -455,7 +455,8 @@
     <div class="nav-sub-item" data-target="feat-compact">上下文压缩</div>
     <div class="nav-sub-item" data-target="feat-memory">记忆系统</div>
     <div class="nav-sub-item" data-target="feat-logging">日志系统</div>
-    <div class="nav-sub-item" data-target="feat-eval">Agent 测评</div>
+    <div class="nav-sub-item" data-target="feat-observability">观测与调用链</div>
+    <div class="nav-sub-item" data-target="feat-eval">Agent 测评与自优化</div>
 
     <div class="nav-item" data-target="commands"><span class="nav-icon">⌨️</span> 命令参考</div>
     <div class="nav-sub-item" data-target="commands">CLI 命令</div>
@@ -484,6 +485,7 @@
     <div class="callout" style="margin: 18px 0 0;">
       🧭 <strong>本站在线文档对应 <code>main</code> 分支（稳定版）</strong>，数据目录 <code>.fengagent/</code>。<br>
       新分支 <code>refactor/cordis-graph-architecture</code>（数据目录 <code>.fengagent-cordis/</code>，含对话图 <code>/graph</code>、回退 <code>/rollback</code>、事件溯源）的文档在 <a href="https://github.com/zhu011/FengAgentCli/blob/refactor/cordis-graph-architecture/docs/GUIDE-CORDIS.md" target="_blank">GUIDE-CORDIS.md</a>，两分支功能/命令/数据目录互不通用，请勿混用。
+      <br>📚 评测 / 观测（调用链）完整说明见 <a href="https://github.com/zhu011/FengAgentCli/blob/main/docs/EVALUATION.md" target="_blank">docs/EVALUATION.md</a>，项目总览 / 更新日志见 <a href="https://github.com/zhu011/FengAgentCli/blob/main/README.md" target="_blank">README.md</a>。
     </div>
     <div class="hero-links">
       <a href="https://github.com/zhu011/FengAgentCli" target="_blank" class="btn btn-primary">📦 GitHub 仓库</a>
@@ -530,9 +532,14 @@
       <div class="fc-desc">运行日志 + 会话 JSONL + LLM Trace 三路落盘</div>
     </div>
     <div class="feature-card">
+      <div class="fc-icon">📡</div>
+      <div class="fc-title">观测与调用链</div>
+      <div class="fc-desc">调用链树可视化（会话→消息→LLM 调用→工具调用）+ 图表与模型对比</div>
+    </div>
+    <div class="feature-card">
       <div class="fc-icon">📊</div>
-      <div class="fc-title">Agent 测评</div>
-      <div class="fc-desc">自动记录 LLM 轨迹并生成分析报告</div>
+      <div class="fc-title">Agent 测评与自优化</div>
+      <div class="fc-desc">自动记录 LLM 轨迹并生成分析报告；规则 + LLM-judge 诊断产出调优建议</div>
     </div>
   </div>
 
@@ -818,6 +825,9 @@ max_turns: 20
     <li><strong>多会话后台并发</strong> — 会话 A 生成中可切换 / 新建会话 B，A 在后台继续运行；切回 A 看到最新进度（刷新 / 重开页面也能看到后台会话的最新进度）</li>
     <li><strong>权限审批</strong> — 工具执行前的交互式确认</li>
     <li><strong>主题切换</strong> — 3 套暗色主题（科技紫 / 深海蓝 / 暗夜绿）</li>
+    <li><strong>📡 观测页</strong> — 顶栏「观测」：日期切换 + 汇总指标卡 + 四层调用链树（会话 → 消息 → LLM 调用 → 工具调用，点击展开）+ 图表与模型对比表</li>
+    <li><strong>🧪 评测页</strong> — 顶栏「评测」：测试集清单浏览 / 导出，评测报告（<code>eval-report-{date}.md</code>）与自优化建议（<code>optimization-{date}.md</code>）按日期浏览 / 导出</li>
+    <li><strong>聊天 ↔ 观测 / 评测 deep-link</strong> — 聊天页每条消息右侧「查看调用链 / 查看评测」、会话列表每行「查看观测 / 查看评测」，按每轮对话粒度跳转（<code>?view=observability&amp;sessionId=X&amp;messageId=Y</code>，刷新 / 分享链接仍可定位）</li>
   </ul>
 
   <h3 id="feat-compact">上下文压缩</h3>
@@ -856,18 +866,52 @@ max_turns: 20
   </div>
   <p>所有日志文件位于 <code>.fengagent/logs/</code> 目录。会话持久化使用 SQLite（<code>.fengagent/sessions.db</code>）作为主存储 + JSONL 作为可见副本。</p>
 
-  <h3 id="feat-eval">Agent 测评</h3>
+  <h3 id="feat-observability">观测与调用链</h3>
+  <p>每次 LLM 调用都会以 JSONL 落盘为一条观测记录（<code>.fengagent/logs/llm-trace-{date}.jsonl</code>，含耗时 / token /
+    工具调用 / 错误；测试环境自动跳过，可用 <code>FENG_TRACE_DISABLED=true</code> 关闭）。WebUI 顶栏「📡 观测」页与
+    <code>bun run eval</code> 消费同一份数据，命令行与页面互相对得上：</p>
+  <ul>
+    <li><strong>日期切换</strong> — 选择要分析的 trace 日期（对应当天日志文件）</li>
+    <li><strong>汇总指标卡</strong> — LLM 调用数 / 平均耗时 / Token 用量 / 工具调用 / 错误率 / 缓存命中</li>
+    <li><strong>调用链树（四层）</strong> — 「会话 → 消息 → LLM 调用 → 工具调用」，点击展开 / 折叠；LLM 节点显示模型、耗时、输入/输出 token、KV cache、完成原因、回复摘要；工具节点显示参数 JSON、返回结果、耗时、成功 / 失败标识</li>
+    <li><strong>图表与模型对比表</strong> — 模型平均耗时 / Token 对比、工具使用分布、完成原因分布</li>
+    <li><strong>单条消息聚焦</strong> — 从聊天页「查看调用链」跳入时自动聚焦该消息所属轮次（用户消息会解析到其后助手轮次，工具循环多步全部纳入）</li>
+  </ul>
+  <p>相关 API：<code>/api/observability/traces</code>（日期列表）、<code>/traces/:date</code>（当日分析结果）、
+    <code>/traces/:date/callchain</code>（调用链，带 <code>sessionId/messageId</code> 聚焦单轮）、
+    <code>/traces/:date/messages</code>（消息选择器摘要）。旧记录（无 messageId）自动按消息文本匹配回退（legacyMatch）；
+    会话中断时消息选择器会从 trace 自动补齐缺失的助手轮次，保证每一轮仍可回放。</p>
+
+  <h3 id="feat-eval">Agent 测评与自优化</h3>
   <p>内置 Agent 测评模块，自动记录 LLM 请求/回复轨迹并生成分析报告：</p>
   <ul>
     <li>LLM 调用次数、总耗时、平均耗时</li>
     <li>Token 用量分布（输入/输出）</li>
-    <li>工具调用率、工具使用分布</li>
+    <li>KV Cache 读取/创建 Token 与命中率</li>
+    <li>工具调用率、工具使用分布、工具成功率</li>
     <li>完成原因分布（end_turn / tool_use）</li>
     <li>错误率、错误详情</li>
+    <li>模型准确率对比表（工具成功率 / 任务完成率 / Cache 命中率等，跨模型横向对比）</li>
+    <li>测试集（<code>.fengagent/testsets/*.json</code>，AgentBench / DeepEval 风格）</li>
     <li>每个会话的完整轨迹</li>
     <li>优化建议（工具描述、提示词、模型选择）</li>
   </ul>
-  <p>报告输出到 <code>.fengagent/logs/eval-report-{date}.md</code>。</p>
+  <div class="code-label">bash — 运行测评</div>
+  <pre><code>bun run eval                                   # 分析今天的日志
+bun run eval --date=2026-08-16                 # 分析指定日期
+bun run eval --all                             # 分析全部日志
+bun run eval --file=.fengagent/logs/llm-trace-2026-08-16.jsonl  # 指定文件
+bun run eval --exclude-model=test-model,custom-model   # 排除 mock 模型
+bun run eval --optimize                        # 分析 + 自优化诊断（输出优化建议报告）
+bun run eval --judge                           # 全链路评测（LLM-judge，自动加载 LLM 配置）</code></pre>
+  <p>报告输出到 <code>.fengagent/logs/eval-report-{date}.md</code>，包含概览 / 模型准确率对比 /
+    KV Cache 命中率（有缓存数据时）/ 工具调用分析 / 完成原因分布 / 错误分析 / 会话轨迹 / 优化建议 / 测评方法论
+    （共 8–9 块，部分区块随数据条件出现）；<code>--optimize</code> 的优化建议另落
+    <code>.fengagent/optimizations/optimization-{date}.md</code>。
+    注意两处 <code>{date}</code> 语义不同：报告用<strong>生成日</strong>，建议用<strong>被分析日志的日期</strong>（<code>--all</code> 时逐日志各落一份）。</p>
+  <p>WebUI 「🧪 评测」页：测试集管理、评测报告与自优化建议的浏览 / 导出；聊天页每条消息的「查看评测」按轮次展示 trace 指标
+    （单条消息 LLM-judge 结果在 refactor 分支接入，main 分支暂为 null）。
+    完整说明见 <a href="https://github.com/zhu011/FengAgentCli/blob/main/docs/EVALUATION.md" target="_blank">docs/EVALUATION.md</a>。</p>
 </section>
 
 <!-- ==================== 命令参考 ==================== -->
@@ -975,6 +1019,11 @@ bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl</code></pre>
         <td>发送消息，返回 SSE 流</td>
       </tr>
       <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/sessions/:id/events</code></td>
+        <td>订阅会话事件（SSE：回放缓冲 + 实时转发 + 心跳；重连 / 多客户端附加）</td>
+      </tr>
+      <tr>
         <td><span class="badge badge-post">POST</span></td>
         <td><code>/api/sessions/:id/interrupt</code></td>
         <td>中断当前运行</td>
@@ -1001,6 +1050,51 @@ bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl</code></pre>
       </tr>
       <tr>
         <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/observability/traces</code></td>
+        <td>列出 trace 日志文件（日期 / 规模 / 会话数）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/observability/traces/:date</code></td>
+        <td>指定日期的分析结果（指标聚合）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/observability/traces/:date/callchain</code></td>
+        <td>完整调用链（会话 → 消息 → LLM 调用 → 工具调用）；带 <code>sessionId</code> + <code>messageId</code> 时过滤到该轮</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/observability/traces/:date/messages</code></td>
+        <td>指定会话的按消息粒度摘要（deep-link 消息选择器）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/eval/overview</code></td>
+        <td>评测清单三合一（报告 / 自优化建议 / 测试集）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/eval/reports/:date</code></td>
+        <td>指定日期的评测报告（Markdown 内容）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/eval/optimizations/:date</code></td>
+        <td>指定日期的自优化建议（Markdown 内容）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/eval/testsets/:name</code></td>
+        <td>测试集 JSON 内容</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
+        <td><code>/api/eval/messages/:date</code></td>
+        <td>单条消息评测：trace 指标摘要 + <code>judge</code>（<code>sessionId</code> + <code>messageId</code>）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-get">GET</span></td>
         <td><code>/api/models</code></td>
         <td>获取可用模型列表</td>
       </tr>
@@ -1009,20 +1103,31 @@ bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl</code></pre>
   </div>
 
   <h3 id="api-sse">SSE 事件类型</h3>
-  <p><code>POST /api/sessions/:id/messages</code> 返回 SSE 流，事件类型包括：</p>
+  <p><code>POST /api/sessions/:id/messages</code> 返回的 SSE 流（以及 <code>GET /api/sessions/:id/events</code> 订阅流）事件类型包括：</p>
   <div class="table-wrap">
   <table>
     <thead><tr><th>事件</th><th>说明</th></tr></thead>
     <tbody>
-      <tr><td><code>thinking</code></td><td>模型思考中</td></tr>
-      <tr><td><code>text</code></td><td>文本内容（流式分块）</td></tr>
-      <tr><td><code>tool_use</code></td><td>工具调用请求</td></tr>
-      <tr><td><code>tool_result</code></td><td>工具执行结果</td></tr>
-      <tr><td><code>permission_request</code></td><td>权限审批请求</td></tr>
-      <tr><td><code>turn_end</code></td><td>一轮对话结束</td></tr>
+      <tr><td><code>session-start</code></td><td>会话开始</td></tr>
+      <tr><td><code>message-start</code></td><td>消息开始（含 messageId / role）</td></tr>
+      <tr><td><code>text-delta</code></td><td>文本增量（流式分块）</td></tr>
+      <tr><td><code>thinking-delta</code></td><td>思考增量（模型思考中）</td></tr>
+      <tr><td><code>tool-call-start</code></td><td>工具调用开始（请求参数）</td></tr>
+      <tr><td><code>tool-call-result</code></td><td>工具执行结果（成功 / 失败）</td></tr>
+      <tr><td><code>message-end</code></td><td>助手消息结束</td></tr>
+      <tr><td><code>usage</code></td><td>token 用量（输入/输出 + KV cache 读取/创建，驱动统计栏）</td></tr>
+      <tr><td><code>turn-end</code></td><td>一轮对话结束（finishReason）</td></tr>
       <tr><td><code>error</code></td><td>错误事件</td></tr>
+      <tr><td><code>compaction-start</code></td><td>上下文压缩开始</td></tr>
+      <tr><td><code>compaction-end</code></td><td>上下文压缩结束（summary）</td></tr>
+      <tr><td><code>session-end</code></td><td>会话结束</td></tr>
     </tbody>
   </table>
+  </div>
+
+  <div class="callout">
+    事件名即事件类型（原样透传，见 <code>packages/server/src/sse.ts</code>）。权限审批<strong>不走 SSE 事件推送</strong>—— 通过
+    <code>GET /api/sessions/:id/permissions</code> 轮询 + <code>POST …/permissions/:reqId</code> 提交响应（WebUI 检查器面板自动轮询）。
   </div>
 
   <div class="code-label">示例 — 创建会话并发送消息</div>

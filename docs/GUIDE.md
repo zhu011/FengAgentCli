@@ -538,7 +538,10 @@ bash scripts/demo.sh
 - **对话**：左侧会话列表（新建/切换/删除），中间消息区（Markdown 渲染、流式输出），底部输入框；
 - **多会话后台并发（互不干扰、消息隔离）**：会话 A 生成中新建 / 切到会话 B，A 的生成**在后台继续运行**——侧边栏会话行显示运行指示点，切回 A 即可看到最新进度；会话之间消息互不串扰；「按 Esc 中断」只中断**当前会话**，其它会话后台运行不受影响（刷新 / 重开页面后仍能看到后台会话的最新进度）；生成计时的「已用时长」不因切换会话重启；
 - **Token 统计栏**：消息区下方实时显示「📥 输入 / 📤 输出 / ⚡ 缓存命中 / 🎯 命中率 / 合计 tokens」（见第 14 节）；
-- **主题切换**：右上角切换 3 套主题。
+- **主题切换**：右上角切换 3 套主题；
+- **📡 观测页**（顶栏「观测」）：按日期查看 AgentLoop 调用链树——「会话 → 消息 → LLM 调用 → 工具调用」四层可展开，另有汇总指标卡、模型耗时 / token 对比图、工具使用分布、完成原因图与模型对比表；
+- **🧪 评测页**（顶栏「评测」）：测试集清单浏览 / 导出，`eval-report-{date}.md` 报告与 `optimization-{date}.md` 自优化建议按日期浏览 / 导出；
+- **聊天 ↔ 观测 / 评测 深链**：聊天页每条消息右侧「查看调用链 / 查看评测」、会话列表每行「查看观测 / 查看评测」，按每轮对话粒度直达对应页面（`?view=observability&sessionId=X&messageId=Y`，刷新 / 分享链接仍可定位）。
 
 ---
 
@@ -579,6 +582,15 @@ bun run eval --all
 
 # 分析指定文件
 bun run eval --file=.fengagent/logs/llm-trace-2026-08-16.jsonl
+
+# 分析 + 自优化诊断（产出可执行调优建议）
+bun run eval --optimize
+
+# 全链路评测：测试集 → analyze → LLM-judge → diagnose → 建议报告
+bun run eval --judge
+
+# 排除某些模型（如测试 mock 模型）
+bun run eval --exclude-model=test-model,custom-model
 ```
 
 预期输出（以真实数据为例）：
@@ -618,6 +630,26 @@ KV Cache:
 报告同时保存为 Markdown：`.fengagent/logs/eval-report-{date}.md`，包含
 **模型准确率对比表**（每个模型的总调用、工具成功率、任务完成率、错误率、平均耗时、平均输入/输出、Cache 读取与命中率），
 可用于不同模型/不同提示词版本的横向对比，优化工具描述与系统提示词。
+
+### 15.1 报告结构与日期语义
+
+`eval-report-{date}.md` 实际包含 **8–9 块**（部分区块随数据条件出现）：概览 / 模型准确率对比 /
+KV Cache 命中率 / 工具调用分析（含工具使用分布）/ 完成原因分布 / 错误分析（含错误详情）/
+会话轨迹 / 优化建议 / 测评方法论。
+
+> **日期语义（两处 `{date}` 含义不同）**：`eval-report-{date}.md` 的 date 是**生成日**（跑 eval 的当天）；
+> `optimization-{date}.md` 的 date 是**被分析日志的日期**（`--all` 时逐日志各落一份）。
+> 因此「今天分析旧日志」时报告挂在今天、建议挂在日志日期。
+
+`bun run eval --optimize` 在分析之外追加**自优化诊断**（规则 + LLM-judge 结论，阈值触发），
+建议报告落盘 `.fengagent/optimizations/optimization-{date}.md`，每条建议含触发依据、样本证据
+与具体修改建议（系统提示词 / 工具描述 / 上下文与工作流三类归因）。
+
+### 15.2 WebUI 观测页 / 评测页（与命令行同源）
+
+命令行与 WebUI 看到的是同一份数据：观测页 / 评测页消费同一个 `AnalysisResult`（`@fengagent/eval` 分析器）
+与落盘报告文件。观测页可按日期展开调用链树并聚焦单条消息；评测页可浏览测试集、浏览 / 导出报告与建议（见第 13 节）。
+完整用法、指标字典与诊断规则见 [EVALUATION.md](./EVALUATION.md)。
 
 ---
 
@@ -720,3 +752,4 @@ CLI 里 `/model list` 看可选模型，`/model <id>` 切换；或在 `.fengagen
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 本地开发、测试、构建 |
 | [EXTENDING.md](./EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent |
 | [MODULES.md](./MODULES.md) | 各包 API 接口 |
+| [EVALUATION.md](./EVALUATION.md) | 可观测性接入、`bun run eval` 全用法与报告解读、自优化流程 |
