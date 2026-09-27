@@ -29,6 +29,15 @@ export interface JudgeOptions {
   maxRecordsPerSession?: number;
 }
 
+/**
+ * LLM 调用失败时写入 note 的前缀。
+ *
+ * 单一事实来源：judgeSession / judgeMessage 的容错分支用它与服务端缓存层共同判定
+ * 「这条结论是模型给出的判定，还是调用本身失败」。调用失败的结论不应落盘缓存
+ * （否则一次瞬时超时会把失败结论固化，后续查询再也不会重评）。
+ */
+export const LLM_FAILURE_NOTE_PREFIX = "LLM 调用失败";
+
 /** 默认系统提示词 */
 const DEFAULT_SYSTEM_PROMPT = `你是一个专业的 AI Agent 评测评判员（LLM-judge）。你将收到一个 Agent 会话的完整轨迹摘要，包括：
 - 用户的请求（问题/任务）
@@ -265,7 +274,7 @@ export async function judgeSession(
       completionScore: 0,
       correctnessScore: 0,
       conclusion: "failed",
-      note: `LLM 调用失败: ${err instanceof Error ? err.message : String(err)}`,
+      note: `${LLM_FAILURE_NOTE_PREFIX}: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
@@ -395,7 +404,7 @@ export async function judgeMessage(
       completionScore: 0,
       correctnessScore: 0,
       conclusion: "failed",
-      note: `LLM 调用失败: ${err instanceof Error ? err.message : String(err)}`,
+      note: `${LLM_FAILURE_NOTE_PREFIX}: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

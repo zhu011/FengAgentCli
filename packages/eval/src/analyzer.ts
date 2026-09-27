@@ -17,6 +17,8 @@ export interface TraceRecord {
   messageId?: string;
   direction: "request" | "response";
   model: string;
+  /** 记录来源标记（FENG_TRACE_SOURCE；缺省视为 "runtime"） */
+  source?: string;
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -41,8 +43,10 @@ export interface ModelComparison {
   model: string;
   /** 总调用次数（response 记录数） */
   totalCalls: number;
-  /** 含工具调用的 response 数 */
+  /** 含工具调用的 response 数（轮次口径） */
   toolCallCount: number;
+  /** 真实工具调用次数（Σ 该模型 response 的 toolCalls.length；与工具使用分布同口径） */
+  toolInvocationCount: number;
   /** 工具调用成功次数（hasToolCalls 且无 error） */
   toolSuccessCount: number;
   /** 工具调用失败次数（hasToolCalls 且有 error） */
@@ -131,9 +135,19 @@ export interface AnalysisResult {
   /** 平均 token */
   avgInputTokens: number;
   avgOutputTokens: number;
-  /** 工具调用统计 */
+  /**
+   * 工具调用统计。
+   *
+   * 口径区分（AGE-29 P2 修复，避免同一页面两个数字自相矛盾）：
+   * - `toolCallCount` = **含工具调用的响应轮次**（response.hasToolCalls 计数），
+   *   与 `toolCallRate`（= toolCallCount / totalLlmCalls）同口径；
+   * - `toolInvocationCount` = **真实工具调用次数**（各工具逐次累加，= Σ toolUsage.values()），
+   *   与「工具使用分布」图同口径。
+   */
   toolCallCount: number;
   toolCallRate: number;
+  /** 真实工具调用次数（Σ toolUsage），与工具使用分布一致 */
+  toolInvocationCount: number;
   toolUsage: Map<string, number>;
   /** 错误统计 */
   errorCount: number;
@@ -315,6 +329,8 @@ export function analyzeRecords(records: TraceRecord[], logFile: string): Analysi
     const total = modelResponses.length;
     const toolCallRsps = modelResponses.filter((r) => r.hasToolCalls);
     const toolCallCount = toolCallRsps.length;
+    // 真实工具调用次数（逐次累加），与全局 toolUsage / 工具使用分布同口径
+    const toolInvocationCount = toolCallRsps.reduce((sum, r) => sum + (r.toolCalls?.length ?? 0), 0);
     const toolSuccessCount = toolCallRsps.filter((r) => !r.error).length;
     const toolFailureCount = toolCallRsps.filter((r) => r.error).length;
     const errorCount = modelResponses.filter((r) => r.error).length;
@@ -351,6 +367,7 @@ export function analyzeRecords(records: TraceRecord[], logFile: string): Analysi
       model,
       totalCalls: total,
       toolCallCount,
+      toolInvocationCount,
       toolSuccessCount,
       toolFailureCount,
       errorCount,
@@ -389,6 +406,8 @@ export function analyzeRecords(records: TraceRecord[], logFile: string): Analysi
     avgOutputTokens: responses.length > 0 ? Math.round(totalOutputTokens / responses.length) : 0,
     toolCallCount: toolCalls.length,
     toolCallRate: responses.length > 0 ? Math.round((toolCalls.length / responses.length) * 100) : 0,
+    // 真实工具调用次数 = 各工具逐次累加（与「工具使用分布」图同口径）
+    toolInvocationCount: Array.from(toolUsage.values()).reduce((sum, n) => sum + n, 0),
     toolUsage,
     errorCount: errors.length,
     errorRate: responses.length > 0 ? Math.round((errors.length / responses.length) * 100) : 0,

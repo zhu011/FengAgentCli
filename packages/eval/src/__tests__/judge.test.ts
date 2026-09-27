@@ -214,6 +214,7 @@ describe("LLM-judge 评测引擎", () => {
       avgOutputTokens: 100,
       toolCallCount: 3,
       toolCallRate: 0.3,
+      toolInvocationCount: 3,
       toolUsage: new Map([["bash", 2], ["file-read", 1]]),
       errorCount: 0,
       errorRate: 0,

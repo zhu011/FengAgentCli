@@ -39,6 +39,14 @@ export interface LlmTraceRecord {
   messageId?: string;
   direction: "request" | "response";
   model: string;
+  /**
+   * 记录来源标记（AGE-29：测试数据污染生产观测视图）。
+   *
+   * 取值来自 `FENG_TRACE_SOURCE`（未设置时不写入该字段，读取侧按 "runtime" 处理）。
+   * e2e / 压测 / 冒烟脚本应设 `FENG_TRACE_SOURCE=test`，观测页据此默认排除，
+   * 避免 mock/测试会话混进「模型对比」等生产视图。
+   */
+  source?: string;
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -97,6 +105,12 @@ function isTestEnvironment(): boolean {
   return false;
 }
 
+/** 解析记录来源标记（未设置时不写字段，保持旧日志格式不变） */
+function resolveTraceSource(): string | undefined {
+  const source = process.env.FENG_TRACE_SOURCE;
+  return source && source !== "" ? source : undefined;
+}
+
 /** 写入一条 JSONL 记录（测试环境下跳过） */
 function writeRecord(record: LlmTraceRecord): void {
   if (isTestEnvironment()) return;
@@ -130,12 +144,14 @@ export function createLlmTracer() {
      * @param messageId - 本次调用对应的助手消息 ID（可选，用于 per-message 查询）
      */
     logRequest(sessionId: string, request: LLMRequest, messageId?: string): void {
+      const source = resolveTraceSource();
       const record: LlmTraceRecord = {
         timestamp: new Date().toISOString(),
         sessionId,
         ...(messageId ? { messageId } : {}),
         direction: "request",
         model: request.model,
+        ...(source ? { source } : {}),
         hasToolCalls: false,
         messages: request.messages.map((m) => ({
           role: m.role,
@@ -202,12 +218,14 @@ export function createLlmTracer() {
         }
       }
 
+      const source = resolveTraceSource();
       const record: LlmTraceRecord = {
         timestamp: new Date().toISOString(),
         sessionId,
         ...(messageId ? { messageId } : {}),
         direction: "response",
         model,
+        ...(source ? { source } : {}),
         durationMs,
         inputTokens,
         outputTokens,

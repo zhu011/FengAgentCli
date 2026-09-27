@@ -57,6 +57,13 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
   const [traces, setTraces] = useState<TraceFileMeta[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<SerializedAnalysis | null>(null);
+  /**
+   * 是否把测试 / 非生产来源的记录也纳入视图（默认排除）。
+   * 来源标记见 @fengagent/eval traceSourceOf()：显式 source 字段，旧日志按模型名兜底识别。
+   */
+  const [includeTest, setIncludeTest] = useState(false);
+  /** 当前视图被排除的测试记录数（由 /traces/:date 返回） */
+  const [testExcluded, setTestExcluded] = useState(0);
   const [callChains, setCallChains] = useState<CallChainSession[]>([]);
   const [tab, setTab] = useState<DetailTab>("callchain");
   const [loading, setLoading] = useState(false);
@@ -89,10 +96,11 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
       setError(null);
       try {
         const [a, cc] = await Promise.all([
-          client.getTraceAnalysis(date),
-          client.getCallChains(date),
+          client.getTraceAnalysis(date, { includeTest }),
+          client.getCallChains(date, { includeTest }),
         ]);
         setAnalysis(a.analysis);
+        setTestExcluded(a.testRecordsExcluded ?? 0);
         setCallChains(cc.sessions);
       } catch (err) {
         setAnalysis(null);
@@ -102,7 +110,7 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
         setLoading(false);
       }
     },
-    [client],
+    [client, includeTest],
   );
 
   useEffect(() => {
@@ -303,6 +311,14 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
           </select>
           <button
             type="button"
+            className={`obs-banner__toggle-btn ${includeTest ? "obs-banner__toggle-btn--active" : ""}`}
+            onClick={() => setIncludeTest((v) => !v)}
+            title="测试 / 非生产来源的记录（如 e2e 的 test-model）默认不计入指标与模型对比；开启后纳入查看"
+          >
+            <FlaskConical size={13} /> {includeTest ? "含测试数据" : "仅生产数据"}
+          </button>
+          <button
+            type="button"
             className="obs-page__refresh"
             onClick={refresh}
             title="刷新"
@@ -404,6 +420,12 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
 
       {selectedDate && (analysis || loading) && (
         <div className="obs-page__content">
+          {testExcluded > 0 && (
+            <p className="obs-page__empty-hint">
+              已排除 {testExcluded} 条测试 / 非生产来源的 trace 记录（默认不污染指标与模型对比）。
+              点击上方「仅生产数据」可切换为包含测试数据。
+            </p>
+          )}
           {/* 汇总指标卡：聚焦单条消息时展示该轮对话指标，否则展示会话/当日总览 */}
           {(analysis || focusedSession) && (
             <section className="obs-page__cards">
@@ -463,8 +485,8 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
                   />
                   <MetricCard
                     label="工具调用"
-                    value={`${analysis.toolCallCount} 次`}
-                    hint={`调用率 ${analysis.toolCallRate}%`}
+                    value={`${analysis.toolInvocationCount} 次`}
+                    hint={`${analysis.toolCallCount} 个轮次含工具调用（调用率 ${analysis.toolCallRate}%）`}
                     icon={<Wrench size={18} />}
                   />
                   <MetricCard
@@ -640,7 +662,7 @@ export function ObservabilityPage({ client, deepLink, onNavigate }: Observabilit
                       <DonutChart
                         data={chartData.toolUsage}
                         centerLabel="工具调用"
-                        centerValue={String(analysis?.toolCallCount ?? 0)}
+                        centerValue={String(analysis?.toolInvocationCount ?? 0)}
                       />
                     ) : (
                       <p className="obs-page__chart-empty">当日无工具调用</p>

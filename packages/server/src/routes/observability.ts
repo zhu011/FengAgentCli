@@ -18,6 +18,11 @@
  * 数据根两分支一致：refactor `.fengagent-cordis/`，main `.fengagent/`，由 @fengagent/shared 的
  * resolveLogsDir() 解析（可用 FENG_DATA_DIR 覆盖）。
  *
+ * 测试数据分流（AGE-29 P1）：e2e / 冒烟脚本用假模型跑出的记录会混进同一份 trace 日志，
+ * 污染「模型对比」等生产视图。观测路由默认排除非生产记录（来源标记见
+ * @fengagent/eval 的 traceSourceOf()：显式 `source` 字段，旧日志按模型名兜底识别），
+ * 需要回看时加 `?includeTest=1`；被排除的条数在响应里以 `testRecordsExcluded` 如实返回。
+ *
  * 调用链重建：request/response 记录按会话配对，响应中的 toolCalls 挂为该 LLM 节点的子节点；
  * 工具返回结果优先取自实时会话消息（SessionManager），Trace 日志未含结果字段时为 null，
  * 待 KG 的 Trace/Span 采集落地后可直接扩展（新增字段透传即可）。
@@ -27,7 +32,7 @@ import { Hono } from "hono";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "@fengagent/shared";
-import { analyzeRecords, parseLogFile } from "@fengagent/eval";
+import { analyzeRecords, parseLogFile, splitTraceRecords } from "@fengagent/eval";
 import type { AnalysisResult, TraceRecord } from "@fengagent/eval";
 
 const log = createLogger("server");
@@ -245,9 +250,13 @@ export function traceFileForDate(logDir: string, date: string): string | null {
 }
 
 /** 统计文件基础规模（记录数 / 会话数 / 模型） */
-function summarizeFile(file: string): Pick<TraceFileMeta, "records" | "sessions" | "models" | "size" | "modifiedAt"> {
+function summarizeFile(
+  file: string,
+  includeTest = false,
+): Pick<TraceFileMeta, "records" | "sessions" | "models" | "size" | "modifiedAt"> {
   const stat = statSync(file);
-  const records = parseLogFile(file);
+  const split = splitTraceRecords(parseLogFile(file), includeTest);
+  const records = split.records;
   const sessions = new Set(records.map((r) => r.sessionId));
   const models = Array.from(new Set(records.map((r) => r.model)));
   return {
@@ -718,15 +727,20 @@ export function createObservabilityRoutes(options: ObservabilityOptions = {}): H
   const app = new Hono();
   const logDir = options.logDir ?? resolveBranchLogsDir();
 
+  /** 是否把测试 / 非生产记录也纳入视图（?includeTest=1） */
+  const includeTest = (c: { req: { query: (k: string) => string | undefined } }): boolean =>
+    c.req.query("includeTest") === "1";
+
   // GET /traces — 列出全部 trace 日志
   app.get("/traces", (c) => {
     const files = listTraceFiles(logDir);
+    const withTest = includeTest(c);
     const metas: TraceFileMeta[] = files.map((file) => {
       const date = file.slice(file.lastIndexOf("llm-trace-") + "llm-trace-".length, -".jsonl".length);
-      const { records, sessions, models, size, modifiedAt } = summarizeFile(file);
+      const { records, sessions, models, size, modifiedAt } = summarizeFile(file, withTest);
       return { date, path: file, records, sessions, models, size, modifiedAt };
     });
-    log.info("observability", `list traces count=${metas.length}`);
+    log.info("observability", `list traces count=${metas.length} includeTest=${withTest}`);
     return c.json(metas);
   });
 
@@ -737,12 +751,13 @@ export function createObservabilityRoutes(options: ObservabilityOptions = {}): H
     if (!file) {
       return c.json({ error: { message: `Trace log for ${date} not found` } }, 404);
     }
-    const records = parseLogFile(file);
+    const split = splitTraceRecords(parseLogFile(file), includeTest(c));
+    const records = split.records;
     if (records.length === 0) {
       return c.json({ error: { message: `Trace log for ${date} is empty` } }, 404);
     }
     const result = serializeAnalysis(analyzeRecords(records, file));
-    return c.json({ date, file, analysis: result });
+    return c.json({ date, file, analysis: result, testRecordsExcluded: split.excluded });
   });
 
   // GET /traces/:date/callchain — 指定日期的完整调用链
@@ -753,7 +768,8 @@ export function createObservabilityRoutes(options: ObservabilityOptions = {}): H
     if (!file) {
       return c.json({ error: { message: `Trace log for ${date} not found` } }, 404);
     }
-    const records = parseLogFile(file);
+    const split = splitTraceRecords(parseLogFile(file), includeTest(c));
+    const records = split.records;
     const sessionId = c.req.query("sessionId") || undefined;
     const messageId = c.req.query("messageId") || undefined;
 
@@ -810,7 +826,10 @@ export function createObservabilityRoutes(options: ObservabilityOptions = {}): H
     if (!file) {
       return c.json({ error: { message: `Trace log for ${date} not found` } }, 404);
     }
-    const records = parseLogFile(file).filter((r) => r.sessionId === sessionId);
+    const records = splitTraceRecords(
+      parseLogFile(file).filter((r) => r.sessionId === sessionId),
+      includeTest(c),
+    ).records;
     const sessionMessages = options.getSessionMessages?.(sessionId);
     const messages = buildMessageSummaries(records, sessionMessages);
     log.info("observability", `messages date=${date} sessionId=${sessionId} count=${messages.length}`);

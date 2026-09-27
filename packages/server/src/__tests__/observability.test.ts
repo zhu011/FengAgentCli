@@ -10,12 +10,14 @@
  * - GET /api/eval/overview（报告/建议/测试集清单）
  * - GET /api/eval/messages/:date?sessionId&messageId（单条消息评测）
  * - GET /api/eval/messages/:date judgeMessage 接入（llmClient 提供时 judge 由 judgeMessage 填充）
+ * - GET /api/eval/messages/:date judge 缓存 / 异步 / refresh（AGE-29 P0：不再被 10s 超时掐断、不重复烧 token）
  * - GET /api/eval/reports/:date、/optimizations/:date、/testsets/:name
+ * - POST /api/eval/reports（WebUI 生成报告入口）
  * - 日期格式校验与 404 行为
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp } from "../server.ts";
@@ -27,6 +29,8 @@ import {
   type SessionMessageLike,
 } from "../routes/observability.ts";
 import type { TraceRecord } from "@fengagent/eval";
+import { createEvalRoutes } from "../routes/eval.ts";
+import type { LLMClient, LLMRequest, LLMResponse } from "@fengagent/llm";
 
 // ──────────────────────────────────────────────
 // Fixture：临时数据根（llm-trace + 评测报告 + 优化建议 + 测试集）
@@ -169,6 +173,26 @@ const liveMessages = [
     content: [{ type: "tool-result", toolUseId: "tu-1", content: "src/  packages/  docs/", isError: false }],
   },
 ];
+
+/** 创建 mock LLM 客户端（judgeMessage 接入测试用；返回固定 judge JSON） */
+function createMockLLMClient(responseContent: string): {
+  client: LLMClient;
+  generateMock: ReturnType<typeof mock>;
+} {
+  const mockResponse: LLMResponse = {
+    id: "mock-judge-resp",
+    model: "mock-judge",
+    content: [{ type: "text", text: responseContent }],
+    usage: { inputTokens: 100, outputTokens: 50 },
+    finishReason: "end_turn",
+  };
+  const generateMock = mock(async () => mockResponse);
+  const client = {
+    generate: generateMock,
+    stream: async function* () {},
+  } as unknown as LLMClient;
+  return { client, generateMock };
+}
 
 beforeAll(() => {
   dataRoot = join(tmpdir(), `fengagent-obs-test-${Date.now()}`);
@@ -544,6 +568,391 @@ describe("GET /api/eval", () => {
     expect((await app.request("/api/eval/reports/1999-01-01")).status).toBe(404);
     expect((await app.request("/api/eval/reports/not-a-date")).status).toBe(400);
     expect((await app.request("/api/eval/testsets/..%2F..%2Fsecret")).status).toBe(400);
+  });
+});
+
+// ──────────────────────────────────────────────
+// judgeMessage 接入（R2）：GET /api/eval/messages/:date
+// 路由层从 filtered.steps 提取 model + 工具名/参数构建 MessageTraceInfo，
+// 调用 judgeMessage() 后合并 { ...judgeResult, messageId } 回填 judge 字段。
+// ──────────────────────────────────────────────
+
+describe("GET /api/eval/messages/:date — judgeMessage 接入", () => {
+  const JUDGE_JSON = `{"completionScore": 95, "correctnessScore": 100, "conclusion": "completed", "note": "工具使用正确，任务完成"}`;
+
+  /**
+   * 每个用例一个独立的 judge 缓存目录。
+   *
+   * 生产默认落 `<数据根>/judge-cache`，但用例之间会共用同一数据根，
+   * 缓存互相命中会让「是否重复调用 LLM」的断言失真，故按用例隔离。
+   */
+  let cacheSeq = 0;
+  function freshCacheRoot(): string {
+    cacheSeq++;
+    return join(dataRoot, "judge-cache-test", `case-${cacheSeq}`);
+  }
+
+  /** 带 llmClient 的完整 app（与 beforeAll 同一数据根） */
+  function createJudgeApp(llmClient: LLMClient) {
+    const { app: judgeApp } = createApp({
+      config: {
+        model: "test-model",
+        smallModel: "test-small-model",
+        provider: "anthropic",
+        maxTokens: 4096,
+        temperature: 1.0,
+        contextWindow: 200_000,
+        serverHost: "127.0.0.1",
+        serverPort: 0,
+        corsOrigin: "*",
+      } as never,
+      createAgent: () => ({}) as never,
+      sessionStore: undefined,
+      llmClient,
+      judgeCacheRoot: freshCacheRoot(),
+    });
+    return judgeApp;
+  }
+
+  test("llmClient 接入后 judge 由 judgeMessage 填充（messageId 合并）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const judgeApp = createJudgeApp(client);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1&sync=1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      judge: Record<string, unknown> | null;
+      judgeStatus: string;
+    };
+    expect(body.judge).toEqual({
+      messageId: "msg-1",
+      sessionId: "sess-1",
+      completionScore: 95,
+      correctnessScore: 100,
+      conclusion: "completed",
+      note: "工具使用正确，任务完成",
+    });
+    expect(body.judgeStatus).toBe("fresh");
+
+    // LLM 请求已提取 model + 工具名/参数 + 用户/助手文本（MessageTraceInfo）
+    const req = generateMock.mock.calls[0]![0] as LLMRequest;
+    expect(req.model).toBe("model-a");
+    const summaryText = (req.messages[0]!.content[0] as { text: string }).text;
+    expect(summaryText).toContain("模型: model-a");
+    expect(summaryText).toContain("分析项目结构");
+    expect(summaryText).toContain("我将运行 bash 查看目录");
+    expect(summaryText).toContain('bash({"command":"ls -la"})');
+    expect(summaryText).toContain("完成原因: tool_use");
+  });
+
+  test("无工具调用的消息也能评判（工具名/参数为空列表）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const judgeApp = createJudgeApp(client);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-2&sync=1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { judge: { messageId: string; conclusion: string } | null };
+    expect(body.judge).toMatchObject({ messageId: "msg-2", conclusion: "completed" });
+
+    const req = generateMock.mock.calls[0]![0] as LLMRequest;
+    const summaryText = (req.messages[0]!.content[0] as { text: string }).text;
+    expect(summaryText).not.toContain("工具调用:");
+    expect(summaryText).toContain("分析完成");
+  });
+
+  test("LLM 调用失败时 judge 返回 failed 结果（judgeMessage 容错）", async () => {
+    const errorClient = {
+      generate: mock(async () => {
+        throw new Error("timeout");
+      }),
+      stream: async function* () {},
+    } as unknown as LLMClient;
+    const judgeApp = createJudgeApp(errorClient);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1&sync=1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { judge: { messageId: string; conclusion: string; note: string } | null };
+    expect(body.judge).toMatchObject({ messageId: "msg-1", sessionId: "sess-1", conclusion: "failed" });
+    expect(body.judge!.note).toContain("timeout");
+  });
+
+  test("用户消息 deep-link 也触发 judge（userText 提取到 MessageTraceInfo）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    // 直接构造 eval 路由（注入会话消息，用户消息 → 助手轮次解析）
+    const routeApp = createEvalRoutes({
+      logDir: join(dataRoot, "logs"),
+      judgeCacheRoot: freshCacheRoot(),
+      getSessionMessages: () => SESSION_MESSAGES,
+      llmClient: client,
+    });
+
+    const res = await routeApp.request(
+      `/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=user-1&sync=1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      focus: { role: string };
+      message: { role: string; text: string } | null;
+      judge: { messageId: string } | null;
+    };
+    expect(body.focus?.role).toBe("user");
+    expect(body.message).toEqual({ role: "user", text: "分析项目结构" });
+    expect(body.judge).toMatchObject({ messageId: "user-1" });
+
+    const req = generateMock.mock.calls[0]![0] as LLMRequest;
+    const summaryText = (req.messages[0]!.content[0] as { text: string }).text;
+    expect(summaryText).toContain("分析项目结构");
+    expect(summaryText).toContain('bash({"command":"ls -la"})');
+  });
+
+  test("无匹配消息时 judge 为 null（无 trace 步骤不触发 LLM 调用）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const judgeApp = createJudgeApp(client);
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=ghost`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { trace: unknown; judge: unknown; judgeStatus: string };
+    expect(body.trace).toBeNull();
+    expect(body.judge).toBeNull();
+    expect(body.judgeStatus).toBe("unavailable");
+    expect(generateMock.mock.calls).toHaveLength(0);
+  });
+});
+
+// ──────────────────────────────────────────────
+// AGE-29 P0：per-message judge 的缓存 / 异步 / 去重
+//
+// 缺陷原状：请求内同步跑 LLM-judge（10–33s+）超过 Bun.serve 默认 10s idleTimeout，
+// 连接被掐断而服务端跑完 → 前端永久「加载中」，且每次点击重复评审同一消息（白烧 token）。
+// 修复：默认异步（pending）+ 落盘缓存 + 进程内并发去重 + ?sync=1 同步路径。
+// ──────────────────────────────────────────────
+
+describe("GET /api/eval/messages/:date — judge 缓存与异步（AGE-29 P0）", () => {
+  const JUDGE_JSON = `{"completionScore": 80, "correctnessScore": 90, "conclusion": "partial", "note": "基本完成"}`;
+  let cacheSeq = 1000;
+  const freshCacheRoot = () => join(dataRoot, "judge-cache-test", `case-${++cacheSeq}`);
+
+  test("默认异步：立即返回 trace 指标 + judgeStatus=pending，不阻塞在 LLM 调用上", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const generateMock = mock(async () => {
+      await gate;
+      return {
+        content: [{ type: "text" as const, text: JUDGE_JSON }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+        finishReason: "end_turn" as const,
+      };
+    });
+    const client = { generate: generateMock, stream: async function* () {} } as unknown as LLMClient;
+    const { app: judgeApp } = createApp({
+      config: { model: "m", provider: "anthropic", serverHost: "127.0.0.1", serverPort: 0, corsOrigin: "*" } as never,
+      createAgent: () => ({}) as never,
+      llmClient: client,
+      judgeCacheRoot: freshCacheRoot(),
+    });
+
+    const res = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1`,
+    );
+    // 评审尚未放行也必须已经拿到响应（这正是被 10s 超时掐断的那一步）
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { trace: unknown; judge: unknown; judgeStatus: string };
+    expect(body.trace).not.toBeNull();
+    expect(body.judge).toBeNull();
+    expect(body.judgeStatus).toBe("pending");
+    release();
+  });
+
+  test("落盘缓存：第二次查询命中缓存且不再调用模型（judgeStatus=cached）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const cacheRoot = freshCacheRoot();
+    const { app: judgeApp } = createApp({
+      config: { model: "m", provider: "anthropic", serverHost: "127.0.0.1", serverPort: 0, corsOrigin: "*" } as never,
+      createAgent: () => ({}) as never,
+      llmClient: client,
+      judgeCacheRoot: cacheRoot,
+    });
+
+    const first = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1&sync=1`,
+    );
+    expect(((await first.json()) as { judgeStatus: string }).judgeStatus).toBe("fresh");
+    expect(generateMock.mock.calls).toHaveLength(1);
+
+    const second = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1`,
+    );
+    const body = (await second.json()) as {
+      judge: { conclusion: string; messageId: string } | null;
+      judgeStatus: string;
+    };
+    expect(body.judgeStatus).toBe("cached");
+    expect(body.judge).toMatchObject({ messageId: "msg-1", conclusion: "partial" });
+    // 关键回归断言：命中缓存后没有第二次真实模型调用（原先会重复烧 token）
+    expect(generateMock.mock.calls).toHaveLength(1);
+    expect(existsSync(join(cacheRoot, FIXTURE_DATE))).toBe(true);
+  });
+
+  test("?refresh=1 强制重评（绕过缓存）", async () => {
+    const { client, generateMock } = createMockLLMClient(JUDGE_JSON);
+    const { app: judgeApp } = createApp({
+      config: { model: "m", provider: "anthropic", serverHost: "127.0.0.1", serverPort: 0, corsOrigin: "*" } as never,
+      createAgent: () => ({}) as never,
+      llmClient: client,
+      judgeCacheRoot: freshCacheRoot(),
+    });
+
+    await judgeApp.request(`/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1&sync=1`);
+    const refreshed = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1&sync=1&refresh=1`,
+    );
+    expect(((await refreshed.json()) as { judgeStatus: string }).judgeStatus).toBe("fresh");
+    expect(generateMock.mock.calls).toHaveLength(2);
+  });
+
+  test("LLM 调用失败的结论不落盘（避免瞬时故障被缓存固化）", async () => {
+    const errorClient = {
+      generate: mock(async () => {
+        throw new Error("timeout");
+      }),
+      stream: async function* () {},
+    } as unknown as LLMClient;
+    const cacheRoot = freshCacheRoot();
+    const { app: judgeApp } = createApp({
+      config: { model: "m", provider: "anthropic", serverHost: "127.0.0.1", serverPort: 0, corsOrigin: "*" } as never,
+      createAgent: () => ({}) as never,
+      llmClient: errorClient,
+      judgeCacheRoot: cacheRoot,
+    });
+
+    await judgeApp.request(`/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1&sync=1`);
+    expect(existsSync(join(cacheRoot, FIXTURE_DATE))).toBe(false);
+
+    // 下一次查询因此仍会真正重评（拿到 cached 才是错的）
+    const again = await judgeApp.request(
+      `/api/eval/messages/${FIXTURE_DATE}?sessionId=sess-1&messageId=msg-1`,
+    );
+    expect(((await again.json()) as { judgeStatus: string }).judgeStatus).toBe("pending");
+  });
+
+  test("POST /api/eval/reports — 无当日 trace 时 404，不生成报告", async () => {
+    const { app: evalApp } = createApp({
+      config: { model: "m", provider: "anthropic", serverHost: "127.0.0.1", serverPort: 0, corsOrigin: "*" } as never,
+      createAgent: () => ({}) as never,
+    });
+    const res = await evalApp.request("/api/eval/reports", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ date: "1999-01-01" }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+// ──────────────────────────────────────────────
+// AGE-29 P1：测试数据不污染生产观测视图
+//
+// 缺陷原状：e2e / 冒烟脚本用 test-model 跑出的记录混进同一份 trace 日志，
+// 观测页「模型对比」出现 test-model，且无来源维度可过滤。
+// 修复：观测路由默认排除非生产记录并在响应里如实返回排除条数，?includeTest=1 可回看。
+// ──────────────────────────────────────────────
+
+describe("GET /api/observability/traces/:date — 测试数据分流（AGE-29 P1）", () => {
+  const MIXED_DATE = "2026-08-23";
+
+  beforeAll(() => {
+    const records: TraceRecord[] = [
+      // 生产记录
+      {
+        timestamp: "2026-08-23T10:00:00.000Z",
+        sessionId: "prod-sess",
+        direction: "response",
+        model: "deepseek-v4-pro",
+        durationMs: 1500,
+        inputTokens: 100,
+        outputTokens: 30,
+        hasToolCalls: false,
+        finishReason: "end_turn",
+      },
+      // 旧日志：无 source 字段，靠模型名识别
+      {
+        timestamp: "2026-08-23T11:00:00.000Z",
+        sessionId: "test-sess-old",
+        direction: "response",
+        model: "test-model",
+        durationMs: 0,
+        inputTokens: 1,
+        outputTokens: 1,
+        hasToolCalls: false,
+        finishReason: "end_turn",
+      },
+      // 新日志：显式来源标记
+      {
+        timestamp: "2026-08-23T12:00:00.000Z",
+        sessionId: "test-sess-new",
+        direction: "response",
+        model: "deepseek-v4-pro",
+        source: "test",
+        durationMs: 0,
+        inputTokens: 1,
+        outputTokens: 1,
+        hasToolCalls: false,
+        finishReason: "end_turn",
+      },
+    ];
+    writeFileSync(
+      join(dataRoot, "logs", `llm-trace-${MIXED_DATE}.jsonl`),
+      records.map((r) => JSON.stringify(r)).join("\n") + "\n",
+      "utf-8",
+    );
+  });
+
+  test("默认排除测试记录，并返回排除条数", async () => {
+    const res = await app.request(`/api/observability/traces/${MIXED_DATE}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      analysis: { models: string[]; sessionCount: number; toolInvocationCount: number };
+      testRecordsExcluded: number;
+    };
+    expect(body.testRecordsExcluded).toBe(2);
+    expect(body.analysis.models).toEqual(["deepseek-v4-pro"]);
+    expect(body.analysis.sessionCount).toBe(1);
+  });
+
+  test("?includeTest=1 时测试记录纳入视图", async () => {
+    const res = await app.request(`/api/observability/traces/${MIXED_DATE}?includeTest=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      analysis: { models: string[]; sessionCount: number };
+      testRecordsExcluded: number;
+    };
+    expect(body.testRecordsExcluded).toBe(0);
+    expect(body.analysis.models).toContain("test-model");
+    expect(body.analysis.sessionCount).toBe(3);
+  });
+
+  test("调用链同样按来源分流", async () => {
+    const filtered = await app.request(`/api/observability/traces/${MIXED_DATE}/callchain`);
+    const filteredBody = (await filtered.json()) as { sessions: Array<{ sessionId: string }> };
+    expect(filteredBody.sessions.map((s) => s.sessionId)).toEqual(["prod-sess"]);
+
+    const all = await app.request(`/api/observability/traces/${MIXED_DATE}/callchain?includeTest=1`);
+    const allBody = (await all.json()) as { sessions: Array<{ sessionId: string }> };
+    expect(allBody.sessions.map((s) => s.sessionId).sort()).toEqual([
+      "prod-sess",
+      "test-sess-new",
+      "test-sess-old",
+    ]);
   });
 });
 
