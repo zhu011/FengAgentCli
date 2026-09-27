@@ -31,31 +31,27 @@
 import { Hono } from "hono";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { createLogger } from "@fengagent/shared";
+import { createLogger, resolveDataRoot, resolveLogsDir } from "@fengagent/shared";
 import { analyzeRecords, parseLogFile, splitTraceRecords } from "@fengagent/eval";
 import type { AnalysisResult, TraceRecord } from "@fengagent/eval";
 
 const log = createLogger("server");
 
 /**
- * 解析当前分支数据根（与 @fengagent/shared resolveDataRoot 语义一致，
- * 但兼容两分支：main 的 shared 不导出 data-root，故本地实现）。
+ * 解析数据根（main 分支）—— 直接委托 @fengagent/shared，读侧不再自抄一份优先级。
  *
- * 优先级：`FENG_DATA_DIR` > 工作目录 `.fengagent-cordis`（refactor 分支）> `.fengagent`（main 分支）。
+ * AGE-29 第 9 条 B 方案：读侧与写侧（llm/trace、logger、session-log、reporter、
+ * self-optimize）现在同走 `resolveDataRoot`，优先级 `FENG_DATA_DIR` > `<cwd>/.fengagent`。
+ * 这里原先本地复刻了「存在 `.fengagent-cordis` 就选它」的优先序，正是「写 `.fengagent`、
+ * 读另一个根」分叉的读侧来源，故改为单一事实来源。
  */
 export function resolveBranchDataRoot(): string {
-  if (process.env.FENG_DATA_DIR && process.env.FENG_DATA_DIR !== "") {
-    return process.env.FENG_DATA_DIR;
-  }
-  const cwd = process.cwd();
-  const cordis = join(cwd, ".fengagent-cordis");
-  if (existsSync(cordis)) return cordis;
-  return join(cwd, ".fengagent");
+  return resolveDataRoot();
 }
 
 /** 日志目录 = 数据根/logs */
 export function resolveBranchLogsDir(): string {
-  return join(resolveBranchDataRoot(), "logs");
+  return resolveLogsDir();
 }
 
 // ──────────────────────────────────────────────

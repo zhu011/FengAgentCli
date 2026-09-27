@@ -4,6 +4,28 @@ FengAgentCli 的所有重要变更均记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，项目遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased] — main 数据根语义收紧：不再探测 refactor 的 `.fengagent-cordis`（AGE-29 第 9 条 B）
+
+### 修复
+
+- **main 的「写 `.fengagent`、读 `FENG_DATA_DIR`」数据根分叉（第 9 条）** — 读取侧
+  （`packages/server/src/routes/observability.ts`、`routes/eval.ts`）走
+  `resolveDataRoot`（`FENG_DATA_DIR` 优先），写入侧却硬编码 `<cwd>/.fengagent`，
+  设了 `FENG_DATA_DIR` 后观测 / 评测页看不到已落盘数据。现在写入侧
+  （`llm/src/trace.ts`、`shared/logger.ts`、`shared/session-log.ts`、
+  `eval/reporter.ts`、`eval/self-optimize.ts`、`eval/analyzer.ts`、
+  `server/src/entry.ts` 的 `sessions.db`）与读取侧统一走
+  `resolveDataRoot` / `resolveLogsDir`（`resolveDataRoot` 传入 `workdir`，
+  与 `process.cwd()` 等价，行为不变）。
+- **main 不再探测 `<cwd>/.fengagent-cordis`（语义收紧）** — 该目录是
+  refactor/cordis 分支的数据根。main 探测它会让「两分支同目录并存」的开发机上，
+  main 读到 refactor 的会话库 / trace（表现为 main 自己的会话历史「消失」、
+  两分支数据互相污染）。收紧后 main 的解析优先级为
+  `FENG_DATA_DIR` > `<cwd>/.fengagent`，与 README / GUIDE 声明的「两分支数据完全
+  隔离」一致；`routes/observability.ts` 里本地复刻的一份同样优先序改为委托
+  `@fengagent/shared`，避免再次分叉。refactor 分支不受影响（其数据根本来就是
+  `.fengagent-cordis`）。
+
 ## [Unreleased] — bash 工具方言统一（PowerShell）+ 工具失败日志不再触发宿主误分类（main 适配）
 
 ### 修复

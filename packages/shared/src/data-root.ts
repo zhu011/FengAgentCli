@@ -1,10 +1,13 @@
 /**
- * @fengagent/shared — 数据根目录解析
+ * @fengagent/shared — 数据根目录解析（main 分支）
  *
- * 优先级：`FENG_DATA_DIR` 环境变量 > 工作目录 `.fengagent-cordis/`（refactor 分支）> `.fengagent/`（main 分支）
+ * 优先级：`FENG_DATA_DIR` 环境变量 > 工作目录 `.fengagent/`。
+ *
+ * main **只认自己的数据根**，不探测 `.fengagent-cordis/`（AGE-29 第 9 条 B 方案）：
+ * 那是 refactor/cordis 分支的数据根，main 碰它会让两分支在两分支同目录并存的开发机上
+ * 互相读写对方的数据（会话历史「消失」、分支数据互相污染）。
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { expandTilde } from "./utils.ts";
 
@@ -16,9 +19,12 @@ export interface DataRootOptions {
 }
 
 /**
- * 解析当前分支数据根目录。
+ * 解析数据根目录（main 分支）。
  *
- * 优先级：`FENG_DATA_DIR` > `.fengagent-cordis/`（refactor 分支）> `.fengagent/`（main 分支）
+ * 优先级：`FENG_DATA_DIR` > `<workdir>/.fengagent`。
+ *
+ * 不探测 `<workdir>/.fengagent-cordis`（refactor 分支的数据根）——
+ * 详见文件头说明。
  */
 export function resolveDataRoot(opts: DataRootOptions = {}): string {
   const env = opts.env ?? process.env;
@@ -26,8 +32,6 @@ export function resolveDataRoot(opts: DataRootOptions = {}): string {
     return env.FENG_DATA_DIR;
   }
   const cwd = opts.workdir ?? process.cwd();
-  const cordis = join(cwd, ".fengagent-cordis");
-  if (existsSync(cordis)) return cordis;
   return join(cwd, ".fengagent");
 }
 
@@ -41,8 +45,8 @@ export function getLogDir(): string {
  *
  * 与 `getLogDir()` 的区别在于可传 `workdir`，因此写入方（llm/trace、logger、
  * session-log）与读取方（server 的 observability 路由）走同一套优先级：
- * `FENG_DATA_DIR` > `<workdir>/.fengagent-cordis`（存在时）> `<workdir>/.fengagent`。
- * 设置 `FENG_DATA_DIR` 时不再出现「写一处、读另一处」。
+ * `FENG_DATA_DIR` > `<workdir>/.fengagent`。设置 `FENG_DATA_DIR` 时不再出现
+ * 「写一处、读另一处」。
  *
  * @param opts - 与 `resolveDataRoot` 相同的选项
  * @returns 日志目录绝对路径

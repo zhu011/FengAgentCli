@@ -21,8 +21,8 @@ import {
 } from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
 import { startServer } from "./server.ts";
-import { resolve } from "node:path";
-import { createLogger } from "@fengagent/shared";
+import { join, resolve } from "node:path";
+import { createLogger, resolveDataRoot } from "@fengagent/shared";
 
 const log = createLogger("server-entry");
 
@@ -68,7 +68,9 @@ async function main() {
   const permissionChecker = createPermissionChecker(workdir);
 
   // SQLite 会话持久化 — 让 WebUI 跨重启恢复历史会话
-  const dbPath = resolve(workdir, ".fengagent", "sessions.db");
+  // AGE-29 第 9 条：会话库也是运行时数据，必须与 trace / 报告 / 建议同根解析
+  // （原先硬编码 <workdir>/.fengagent，与读取侧的 resolveDataRoot 语义分叉）。
+  const dbPath = join(resolveDataRoot({ workdir }), "sessions.db");
   const sessionStore = new SessionStore(dbPath);
   log.info("main", `sessionStore dbPath=${dbPath}`);
 

@@ -166,7 +166,8 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
    * 取该 workdir 的会话库（按 workdir 缓存：进程级单写者，避免多连接互锁）。
    *
    * 数据根优先级：守护进程指定的会话仓（`MULTICA_DSH_SESSION_ROOT`）> `FENG_DATA_DIR`
-   * > `<workdir>/.fengagent-cordis`（存在时）> `<workdir>/.fengagent`。前者是 Multica
+   * > `<workdir>/.fengagent`（main 只认自己的数据根，不探测 refactor 的
+   * `.fengagent-cordis/`）。前者是 Multica
    * 守护进程判定 `session_home_reachable` / `resume_reachable` 的依据：会话库不落在
    * 它指定的仓里，下一轮守护进程就会丢掉前会话，`session/resume` 永远走不到
    * （AGE-29 的 A 项欠账）。

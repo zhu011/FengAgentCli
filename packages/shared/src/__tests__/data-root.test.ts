@@ -6,7 +6,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { resolveDataRoot, resolveSessionStoreRoot, getLogDir } from "../index.ts";
+import { resolveDataRoot, resolveLogsDir, resolveSessionStoreRoot, getLogDir } from "../index.ts";
 
 let tempDirs: string[] = [];
 
@@ -33,10 +33,10 @@ describe("resolveDataRoot（main 语义）", () => {
     expect(resolveDataRoot({ workdir })).toBe(join(resolve(workdir), ".fengagent"));
   });
 
-  test("存在 .fengagent-cordis 时优先于 .fengagent（refactor 遗留目录兼容）", () => {
+  test("存在 .fengagent-cordis 时不改选它（main 只认自己的数据根，两分支隔离）", () => {
     const workdir = makeTempDir();
     mkdirSync(join(workdir, ".fengagent-cordis"));
-    expect(resolveDataRoot({ workdir })).toBe(join(resolve(workdir), ".fengagent-cordis"));
+    expect(resolveDataRoot({ workdir })).toBe(join(resolve(workdir), ".fengagent"));
   });
 
   test("FENG_DATA_DIR 显式覆盖优先（可经 env 注入）", () => {
@@ -47,8 +47,27 @@ describe("resolveDataRoot（main 语义）", () => {
     );
   });
 
+  test("FENG_DATA_DIR 优先于 .fengagent，且不受 .fengagent-cordis 影响", () => {
+    const workdir = makeTempDir();
+    const explicit = join(workdir, "custom-data");
+    mkdirSync(join(workdir, ".fengagent-cordis"));
+    expect(resolveDataRoot({ workdir, env: { FENG_DATA_DIR: explicit } })).toBe(
+      resolve(explicit),
+    );
+  });
+
   test("日志目录 = 数据根/logs", () => {
     expect(getLogDir()).toBe(join(resolveDataRoot(), "logs"));
+  });
+
+  test("resolveLogsDir 与写入侧同源：<workdir>/.fengagent/logs（存在 cordis 也不改选）", () => {
+    const workdir = makeTempDir();
+    mkdirSync(join(workdir, ".fengagent-cordis"));
+    expect(resolveLogsDir({ workdir })).toBe(join(resolve(workdir), ".fengagent", "logs"));
+    const explicit = join(workdir, "custom-data");
+    expect(resolveLogsDir({ workdir, env: { FENG_DATA_DIR: explicit } })).toBe(
+      join(resolve(explicit), "logs"),
+    );
   });
 });
 

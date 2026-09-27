@@ -44,7 +44,7 @@ function timestamp(): string {
   return new Date().toISOString();
 }
 
-/** 日志目录路径（数据根统一解析：FENG_DATA_DIR > <workdir>/.fengagent-cordis > <workdir>/.fengagent） */
+/** 日志目录路径（数据根统一解析：FENG_DATA_DIR > <workdir>/.fengagent） */
 function getLogDir(): string {
   const workdir = process.cwd();
   const logDir = resolveLogsDir({ workdir });
