@@ -105,7 +105,14 @@ async function main() {
   log.info("main", `staticDir=${staticDir}`);
 
   log.info("main", `server starting host=${config.serverHost}, port=${config.serverPort}`);
-  startServer({ config, createAgent, staticDir, sessionStore });
+  startServer({
+    config,
+    createAgent,
+    staticDir,
+    sessionStore,
+    // per-message LLM-judge（评测模块 judgeMessage；缺失时 judge 返回 null/unavailable）
+    llmClient: client,
+  });
 }
 
 main();
