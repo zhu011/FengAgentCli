@@ -12,7 +12,8 @@
  */
 
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { join } from "node:path";
+import { resolveDataRoot } from "@fengagent/shared";
 import type { AnalysisResult, ModelComparison } from "./analyzer.ts";
 
 /** 建议类型：对应调优目标 */
@@ -484,7 +485,7 @@ export function runSelfOptimize(
   };
 
   if (options?.writeReport) {
-    const dir = options?.outputDir ?? resolve(process.cwd(), ".fengagent/optimizations");
+    const dir = options?.outputDir ?? join(resolveDataRoot(), "optimizations");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     // 按日志日期命名，多文件分析（--all）时报告互不覆盖
     const match = result.logFile.match(/llm-trace-(\d{4}-\d{2}-\d{2})/);
@@ -499,5 +500,5 @@ export function runSelfOptimize(
 
 /** 报告输出目录（供 CLI 提示） */
 export function optimizationsDir(): string {
-  return resolve(process.cwd(), ".fengagent/optimizations");
+  return join(resolveDataRoot(), "optimizations");
 }

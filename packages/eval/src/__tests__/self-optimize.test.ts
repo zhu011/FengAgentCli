@@ -436,8 +436,17 @@ describe("runSelfOptimize 报告落盘", () => {
   });
 
   test("无建议时报告提示健康", () => {
+    // 该用例只关心「无建议」分支，不需要真写盘；但 FENG_DATA_DIR 是进程级全局，
+    // 不还原会污染同进程内后跑的 data-root.test.ts（默认数据根解析读到泄漏值）——
+    // 这正是 `resolveDataRoot（main 语义）` 两个用例变红的根因。
+    const prev = process.env.FENG_DATA_DIR;
     process.env.FENG_DATA_DIR = tmp;
-    const plan = runSelfOptimize(buildResult(), { writeReport: false });
-    expect(plan.suggestions).toHaveLength(0);
+    try {
+      const plan = runSelfOptimize(buildResult(), { writeReport: false });
+      expect(plan.suggestions).toHaveLength(0);
+    } finally {
+      if (prev === undefined) delete process.env.FENG_DATA_DIR;
+      else process.env.FENG_DATA_DIR = prev;
+    }
   });
 });

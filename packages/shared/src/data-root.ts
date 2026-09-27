@@ -37,6 +37,21 @@ export function getLogDir(): string {
 }
 
 /**
+ * 解析日志目录（绝对路径）= `<数据根>/logs`。
+ *
+ * 与 `getLogDir()` 的区别在于可传 `workdir`，因此写入方（llm/trace、logger、
+ * session-log）与读取方（server 的 observability 路由）走同一套优先级：
+ * `FENG_DATA_DIR` > `<workdir>/.fengagent-cordis`（存在时）> `<workdir>/.fengagent`。
+ * 设置 `FENG_DATA_DIR` 时不再出现「写一处、读另一处」。
+ *
+ * @param opts - 与 `resolveDataRoot` 相同的选项
+ * @returns 日志目录绝对路径
+ */
+export function resolveLogsDir(opts: DataRootOptions = {}): string {
+  return join(resolveDataRoot(opts), "logs");
+}
+
+/**
  * 解析「会话仓」根目录 —— 守护进程指定时以它为准。
  *
  * Multica 守护进程为每个 (runtime, agent, thread) 建一个会话仓

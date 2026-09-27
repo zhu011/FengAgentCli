@@ -5,7 +5,8 @@
  */
 
 import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { resolveDataRoot } from "@fengagent/shared";
 import type { AnalysisResult } from "./analyzer.ts";
 
 /**
@@ -229,7 +230,7 @@ export function generateMarkdownReport(result: AnalysisResult): string {
  * 将分析结果输出到控制台 + Markdown 文件。
  *
  * @param result - 分析结果
- * @param outputDir - 报告输出目录（默认 .fengagent/logs/）
+ * @param outputDir - 报告输出目录（默认 <dataRoot>/logs/，dataRoot 见 resolveDataRoot）
  * @returns Markdown 文件路径
  */
 export function outputReport(result: AnalysisResult, outputDir?: string): string {
@@ -278,7 +279,7 @@ export function outputReport(result: AnalysisResult, outputDir?: string): string
   }
 
   // 写入 Markdown 文件
-  const dir = outputDir ?? resolve(process.cwd(), ".fengagent/logs");
+  const dir = outputDir ?? join(resolveDataRoot(), "logs");
   const date = new Date().toISOString().slice(0, 10);
   const filename = `eval-report-${date}.md`;
   const filepath = resolve(dir, filename);
