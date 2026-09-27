@@ -31,31 +31,31 @@
 import { Hono } from "hono";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { createLogger } from "@fengagent/shared";
+import { createLogger, resolveDataRoot, resolveLogsDir } from "@fengagent/shared";
 import { analyzeRecords, parseLogFile, splitTraceRecords } from "@fengagent/eval";
 import type { AnalysisResult, TraceRecord } from "@fengagent/eval";
 
 const log = createLogger("server");
 
 /**
- * 解析当前分支数据根（与 @fengagent/shared resolveDataRoot 语义一致，
- * 但兼容两分支：main 的 shared 不导出 data-root，故本地实现）。
+ * 解析数据根 —— 直接委托 @fengagent/shared，读侧不再自抄一份优先级。
  *
- * 优先级：`FENG_DATA_DIR` > 工作目录 `.fengagent-cordis`（refactor 分支）> `.fengagent`（main 分支）。
+ * AGE-29 第 9 条（对称收口）：本函数原先本地复刻了
+ * `FENG_DATA_DIR` > `.fengagent-cordis`（存在时）> `.fengagent`，
+ * 其中 `.fengagent` 是 **main 分支** 的数据根 —— 本分支的写入方
+ * （`resolveDataRoot`）只会落 `.fengagent-cordis`，于是「cordis 目录尚未建立、
+ * 但同目录存在 main 的 `.fengagent`」时，观测/评测页会去读 main 的历史数据。
+ * 现在与写入方同走 `resolveDataRoot`：`FENG_DATA_DIR` > 配置 `dataDir` >
+ * `<workdir>/.fengagent-cordis`；读 main 的遗留数据只经
+ * `shared/main-data-import.ts` 的单向导入，不再由读侧兜底。
  */
 export function resolveBranchDataRoot(): string {
-  if (process.env.FENG_DATA_DIR && process.env.FENG_DATA_DIR !== "") {
-    return process.env.FENG_DATA_DIR;
-  }
-  const cwd = process.cwd();
-  const cordis = join(cwd, ".fengagent-cordis");
-  if (existsSync(cordis)) return cordis;
-  return join(cwd, ".fengagent");
+  return resolveDataRoot();
 }
 
 /** 日志目录 = 数据根/logs */
 export function resolveBranchLogsDir(): string {
-  return join(resolveBranchDataRoot(), "logs");
+  return resolveLogsDir();
 }
 
 // ──────────────────────────────────────────────
