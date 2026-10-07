@@ -88,7 +88,7 @@ export function credentialHint(err: unknown, cwd: string = process.cwd()): strin
   return [
     `无法解析 Provider 凭据：${message}`,
     `  工作目录: ${cwd}`,
-    "  已查找的凭据来源: ./.fengagent/config.json、./.fengagent-cordis/config.json、~/.fengagent/config.json" +
+    "  已查找的凭据来源: ./.fengagent-cordis/config.json（本分支写入层）、./.fengagent/config.json（main 遗留，只读回退）、~/.fengagent/config.json" +
       (process.env.FENG_CONFIG_FILE ? `、FENG_CONFIG_FILE=${process.env.FENG_CONFIG_FILE}` : ""),
     "  修复方式（任选其一）:",
     "    1) 在已配置好的项目目录执行 `fengagent runtime install`，" +

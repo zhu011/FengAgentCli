@@ -274,7 +274,8 @@ function handleModelCommand(
  * 处理 /model <id> — 真正切换模型并立即生效。
  *
  * 机制（复用 /provider 的 config + ReloadableLLMClient 热替换链路）：
- * 1. 持久化 config.model（openai-compatible 同时写入 openaiCompatibleModel）到 .fengagent/config.json
+ * 1. 持久化 config.model（openai-compatible 同时写入 openaiCompatibleModel）到分支级
+ *    .fengagent-cordis/config.json（writeConfigFile 默认写入层）
  * 2. reloadProvider 重建底层 LLM Client（新 defaultModel），原子替换，无需重建 Agent
  * 3. 返回 newModel，App 层同步更新当前会话的 session.model —
  *    Agent Loop 每次请求都读取 session.model 作为 request.model，因此后续对话真实走新模型
@@ -296,7 +297,8 @@ function handleModelSwitch(modelId: string, ctx: CommandContext): CommandResult 
     patch.openaiCompatibleModel = modelId;
   }
 
-  // 持久化到 ./.fengagent/config.json（deepMerge 保留其他配置键）
+  // 持久化到分支级 ./.fengagent-cordis/config.json（writeConfigFile 默认写入层；
+  // main 的 ./.fengagent/config.json 保持只读回退，不被覆盖）
   const filePath = writeConfigFile(patch);
 
   // 立即生效：重建 LLM Client 并热替换
@@ -693,7 +695,8 @@ function handleProviderSet(
     patch[map.modelKey] = model;
   }
 
-  // 持久化到 ./.fengagent/config.json（项目级，deepMerge 保留其他配置键）
+  // 持久化到分支级 ./.fengagent-cordis/config.json（writeConfigFile 默认写入层；
+  // main 的 ./.fengagent/config.json 保持只读回退，不被覆盖）
   const filePath = writeConfigFile(patch);
 
   // 立即生效：重建 LLM Client 并热替换（Agent 无需重建）
