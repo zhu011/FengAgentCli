@@ -69,6 +69,7 @@ export {
   decideOperationReplay,
   deriveOperationKey,
   digestResult,
+  fnv1aHash,
   inputFingerprint,
 } from "./operation-ledger.ts";
 

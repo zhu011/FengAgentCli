@@ -13,7 +13,9 @@
  *    - pending/unknown 且工具**幂等** → 允许重放（同一 operationId）；
  *    - pending/unknown 且工具**非幂等** → **强制人工核对**，绝不静默重放。
  *
- * 本文件零运行时依赖（哈希用注入的 {@link OperationHasher}，缺省走内置 FNV-1a）。
+ * 本文件零运行时依赖：幂等键里的入参指纹走内置 {@link fnv1aHash}（FNV-1a 32 位），
+ * 只保留短前缀作可读性修饰，**不做截断**（截断会让长前缀 + 不同尾部的两次调用
+ * 撞同一个键，进而在恢复时被静默误判为「已成功 → 跳过」）。
  */
 
 import { stableJson } from "./task-state.ts";
@@ -139,15 +141,59 @@ export function decideOperationReplay(
   };
 }
 
-/** 规范化的入参指纹（对象键排序；截断以免超长入参撑爆键） */
-export function inputFingerprint(input: unknown, maxLength = 512): string {
-  let text: string;
-  try {
-    text = stableJson(input);
-  } catch {
-    text = String(input);
+/** FNV-1a 32 位偏移基数 */
+const FNV1A_OFFSET_BASIS = 0x811c9dc5;
+/** FNV-1a 32 位素数 */
+const FNV1A_PRIME = 0x01000193;
+
+/**
+ * FNV-1a 32 位哈希（对 UTF-16 码元逐位进位，无符号输出）。
+ *
+ * 选它是因为纯位运算、无依赖、跨进程/跨平台逐位可复现 —— 幂等键必须做到
+ * 「同一入参在任何一次运行里都算出同一结果」。
+ *
+ * @param text - 待哈希文本
+ * @returns 8 位小写十六进制摘要
+ */
+export function fnv1aHash(text: string): string {
+  let hash = FNV1A_OFFSET_BASIS;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, FNV1A_PRIME);
   }
-  return text.length > maxLength ? text.slice(0, maxLength) : text;
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** 指纹里分隔「可读前缀」与「哈希」的标记（避免与序列化正文歧义） */
+const HASH_MARKER = "…#";
+
+/** 规范化入参序列化（对象键排序；循环引用时降级为 String） */
+function canonicalizeInput(input: unknown): string {
+  try {
+    return stableJson(input);
+  } catch {
+    return String(input);
+  }
+}
+
+/**
+ * 规范化的入参指纹：`<可读前缀>…#<全量哈希>`。
+ *
+ * **哈希覆盖完整入参**，前缀只截 `maxLength` 个字符用于人眼扫键（日志、
+ * 人工核对清单）。这里绝不能只保留前缀：`write_file` / `bash` 这类工具的入参
+ * 很容易超过前缀长度，两次「长前缀相同、尾部不同」的调用一旦撞键，恢复时
+ * 就会命中别人的 `succeeded` 记录而被静默跳过 —— 副作用漏做且无人察觉。
+ *
+ * @param input - 实际执行入参
+ * @param maxLength - 可读前缀保留的字符数（不影响哈希覆盖面）
+ * @returns 入参指纹
+ */
+export function inputFingerprint(input: unknown, maxLength = 64): string {
+  const text = canonicalizeInput(input);
+  const digest = fnv1aHash(text);
+  if (maxLength <= 0) return `${HASH_MARKER}${digest}`;
+  const prefix = text.length > maxLength ? text.slice(0, maxLength) : text;
+  return `${prefix}${HASH_MARKER}${digest}`;
 }
 
 /**
