@@ -909,8 +909,8 @@ bun run eval --judge                           # 全链路评测（LLM-judge，�
     （共 8–9 块，部分区块随数据条件出现）；<code>--optimize</code> 的优化建议另落
     <code>.fengagent/optimizations/optimization-{date}.md</code>。
     注意两处 <code>{date}</code> 语义不同：报告用<strong>生成日</strong>，建议用<strong>被分析日志的日期</strong>（<code>--all</code> 时逐日志各落一份）。</p>
-  <p>WebUI 「🧪 评测」页：测试集管理、评测报告与自优化建议的浏览 / 导出；聊天页每条消息的「查看评测」按轮次展示 trace 指标
-    （单条消息 LLM-judge 结果在 refactor 分支接入，main 分支暂为 null）。
+  <p>WebUI 「🧪 评测」页：测试集管理、评测报告与自优化建议的浏览 / 导出，并可一键「生成报告（+ 自优化）」
+    （等价于跑 <code>bun run eval</code>）；聊天页每条消息的「查看评测」按轮次展示 trace 指标与 LLM-judge 单条消息评测结果。
     完整说明见 <a href="https://github.com/zhu011/FengAgentCli/blob/main/docs/EVALUATION.md" target="_blank">docs/EVALUATION.md</a>。</p>
 </section>
 
@@ -1072,6 +1072,11 @@ bun run eval --file=.fengagent/logs/llm-trace-2026-08-13.jsonl</code></pre>
         <td><span class="badge badge-get">GET</span></td>
         <td><code>/api/eval/overview</code></td>
         <td>评测清单三合一（报告 / 自优化建议 / 测试集）</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-post">POST</span></td>
+        <td><code>/api/eval/reports</code></td>
+        <td>生成评测报告（等价 <code>bun run eval</code>）；body <code>{ date?, optimize? }</code></td>
       </tr>
       <tr>
         <td><span class="badge badge-get">GET</span></td>

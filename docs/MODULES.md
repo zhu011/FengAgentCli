@@ -252,7 +252,7 @@ while (needsContinuation && step < maxTurns) {
 | Session Routes | `routes/sessions.ts` | 会话 CRUD + 消息 SSE + 权限 |
 | Model Routes | `routes/models.ts` | 模型列表 |
 | Observability Routes | `routes/observability.ts` | 观测面板数据源：trace 日志清单 / 日期分析（AnalysisResult）/ 调用链重建（四层树；per-message 过滤 + focus 解析；旧日志文本回退） |
-| Eval Routes | `routes/eval.ts` | 评测页数据：概览清单 / 报告与自优化建议 / 测试集 / 单条消息评测（trace 指标 + `judge` 扩展点） |
+| Eval Routes | `routes/eval.ts` | 评测页数据：概览清单 / 报告与自优化建议（含 `POST /reports` 一键生成）/ 测试集 / 单条消息评测（trace 指标 + `judge`） |
 | SSE | `sse.ts` | AgentEvent → SSE 帧转换 |
 | SessionManager | `session-manager.ts` | Agent 实例池、权限桥接 |
 | ACP（HTTP） | `acp-server.ts` | 旧 HTTP + SSE 传输的 ACP 兼容层（`fengagent acp --acp-http`） |
@@ -277,10 +277,11 @@ while (needsContinuation && step < maxTurns) {
 | GET | `/api/observability/traces/:date/callchain` | 完整调用链（会话 → 消息 → LLM 调用 → 工具调用）；带 `sessionId` + `messageId` 时过滤到该轮并返回 `focus` 解析结果 |
 | GET | `/api/observability/traces/:date/messages` | 指定会话的按消息粒度摘要（deep-link 消息选择器；会话信息不全时按 trace 补齐） |
 | GET | `/api/eval/overview` | 评测清单三合一（报告 / 自优化建议 / 测试集） |
+| POST | `/api/eval/reports` | 生成评测报告（等价再跑一次 `bun run eval`；body `{ date?, optimize? }`） |
 | GET | `/api/eval/reports/:date` | 读取 `eval-report-{date}.md` |
 | GET | `/api/eval/optimizations/:date` | 读取 `optimization-{date}.md` |
 | GET | `/api/eval/testsets/:name` | 读取测试集 JSON |
-| GET | `/api/eval/messages/:date` | 单条消息评测：trace 指标摘要 + `judge`（`sessionId` + `messageId`；main 分支 judge 暂为 null） |
+| GET | `/api/eval/messages/:date` | 单条消息评测：trace 指标摘要 + `judge`（`sessionId` + `messageId`；默认异步 + 落盘缓存，见 EVALUATION.md） |
 | GET | `/api/models` | 获取可用模型列表 |
 
 ---
@@ -292,7 +293,7 @@ while (needsContinuation && step < maxTurns) {
 | App | `app.tsx` | 应用入口、主题切换、顶栏导航（对话 / 观测 / 评测三页切换）+ deep-link URL 解析（`?view=&sessionId=&messageId=`） |
 | Chat Page | `pages/chat.tsx` | 聊天页面、模型选择、Inspector 面板 |
 | Observability Page | `pages/observability.tsx` | 观测页：日期切换、汇总指标卡、调用链树、图表与模型对比表 |
-| Eval Page | `pages/eval.tsx` | 评测页：测试集清单 / 报告与建议浏览导出 / 单条消息评测 |
+| Eval Page | `pages/eval.tsx` | 评测页：测试集清单 / 报告与建议浏览导出 / 一键生成报告（+ 自优化）/ 单条消息评测 |
 | Trace Tree | `components/trace-tree.tsx` | 四层调用链树（会话 → 消息 → LLM 调用 → 工具调用），节点展开 / 折叠 |
 | Metric Charts | `components/metric-charts.tsx` | 观测图表（模型耗时 / token 对比、工具使用分布、完成原因）+ 模型对比表 |
 | Message Picker | `components/message-picker.tsx` | 会话消息选择器（deep-link 后按消息定位调用链 / 评测结果） |
@@ -315,7 +316,7 @@ while (needsContinuation && step < maxTurns) {
 
 `api/client.ts` — `ApiClient` 类封装所有 HTTP 交互（fetch + ReadableStream 手动解析 SSE），
 含观测（`listTraces` / `getTraceAnalysis` / `getCallChains` / `getCallChainForMessage` / `getMessageTraces`）与
-评测（`getEvalOverview` / `getEvalReport` / `getOptimizationReport` / `getTestSet` / `getMessageEval`）方法。
+评测（`getEvalOverview` / `generateEvalReport` / `getEvalReport` / `getOptimizationReport` / `getTestSet` / `getMessageEval`）方法。
 
 ### 构建
 

@@ -124,7 +124,7 @@ bun run serve        # 生产模式（后端 + 静态前端）
 | 区块 | 操作 | 说明 |
 |------|------|------|
 | 测试集管理 | 清单浏览 / JSON 查看 / 导出 | 展示 `<数据根>/testsets/*.json`（AgentBench / DeepEval 风格），宽容解析各类结构 |
-| 评测报告 | 按日期浏览 + 导出（refactor 分支另有「生成报告」按钮） | `bun run eval` 生成的 `eval-report-{date}.md` Markdown 渲染；refactor 分支的「生成报告 / 生成报告 + 自优化」按钮等价于再跑一次 `bun run eval`（`POST /api/eval/reports`，复用同一管线、落点一致） |
+| 评测报告 | 按日期浏览 + 导出；**生成报告** | `bun run eval` 生成的 `eval-report-{date}.md` Markdown 渲染；「生成报告 / 生成报告 + 自优化」按钮等价于再跑一次 `bun run eval`（`POST /api/eval/reports`，复用同一管线、落点一致） |
 | 自优化建议 | 按日期浏览 + 导出 | `bun run eval --optimize` 生成的 `optimization-{date}.md` 渲染（含 LLM-judge 结论驱动建议） |
 
 > 日期语义（两处 `{date}` 含义不同）：`eval-report-{date}.md` 的 date 是**生成日**（跑 eval 的当天），`optimization-{date}.md` 的 date 是**被分析日志的日期**（`--all` 时逐日志各落一份）。因此「今天分析旧日志」时报告挂在今天、建议挂在日志日期，WebUI 也按该规则分组展示。
@@ -138,7 +138,7 @@ bun run serve        # 生产模式（后端 + 静态前端）
 | 入口 | 位置 | 效果 |
 |------|------|------|
 | **查看调用链** | 聊天页每条消息右侧 | 跳转观测页并聚焦该消息所属轮次的调用链（用户消息会解析到其后的助手轮次，工具循环多步全部纳入） |
-| **查看评测** | 聊天页每条消息右侧 | 跳转评测页展示该轮对话的 trace 指标（LLM 调用 / 工具 / 耗时 / token / 完成原因 / 错误）与 LLM-judge 单条消息评测结果（refactor 分支接入 `judgeMessage` 自动评判：完成度/正确性分数条 + 判定结论 + 依据 note；main 分支 judge 字段为 null，仅展示 trace 指标） |
+| **查看评测** | 聊天页每条消息右侧 | 跳转评测页展示该轮对话的 trace 指标（LLM 调用 / 工具 / 耗时 / token / 完成原因 / 错误）与 LLM-judge 单条消息评测结果（`judgeMessage` 自动评判：完成度 / 正确性分数条 + 判定结论 + 依据 note；未配置 LLM 客户端时为 `unavailable`，仅展示 trace 指标） |
 | **查看观测 / 查看评测** | 会话列表每个会话行 | 跳转后展示该会话的全部消息列表（消息选择器），点击任意消息定位其调用链 / 评测结果 |
 
 跳转通过 deep-link URL 实现：`?view=observability&sessionId=X&messageId=Y`（或 `view=eval`），刷新 / 分享链接后仍可定位到同一会话与消息。
@@ -149,9 +149,9 @@ bun run serve        # 生产模式（后端 + 静态前端）
 |------|------|
 | `GET /api/observability/traces/:date/callchain?sessionId=X&messageId=Y` | 返回 X 会话中 messageId=Y 所在轮次的调用链（steps 已过滤），并携带 `focus` 解析结果（用户消息 → 助手轮次） |
 | `GET /api/observability/traces/:date/messages?sessionId=X` | 返回该会话的按消息粒度摘要（消息选择器数据源） |
-| `GET /api/eval/messages/:date?sessionId=X&messageId=Y` | 返回单条消息评测：trace 指标摘要 + `judge` 字段（单条消息 LLM-judge 结果；路由层从该轮次调用链提取 model + 工具名/参数构建 `MessageTraceInfo`，调用 `judgeMessage()` 后合并 `{ ...judgeResult, messageId }` 填充；未配置 LLM 客户端时为 null） |
+| `GET /api/eval/messages/:date?sessionId=X&messageId=Y` | 返回单条消息评测：trace 指标摘要 + `judge` 字段（单条消息 LLM-judge 结果；路由层从该轮次调用链提取 model + 工具名/参数构建 `MessageTraceInfo`，调用 `judgeMessage()` 后合并 `{ ...judgeResult, messageId }` 填充） |
 
-> **分支差异（judge 接入）**：refactor 分支已接通单条消息 judge（`packages/eval/src/judge.ts` 的 `judgeMessage()` 在 per-message 路由内调用）；main 分支的该路由仍返回 `judge: null`（judge 尚未接入）。两分支的其余 per-message 行为一致。
+> **judge 的返回时机（默认异步 + 落盘缓存）**：接口立即返回 trace 指标与 `judgeStatus`，判定结果随后补上——`pending` 后台评审中（前端轮询，稍后重查即得 `cached`）、`cached` 命中落盘缓存（`<数据根>/judge-cache/<date>/<sessionId>__<messageId>.json`，不再调用模型）、`fresh` 本次请求内完成（`?sync=1` 显式同步）、`unavailable` 未配置 LLM 客户端或该消息无 trace 步骤。`?refresh=1` 强制重新评审；同一 key 的并发请求在进程内只评审一次。
 
 **数据层约定**：`llm-trace` 记录已携带 `messageId`（Agent Loop 每个循环步写入，见 1.2 记录格式），无需重建数据层；旧记录无 `messageId` 时，per-message 查询自动回退为按消息文本匹配定位（`focus.legacyMatch=true`），无法匹配时返回空步骤提示。
 
