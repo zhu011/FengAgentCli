@@ -15,7 +15,12 @@
 
 // Agent Loop
 export { AgentLoop, resolveLoopGuards, sanitizeFailureLabel } from "./loop.ts";
-export type { AgentLoopOptions, LoopGuardOptions } from "./loop.ts";
+export type {
+  AgentLoopOptions,
+  LoopGuardOptions,
+  TaskRuntime,
+  TaskStateStoreLike,
+} from "./loop.ts";
 
 // Agent 类
 export { Agent } from "./agent.ts";
@@ -23,6 +28,22 @@ export type { AgentOptions, RequestPermission } from "./agent.ts";
 
 // 会话持久化
 export { SessionStore } from "./session.ts";
+
+// 任务状态仓 + 副作用台账（任务可安全恢复）
+export { TaskStore, SqliteOperationLedger } from "./task-store.ts";
+export type { TaskStoreOptions } from "./task-store.ts";
+
+// 恢复核对（未决调用 orphan 检测）
+export {
+  buildTaskRecoveryReport,
+  detectOrphanToolCalls,
+} from "./task-recovery.ts";
+export type {
+  OrphanToolCall,
+  TaskRecoveryReport,
+  RecoveryStoreLike,
+  SideEffectLookup,
+} from "./task-recovery.ts";
 
 // 流式处理
 export { llmEventToAgentEvents, errorToAgentEvent } from "./streaming.ts";

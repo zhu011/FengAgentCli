@@ -27,6 +27,7 @@ import { deepMerge, expandTilde } from "@fengagent/shared";
 import {
   Agent as AgentClass,
   SessionStore,
+  TaskStore,
   createAgentDefinitionLoader,
   createSubagentRunner,
 } from "@fengagent/agent";
@@ -227,6 +228,20 @@ export async function createAgent(
     sessionStore = new SessionStore(`${dataDir}/sessions.db`);
   }
 
+  // 任务状态仓 + 副作用台账（任务可安全恢复，AGE-29 块 1–6）：
+  // 与会话库同根（tasks.db，表名互不重叠，老库开箱可用）；
+  // 打不开时置 null —— loop 不写 checkpoint、工具不入台账，行为与历史一致。
+  let taskStore: TaskStore | null = null;
+  if (enableStore) {
+    try {
+      taskStore = new TaskStore(`${expandTilde(config.dataDir)}/tasks.db`);
+    } catch (err) {
+      process.stderr.write(
+        `Warn: 任务状态仓不可用：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
+
   // 8. Agent 定义加载器
   const agentDefinitionLoader = createAgentDefinitionLoader({
     workdir,
@@ -238,7 +253,7 @@ export async function createAgent(
   });
   await agentDefinitionLoader.load();
 
-  // 9. 子 Agent 派遣器
+  // 9. 子 Agent 派遣器（注入会话仓 + 任务仓：task_id 续跑依赖两者，见 ADR-006）
   const subagentRunner = createSubagentRunner({
     llmClient,
     toolRegistry,
@@ -247,6 +262,8 @@ export async function createAgent(
     config,
     workdir,
     agentDefinitionLoader,
+    ...(sessionStore ? { sessionStore } : {}),
+    ...(taskStore ? { taskStore } : {}),
   });
 
   // 10. 组装 Agent（注入 subagentRunner，agentDepth 默认 0 = 顶层）
@@ -258,6 +275,7 @@ export async function createAgent(
     config,
     workdir,
     sessionStore: sessionStore ?? undefined,
+    ...(taskStore ? { taskStore } : {}),
     spawnSubagent: subagentRunner,
     agentDepth: 0,
   });

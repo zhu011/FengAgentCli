@@ -10,7 +10,7 @@
 
 import { loadConfig } from "@fengagent/core";
 import { Agent } from "@fengagent/agent";
-import { SessionStore } from "@fengagent/agent";
+import { SessionStore, TaskStore } from "@fengagent/agent";
 import { createClientFromEnv } from "@fengagent/llm";
 import {
   createToolRegistry,
@@ -74,6 +74,18 @@ async function main() {
   const sessionStore = new SessionStore(dbPath);
   log.info("main", `sessionStore dbPath=${dbPath}`);
 
+  // 任务状态仓 + 副作用台账（任务可安全恢复，AGE-29 块 1–6）
+  // 与会话库同一数据根（tasks.db；表名互不重叠，老库开箱可用）。
+  // 打不开时置 undefined：loop 不写 checkpoint、工具不入台账 —— 行为与历史一致。
+  let taskStore: TaskStore | undefined;
+  try {
+    const taskDbPath = join(resolveDataRoot({ workdir }), "tasks.db");
+    taskStore = new TaskStore(taskDbPath);
+    log.info("main", `taskStore dbPath=${taskDbPath}`);
+  } catch (err) {
+    log.warn("main", `任务状态仓不可用：${err instanceof Error ? err.message : String(err)}`);
+  }
+
   function createAgent(): Agent {
     const toolRegistry = createToolRegistry();
     registerBuiltinTools(toolRegistry);
@@ -97,6 +109,8 @@ async function main() {
       config,
       workdir,
       sessionStore,
+      // 任务可安全恢复：步级 checkpoint + 副作用台账（未开存储时为 undefined）
+      ...(taskStore ? { taskStore } : {}),
     });
   }
 

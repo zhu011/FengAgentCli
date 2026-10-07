@@ -15,6 +15,8 @@
 | `event.ts` | `AgentEvent` 联合类型（session-start / message-start / text-delta / tool-call-* / message-end / turn-end / error / compaction-* / session-end） |
 | `config.ts` | `ConfigSchema`（Zod）、`Config` 类型、`loadConfig()` |
 | `permission.ts` | `Permission`、`PermissionResult`（allow / deny / ask） |
+| `task-state.ts` | `TaskState`（`core_intent` 只读锚点 / `current_subtask` / `pending_tools` / `completed_steps` / `context_snapshot` / `state_version`）、`task/*` 事件词汇、纯函数 reducer `reduceTaskState` / `replayTaskState` |
+| `operation-ledger.ts` | `SideEffectKind`、`OperationLedger` 接口、`OperationRecord`、`decideOperationReplay()`、`deriveOperationKey()` |
 
 ### 核心接口
 
@@ -192,6 +194,8 @@ Windows PowerShell 5.1 不支持 `&&`，描述里显式提示改用 `;`。每次
 | `AgentLoop` | `loop.ts` | 核心循环（上下文组装 → LLM → 工具 → 循环判断） |
 | `Agent` | `agent.ts` | Agent 类：状态管理、事件发射、会话生命周期 |
 | `SessionStore` | `session.ts` | SQLite 会话持久化（`bun:sqlite`） |
+| `TaskStore` | `task-store.ts` | SQLite 任务状态仓（`task_states` / `task_events`，`state_version` 乐观锁）+ 副作用台账 `SqliteOperationLedger`（`operation_ledger`，`operation_key` 唯一索引） |
+| `buildTaskRecoveryReport` | `task-recovery.ts` | 恢复核对：orphan 工具调用检测 + 台账未决项 + 强制人工确认清单 |
 | `AgentDefinition` | `agent-definition.ts` | 从 `.fengagent/agents/*.md` 加载 Agent 定义 |
 | `PluginLoader` | `plugin-loader.ts` | 从 `.fengagent/plugins/` 加载插件 |
 
@@ -202,13 +206,22 @@ while (needsContinuation && step < maxTurns) {
   1. 组装上下文（系统提示 + 历史）
   2. 检查并执行压缩
   3. 准备工具列表
+  3.5 【注入 taskRuntime 时】步前 checkpoint：task/subtask + task/checkpoint(intent)
   4. 调用 LLM（stream）
   5. 解析工具调用
-  6. 执行工具（权限检查 → 执行 → 截断）
+  5.5 【注入 taskRuntime 时】task/pending 写本批工具（**执行之前**）
+  6. 执行工具（权限检查 → 台账闸 → 执行 → 截断 → 台账结算）
   7. 注入工具结果到历史
+  7.5 【注入 taskRuntime 时】task/step-completed + task/checkpoint(outcome)
   8. needsContinuation = 有工具调用 ? true : false
 }
 ```
+
+> 第 3.5 / 5.5 / 7.5 步是「任务可安全恢复」的落点（见
+> [ARCHITECTURE.md 第 9 章](./ARCHITECTURE.md#9-任务可安全恢复)）。
+> 未注入 `taskRuntime` 时这几步全部旁路，循环行为与历史完全一致。
+
+> 行为不变，但每回合额外沉淀对话图节点 + 落事件日志。
 
 ### 内置 Agent 定义
 

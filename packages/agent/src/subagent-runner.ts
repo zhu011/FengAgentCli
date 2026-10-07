@@ -28,6 +28,8 @@ import { createContextManager } from "@fengagent/context";
 import { AgentLoop } from "./loop.ts";
 import type { AgentLoopOptions } from "./loop.ts";
 import type { AgentDefinitionLoader } from "./agent-definition.ts";
+import type { SessionStore } from "./session.ts";
+import type { TaskStore } from "./task-store.ts";
 import { SUBAGENT_MAX_DEPTH } from "@fengagent/shared";
 import { generateId } from "@fengagent/shared/utils";
 
@@ -53,6 +55,18 @@ export interface SubagentRunnerOptions {
   agentDefinitionLoader: AgentDefinitionLoader;
   /** 最大嵌套深度 */
   maxDepth?: number;
+  /**
+   * 会话仓（注入后子 Agent 会话落盘，`task_id` 才真正可跨进程恢复）。
+   *
+   * 未注入时子 Agent 仍是纯内存会话：此时 `task_id` 只在**同一次进程内**
+   * 能找回，跨进程不可恢复 —— 工具描述里对此有明确说明。
+   */
+  sessionStore?: SessionStore;
+  /**
+   * 任务状态仓（注入后每个子任务是一个可恢复单元：core_intent / 步级
+   * checkpoint / 副作用台账都在 `task_id` 名下）。
+   */
+  taskStore?: TaskStore;
 }
 
 /**
@@ -106,9 +120,37 @@ export function createSubagentRunner(
     // 3. 确定模型（Agent 定义为空则继承父配置）
     const model = agentDef.model || options.config.model;
 
-    // 4. 创建子会话
-    const session = createSession(model, params.description);
+    // 4. 恢复 or 新建子会话
+    //    `task_id` 是可恢复单元：同一 task_id 再次派遣 = 继续同一个子会话
+    //    （前提是会话仓/任务仓已注入并落过盘），而不是从零开一个新会话。
+    const resumable = resolveResumableSession(
+      options,
+      params.taskId,
+      model,
+      params.description,
+    );
+    const session = resumable.session;
+    session.updatedAt = Date.now();
+    session.status = "running";
+    // 续跑：新的派遣提示词作为追加输入，历史（含已完成步骤的工具结果）保留；
+    // 新建：历史为空，这条就是首条输入。
     session.messages.push(createUserMessage(params.prompt));
+    // 落盘（会话 + 首条输入）：跨进程按 task_id 找回子会话的前提
+    if (options.sessionStore) {
+      options.sessionStore.saveSession(session);
+      options.sessionStore.saveMessages(session.id, session.messages);
+    }
+    // 任务单元：首次派遣建 core_intent 锚点；续跑沿用既有锚点（只读）
+    if (options.taskStore) {
+      const existing = options.taskStore.getTask(taskId);
+      if (!existing) {
+        options.taskStore.createTask({
+          taskId,
+          sessionId: session.id,
+          coreIntent: `${params.description}: ${params.prompt}`.slice(0, 500),
+        });
+      }
+    }
 
     // 5. 创建过滤后的工具注册表（排除 task 工具）
     const subToolRegistry = createFilteredToolRegistry(
@@ -143,6 +185,10 @@ export function createSubagentRunner(
       workdir: options.workdir,
       spawnSubagent, // 自引用 — 子 Agent 可以继续派遣（受深度限制）
       agentDepth: childDepth,
+      // 子任务同样是可恢复单元：task_id 名下有自己的 core_intent 与步级 checkpoint
+      ...(options.taskStore
+        ? { taskRuntime: { store: options.taskStore, taskId } }
+        : {}),
     };
 
     const loop = new AgentLoop(loopOptions);
@@ -175,6 +221,21 @@ export function createSubagentRunner(
       resultText = extractFinalText(session);
     }
 
+    // 10. 会话落盘（跨进程按 task_id 恢复子会话的前提）
+    session.status = hasError ? "error" : "idle";
+    session.updatedAt = Date.now();
+    if (options.sessionStore) {
+      options.sessionStore.saveSession(session);
+      options.sessionStore.saveMessages(session.id, session.messages);
+    }
+
+    const resumeInfo: Pick<SubagentResult, "resumed" | "resumeFallbackReason"> =
+      resumable.status === "resumed"
+        ? { resumed: true }
+        : resumable.status === "fallback"
+          ? { resumed: false, resumeFallbackReason: resumable.reason }
+          : {};
+
     if (hasError) {
       return {
         taskId,
@@ -182,6 +243,7 @@ export function createSubagentRunner(
         state: "error",
         text: errorMessage || resultText || "Subagent encountered an error",
         summary: `Subagent error: ${params.description}`,
+        ...resumeInfo,
       };
     }
 
@@ -191,6 +253,7 @@ export function createSubagentRunner(
       state: "completed",
       text: resultText || "(subagent produced no output)",
       summary: `Task completed: ${params.description}`,
+      ...resumeInfo,
     };
   };
 }
@@ -198,6 +261,63 @@ export function createSubagentRunner(
 // ──────────────────────────────────────────────
 // 辅助函数
 // ──────────────────────────────────────────────
+
+/** 子会话解析结果 */
+interface ResumableSession {
+  session: Session;
+  /**
+   * - `fresh`：请求的 task_id 没有落盘记录 —— 首次派遣，无「续跑」可言；
+   * - `resumed`：命中既有 task_id 并读回了它的会话；
+   * - `fallback`：本来该续跑但拿不到记录（未注入仓 / 记录已丢），本次新建。
+   */
+  status: "fresh" | "resumed" | "fallback";
+  reason?: string;
+}
+
+/**
+ * 解析本次派遣该用哪个子会话。
+ *
+ * 恢复路径要求**两级都在**：
+ * 1. `taskStore` 里存在该 `task_id`（知道它归属哪个 session）；
+ * 2. `sessionStore` 里那个 session 还在（历史消息可读回）。
+ *
+ * 两级缺一即退回新建 —— 但要如实告知调用方「本次没有恢复成功」，
+ * 不能像历史实现那样静默新建却宣称「继续了同一个会话」。
+ */
+function resolveResumableSession(
+  options: SubagentRunnerOptions,
+  requestedTaskId: string | undefined,
+  model: string,
+  description: string,
+): ResumableSession {
+  const fresh = (): ResumableSession => ({
+    session: createSession(model, description),
+    status: "fresh",
+  });
+  if (!requestedTaskId) return fresh();
+
+  if (!options.taskStore || !options.sessionStore) {
+    return {
+      session: createSession(model, description),
+      status: "fallback",
+      reason:
+        "请求了 task_id，但当前运行时未配置任务仓/会话仓，无法找回上个子会话，本次已新建。",
+    };
+  }
+
+  const task = options.taskStore.getTask(requestedTaskId);
+  if (!task) return fresh();
+
+  const prior = options.sessionStore.loadSession(task.sessionId);
+  if (!prior) {
+    return {
+      session: createSession(model, description),
+      status: "fallback",
+      reason: `task_id=${requestedTaskId} 存在，但其会话 ${task.sessionId} 已不在会话仓中，本次已新建。`,
+    };
+  }
+  return { session: prior, status: "resumed" };
+}
 
 /**
  * 创建过滤后的工具注册表。

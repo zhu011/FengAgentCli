@@ -166,7 +166,7 @@ const inputSchema: z.ZodType<TaskInput> = z
       .string()
       .optional()
       .describe(
-        "Set this to resume a previous task — pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one.",
+        "Resume an earlier subagent task by passing the task_id returned by a previous task call. The subagent continues the SAME sub-session (prior messages and tool results are kept) instead of starting a fresh one. Honest caveat: resume only works when the runtime has session/task persistence enabled — if the prior record is gone the runtime starts a new sub-session and says so in <note> (resumed=\"false\"); do not assume the history carried over.",
       ),
   })
   .passthrough() // 保留 LLM 误拼的别名键（subagentType 等），transform 阶段归一化
@@ -206,8 +206,18 @@ function renderResult(
 ): string {
   const tag = result.state === "error" ? "task_error" : "task_result";
   const summary = result.summary ? `\n<summary>${result.summary}</summary>` : "";
+  // 恢复语义如实回报：请求了 task_id 但没恢复成功时必须写出来，
+  // 否则主 Agent 会以为「上个会话的上下文还在」，据此做出错误决策。
+  const resumed =
+    result.resumed === undefined
+      ? ""
+      : ` resumed="${result.resumed}"${
+          result.resumeFallbackReason
+            ? ` resume_note="${result.resumeFallbackReason}"`
+            : ""
+        }`;
   return [
-    `<task id="${result.sessionId || result.taskId}" state="${result.state}">${summary}`,
+    `<task id="${result.sessionId || result.taskId}" state="${result.state}"${resumed}>${summary}`,
     `<${tag}>`,
     result.text,
     `</${tag}>`,
