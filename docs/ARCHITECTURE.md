@@ -614,8 +614,12 @@ complete(digest, result)            →  status=succeeded
 ```
 
 幂等键由**内容**派生（不掺 `toolUseId` / 时间戳），因此崩溃恢复后模型重新发起
-的同一调用必然命中同一条记录。唯一索引落在 `operation_key` 上，
-并发进入也只有一条 —— 去重在存储层，不依赖调用方自觉。
+的同一调用必然命中同一条记录。类目键缺省形如 `<工具名>::<入参指纹>`，入参指纹
+是「短可读前缀 + `#` + **全量入参**的 FNV-1a 32 位摘要」（`inputFingerprint`）：
+前缀只是给人扫键用的修饰，**哈希覆盖完整入参**——只截断不哈希会让「长前缀相同、
+尾部不同」的两次调用撞同一个键，恢复时命中的是别人的 `succeeded` 记录，副作用
+漏做且无人察觉。唯一索引落在 `operation_key` 上，并发进入也只有一条 —— 去重在
+存储层，不依赖调用方自觉。
 
 ### 9.5 恢复决策
 
@@ -640,8 +644,11 @@ complete(digest, result)            →  status=succeeded
 `canResumeAutomatically = false`，原因写入 `requiresConfirmation`
 （每一条都可读、可展示给用户），调用方必须显式确认才能继续。
 
-反向的判定同样明确：`pending_tools` 有、台账**没有**对应行，说明进程死在
-executor 记账之前 —— 副作用没开始，重跑安全，记入 `notes` 而不阻塞。
+`pending_tools` 里的每条 intent 按台账**三态**归因（读全量 `ledgerRows`，
+不是只读未决项）：有行且 `succeeded` → 「已成功，恢复跳过」；有行且 `failed`
+→ 「上次失败，恢复重跑」；**没有对应行** → 进程死在 executor 记账之前，
+副作用没开始，重跑安全。三者都记入 `notes` 而不阻塞。归因必须看全量行：
+只看未决项会把已结算的记录当成「无行」，文案与真实恢复路径正好相反。
 
 ### 9.7 session / task 分层
 
