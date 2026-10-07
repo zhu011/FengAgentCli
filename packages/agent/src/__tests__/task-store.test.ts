@@ -365,7 +365,7 @@ describe("未决调用核对（orphan 检测）", () => {
     expect(report.requiresConfirmation).toEqual([]);
   });
 
-  test("orphan 且副作用未声明 → 仍需显式确认", () => {
+  test("orphan 且工具声明为非幂等 → 仍需显式确认", () => {
     const session = makeSession("s1", [
       {
         id: "m1",
@@ -379,6 +379,43 @@ describe("未决调用核对（orphan 检测）", () => {
     store.createTask({ taskId: "t1", sessionId: "s1", coreIntent: "x", at: 1 });
     const report = buildTaskRecoveryReport(store, session, () => "non-idempotent");
     expect(report.orphans).toHaveLength(1);
+    expect(report.canResumeAutomatically).toBe(false);
+    expect(report.requiresConfirmation.join(" ")).toContain("orphan");
+  });
+
+  test("orphan 且副作用类别未声明（查表返回 undefined）→ 保守闸不放行", () => {
+    const session = makeSession("s1", [
+      {
+        id: "m1",
+        role: "assistant",
+        createdAt: 1,
+        content: [
+          { type: "tool-use", id: "tu-9", name: "mystery_writer", input: {} },
+        ],
+      },
+    ]);
+    store.createTask({ taskId: "t1", sessionId: "s1", coreIntent: "x", at: 1 });
+    // 工具没声明副作用：查表返回 undefined（「未知」不等于「无副作用」）
+    const report = buildTaskRecoveryReport(store, session, () => undefined);
+    expect(report.orphans).toHaveLength(1);
+    expect(report.canResumeAutomatically).toBe(false);
+    expect(report.requiresConfirmation.join(" ")).toContain("orphan");
+    expect(report.requiresConfirmation.join(" ")).toContain("mystery_writer");
+  });
+
+  test("orphan 且宿主完全没传副作用回调（第三参缺省）→ 同样不放行", () => {
+    const session = makeSession("s1", [
+      {
+        id: "m1",
+        role: "assistant",
+        createdAt: 1,
+        content: [
+          { type: "tool-use", id: "tu-9", name: "mystery_writer", input: {} },
+        ],
+      },
+    ]);
+    store.createTask({ taskId: "t1", sessionId: "s1", coreIntent: "x", at: 1 });
+    const report = buildTaskRecoveryReport(store, session);
     expect(report.canResumeAutomatically).toBe(false);
     expect(report.requiresConfirmation.join(" ")).toContain("orphan");
   });
