@@ -389,5 +389,102 @@ describe("未决调用核对（orphan 检测）", () => {
     const report = buildTaskRecoveryReport(store, session, () => "non-idempotent");
     expect(report.canResumeAutomatically).toBe(true);
     expect(report.taskId).toBe("t1");
+    expect(report.notes).toEqual([]);
+  });
+});
+
+describe("待办工具的台账三态归因（不得把已有行当成无行）", () => {
+  /** 写入一条 intent（pending_tools 有、步未结算） */
+  function seedPendingTool(operationKey: string): void {
+    store.createTask({ taskId: "t1", sessionId: "s1", coreIntent: "x", at: 1 });
+    store.appendEvent("t1", {
+      type: "task/pending",
+      taskId: "t1",
+      stepId: "step-1",
+      pending: [
+        {
+          toolUseId: "tu-1",
+          toolName: "notify_external",
+          input: { channel: "ops" },
+          sideEffect: "non-idempotent",
+          operationKey,
+          stepId: "step-1",
+          startedAt: 2,
+        },
+      ],
+      at: 2,
+    });
+  }
+
+  test("台账已 succeeded → 「已成功，恢复跳过」，不是「无台账行」", () => {
+    seedPendingTool("notify_external::ops");
+    store.ledger.begin({
+      operationId: "op-1",
+      operationKey: "notify_external::ops",
+      toolName: "notify_external",
+      sessionId: "s1",
+      input: { channel: "ops" },
+      startedAt: 2,
+    });
+    store.ledger.complete("op-1", { digest: "OK:2:ok", finishedAt: 3 });
+
+    const report = buildTaskRecoveryReport(store, makeSession("s1"), () => "non-idempotent");
+    // 三态归因必须看得见全部台账行
+    expect(report.ledgerRows).toHaveLength(1);
+    const notes = report.notes.join(" ");
+    expect(notes).toContain("succeeded");
+    expect(notes).toContain("跳过");
+    expect(notes).not.toContain("无台账行");
+    // 已成功不是阻塞项
+    expect(report.canResumeAutomatically).toBe(true);
+    expect(report.requiresConfirmation).toEqual([]);
+  });
+
+  test("台账 failed → 「上次失败，恢复重跑」，不是「无台账行」", () => {
+    seedPendingTool("notify_external::ops");
+    store.ledger.begin({
+      operationId: "op-1",
+      operationKey: "notify_external::ops",
+      toolName: "notify_external",
+      sessionId: "s1",
+      input: { channel: "ops" },
+      startedAt: 2,
+    });
+    store.ledger.fail("op-1", "boom", 3);
+
+    const report = buildTaskRecoveryReport(store, makeSession("s1"), () => "non-idempotent");
+    const notes = report.notes.join(" ");
+    expect(notes).toContain("失败");
+    expect(notes).toContain("重跑");
+    expect(notes).not.toContain("无台账行");
+    expect(report.canResumeAutomatically).toBe(true);
+    expect(report.requiresConfirmation).toEqual([]);
+  });
+
+  test("台账无行 → 仍报「副作用开始前中断，重跑安全」", () => {
+    seedPendingTool("notify_external::ops");
+
+    const report = buildTaskRecoveryReport(store, makeSession("s1"), () => "non-idempotent");
+    expect(report.ledgerRows).toEqual([]);
+    const notes = report.notes.join(" ");
+    expect(notes).toContain("无台账行");
+    expect(notes).toContain("重跑安全");
+    expect(report.canResumeAutomatically).toBe(true);
+  });
+
+  test("同键已有行时不重复报两种归因（三态互斥）", () => {
+    seedPendingTool("notify_external::ops");
+    store.ledger.begin({
+      operationId: "op-1",
+      operationKey: "notify_external::ops",
+      toolName: "notify_external",
+      sessionId: "s1",
+      input: { channel: "ops" },
+      startedAt: 2,
+    });
+    store.ledger.complete("op-1", { digest: "OK:2:ok", finishedAt: 3 });
+
+    const report = buildTaskRecoveryReport(store, makeSession("s1"), () => "non-idempotent");
+    expect(report.notes).toHaveLength(1);
   });
 });
