@@ -11,7 +11,9 @@
     "./event": "./src/event.ts",
     "./config": "./src/config.ts",
     "./squad": "./src/squad.ts",
-    "./permission": "./src/permission.ts"
+    "./permission": "./src/permission.ts",
+    "./task-state": "./src/task-state.ts",
+    "./operation-ledger": "./src/operation-ledger.ts"
   },
   "publishConfig": {
     "access": "public"

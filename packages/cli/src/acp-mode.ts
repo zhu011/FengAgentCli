@@ -106,7 +106,7 @@ export function credentialHint(err: unknown, cwd: string = process.cwd()): strin
  */
 export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpModeHandle> {
   const { loadConfig, createSession: createSessionFactory } = await import("@fengagent/core");
-  const { Agent, SessionStore } = await import("@fengagent/agent");
+  const { Agent, SessionStore, TaskStore } = await import("@fengagent/agent");
   const { resolveSessionStoreRoot } = await import("@fengagent/shared");
   const { createClientFromEnv } = await import("@fengagent/llm");
   const {
@@ -150,6 +150,35 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
   // 每轮消息写进库，`session/resume` 才有东西可读 —— 只建会话行、不写消息，
   // 续聊就变成「成功但失忆」。
   const stores = new Map<string, InstanceType<typeof SessionStore>>();
+
+  /** 任务状态仓缓存（与会话库同 workdir 同数据根；表名互不重叠） */
+  const taskStores = new Map<string, InstanceType<typeof TaskStore>>();
+
+  /**
+   * 取该 workdir 的任务状态仓（结构化任务状态 + 步级 checkpoint + 副作用台账）。
+   *
+   * 打不开时返回 undefined：此时 loop 不写 checkpoint、工具不入台账 ——
+   * 与「未启用任务恢复」的历史行为一致，不影响对话可用性。
+   *
+   * @param workdir - 会话工作目录
+   * @returns 任务仓；不可用时返回 undefined
+   */
+  function taskStoreFor(workdir: string): InstanceType<typeof TaskStore> | undefined {
+    const cached = taskStores.get(workdir);
+    if (cached) return cached;
+    try {
+      const dataRoot = resolveSessionStoreRoot({ workdir, configDataDir: config.dataDir });
+      mkdirSync(dataRoot, { recursive: true });
+      const store = new TaskStore(join(dataRoot, "tasks.db"));
+      taskStores.set(workdir, store);
+      return store;
+    } catch (err) {
+      process.stderr.write(
+        `Warn: 任务状态仓不可用（${workdir}）：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return undefined;
+    }
+  }
 
   /**
    * 取该 workdir 的会话库（按 workdir 缓存：进程级单写者，避免多连接互锁）。
@@ -222,6 +251,9 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
       workdir,
       // 传了才会持久化：每轮消息落盘是「下一个进程还能续聊」的唯一依据
       ...(sessionStore ? { sessionStore } : {}),
+      // 任务单元（结构化状态 / 步级 checkpoint / 副作用台账）：与会话库同根，
+      // 跨进程恢复的前提是这两份落盘都在。
+      ...(sessionStore ? { taskStore: taskStoreFor(workdir) } : {}),
     });
   }
 

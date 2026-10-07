@@ -45,6 +45,14 @@ export const SESSION_EVENT_TYPES = [
   // #4 head 确定式推导
   "rollback",
   "fork",
+  // 结构化任务状态（任务可安全恢复）：TaskState 只能经这些事件推进
+  "task/created",
+  "task/subtask",
+  "task/pending",
+  "task/step-completed",
+  "task/context",
+  "task/status",
+  "task/checkpoint",
 ] as const;
 
 /** 核心会话事件类型（编译期已知集合） */
@@ -131,6 +139,68 @@ export interface SessionEventPayloads {
     mode?: "replay" | "resume";
   };
   "fork": { parentNodeId: string; branch: string };
+
+  // ── 结构化任务状态（TaskState 事件溯源词汇）──────────────────────────
+  // 语义与 @fengagent/core 的 TaskEvent 一一对应：投影这些事件得到 TaskState。
+  // 最小可恢复单位 = 一个 LLM 步 + 它的工具批次：步前 task/pending，
+  // 步后 task/step-completed，两侧各有一条 task/checkpoint 落盘标记。
+  "task/created": {
+    taskId: string;
+    sessionId: string;
+    /** 只读锚点：任务核心意图，创建后不可改写 */
+    coreIntent: string;
+    at: number;
+  };
+  /** 当前子任务 */
+  "task/subtask": { taskId: string; subtask: string | null; at: number };
+  /** 待执行工具批次（**执行之前**写入；恢复时的 orphan 依据） */
+  "task/pending": {
+    taskId: string;
+    stepId: string;
+    pending: Array<{
+      toolUseId: string;
+      toolName: string;
+      input: unknown;
+      sideEffect: string;
+      operationKey?: string;
+      stepId: string;
+      startedAt: number;
+    }>;
+    at: number;
+  };
+  /** 步骤结算（步后写入） */
+  "task/step-completed": {
+    taskId: string;
+    step: {
+      stepId: string;
+      intent: string;
+      outcome: string;
+      toolUseIds: string[];
+      finishReason?: string;
+      startedAt: number;
+      finishedAt: number;
+    };
+    at: number;
+  };
+  /** 上下文快照 */
+  "task/context": {
+    taskId: string;
+    snapshot: Record<string, unknown>;
+    at: number;
+  };
+  /** 任务生命周期状态 */
+  "task/status": { taskId: string; status: string; at: number };
+  /** checkpoint 落盘标记（intent / outcome） */
+  "task/checkpoint": {
+    taskId: string;
+    checkpoint: {
+      stepId: string;
+      phase: string;
+      stateVersion: number;
+      at: number;
+    };
+    at: number;
+  };
 }
 
 /** 具体事件（type 与 payload 联动） */

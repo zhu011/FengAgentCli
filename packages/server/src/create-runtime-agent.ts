@@ -17,6 +17,7 @@ import type { Agent } from "@fengagent/agent";
 import {
   Agent as AgentClass,
   SessionStore,
+  TaskStore,
   createAgentDefinitionLoader,
   createSubagentRunner,
 } from "@fengagent/agent";
@@ -166,6 +167,11 @@ export interface CreateRuntimeAgentResult {
   config: Config;
   llmClient: ReloadableLLMClient;
   sessionStore: SessionStore | null;
+  /**
+   * 任务状态仓 + 副作用台账（任务可安全恢复）。
+   * `enableSessionStore=false` 时为 null —— 届时 loop 不写 checkpoint、工具不入账。
+   */
+  taskStore: TaskStore | null;
   agentDefinitionLoader: ReturnType<typeof createAgentDefinitionLoader>;
   subagentRunner: SubagentRunner;
   hookRegistry: HookRegistry;
@@ -252,6 +258,7 @@ export async function createRuntimeAgent(
   // 6. 会话存储 + 图存储（走 ctx.storage / ctx.graph 插件）
   //    数据根隔离：resolveDataRoot（FENG_DATA_DIR > 配置 dataDir > workdir/.fengagent-cordis）
   let sessionStore: SessionStore | null = null;
+  let taskStore: TaskStore | null = null;
   const enableStore = options.enableSessionStore ?? true;
   const dataDir = resolveDataRoot({
     workdir,
@@ -267,6 +274,8 @@ export async function createRuntimeAgent(
       // 目录可能已存在或无法创建 — 忽略
     }
     sessionStore = new SessionStore(`${dataDir}/sessions.db`);
+    // 任务状态仓 + 副作用台账（同一数据根；表名不重叠，老库开箱可用）
+    taskStore = new TaskStore(`${dataDir}/tasks.db`);
   }
   const storageBackend: SessionStoreLike = sessionStore ?? createMemorySessionStore();
   // Phase 2 生产双写：事件日志为事实源，旧存储（SQLite/内存）降级为读模型 —
@@ -304,6 +313,9 @@ export async function createRuntimeAgent(
     config,
     workdir,
     agentDefinitionLoader,
+    // 子任务的 task_id 要真正可恢复，子会话必须落盘（会话仓 + 任务仓）
+    ...(sessionStore ? { sessionStore } : {}),
+    ...(taskStore ? { taskStore } : {}),
   });
 
   // 8. createRuntime 插件化装配（依赖注入顺序无关，fiber 自动等待）
@@ -364,6 +376,8 @@ export async function createRuntimeAgent(
           // 工具执行走真实 executor（入参校验 / 权限审批 / hooks 生效），
           // 与 main 分支 plain-Agent 路径一致；human-in-the-loop 改参依赖此路径
           toolExecutor,
+          // 任务可安全恢复：步级 checkpoint + 副作用台账（未开存储时为 undefined）
+          taskStore: taskStore ?? undefined,
         },
       },
     ],
@@ -393,6 +407,7 @@ export async function createRuntimeAgent(
     config,
     llmClient,
     sessionStore,
+    taskStore,
     agentDefinitionLoader,
     subagentRunner,
     hookRegistry,

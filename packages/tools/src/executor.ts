@@ -13,8 +13,10 @@
  * 7. 触发 post-tool-use hooks（可修改结果）
  */
 import type { ToolDefinition, ToolResult, ToolContext, ToolInputOverride } from "@fengagent/core/tool";
+import type { OperationRecord, SideEffectKind } from "@fengagent/core/operation-ledger";
+import { decideOperationReplay, deriveOperationKey, digestResult } from "@fengagent/core/operation-ledger";
 import { BASH_TIMEOUT, MAX_TOOL_CONCURRENCY } from "@fengagent/shared/constants";
-import { getEnvNumber, toSingleLine } from "@fengagent/shared/utils";
+import { generateId, getEnvNumber, toSingleLine } from "@fengagent/shared/utils";
 import type { PermissionChecker } from "./permission.ts";
 import { createPermissionChecker } from "./permission.ts";
 import { truncateOutput } from "./truncate.ts";
@@ -203,6 +205,63 @@ function toHookContext(context: ToolContext): HookContext {
     messageId: context.messageId,
     metadata: context.metadata,
   };
+}
+
+/**
+ * 把台账里已记录的成功结果还原成 ToolResult（幂等命中时跳过执行、直接复用）。
+ *
+ * @param record - 已成功的台账记录
+ * @param extraMetadata - 追加的留痕字段（ledgerHit / operationKey）
+ * @returns 可直接回给模型的工具结果
+ */
+function restoreLedgerResult(
+  record: OperationRecord,
+  extraMetadata: Record<string, unknown>,
+): ToolResult {
+  const stored = record.resultJson as
+    | { content?: unknown; isError?: unknown; metadata?: unknown }
+    | undefined;
+  const content =
+    stored && typeof stored.content === "string"
+      ? stored.content
+      : `[ledger] 操作 ${record.toolName} 已执行过（operation_key=${record.operationKey}），` +
+        `本次跳过重复执行。`;
+  return {
+    content,
+    isError: stored?.isError === true,
+    metadata: {
+      ...((stored?.metadata as Record<string, unknown> | undefined) ?? {}),
+      ...extraMetadata,
+      operationId: record.operationId,
+      ledgerStatus: record.status,
+    },
+  };
+}
+
+/**
+ * 工具失败后的台账结算。
+ *
+ * 关键取舍：失败**不等于**「副作用没发生」。因此
+ * - 幂等工具 → `fail`（重放与执行一次等价，允许下次重试）；
+ * - 非幂等工具 → `unknown`（保守记成不可知，下次进入必然走人工核对闸）。
+ *
+ * @param ledger - 台账（未注入时为 undefined，空操作）
+ * @param operationId - 本次操作 id
+ * @param sideEffect - 工具副作用类别
+ * @param error - 失败原文
+ */
+function settleLedgerAfterError(
+  ledger: ToolContext["operationLedger"],
+  operationId: string | undefined,
+  sideEffect: SideEffectKind,
+  error: string,
+): void {
+  if (!ledger || !operationId) return;
+  if (sideEffect === "idempotent") {
+    ledger.fail(operationId, toSingleLine(error), Date.now());
+  } else {
+    ledger.markUnknown(operationId);
+  }
 }
 
 export function createToolExecutor(
@@ -426,6 +485,78 @@ export function createToolExecutor(
 
     const startTime = Date.now();
 
+    // ── 副作用台账闸（任务可安全恢复）────────────────────────────────
+    // 顺序即安全性：**先记账、再执行**。「执行后补记」的写法在
+    // 「工具已执行、turn 未落盘」窗口里照样会把副作用做两遍。
+    const ledger = context.operationLedger;
+    const sideEffect: SideEffectKind = tool.sideEffect
+      ? tool.sideEffect(validated.value)
+      : "none";
+    let operationId: string | undefined;
+    let operationKey: string | undefined;
+
+    if (ledger && sideEffect !== "none") {
+      operationKey = tool.operationKey
+        ? tool.operationKey(validated.value)
+        : deriveOperationKey(tool.name, validated.value);
+      const recorded = ledger.lookup(operationKey);
+      const decision = decideOperationReplay(recorded, sideEffect);
+
+      if (decision.action === "skip") {
+        // 幂等键命中已成功记录 —— 复用结果，**不再执行副作用**
+        log.info(
+          "executeOne",
+          `ledger hit (succeeded), tool=${tool.name}, operationKey=${operationKey}`,
+        );
+        return {
+          input,
+          result: restoreLedgerResult(decision.record, {
+            ledgerHit: "succeeded",
+            operationKey,
+          }),
+        };
+      }
+
+      if (decision.action === "manual-review") {
+        // 非幂等 + 未决 —— 强制人工核对，绝不静默重放
+        log.warn(
+          "executeOne",
+          `ledger hit (unresolved, non-idempotent), tool=${tool.name}, operationKey=${operationKey}, status=${decision.record.status}`,
+        );
+        return {
+          input,
+          result: {
+            content: `Error: ${decision.reason}`,
+            isError: true,
+            metadata: {
+              operationReviewRequired: true,
+              operationId: decision.record.operationId,
+              operationKey,
+              ledgerStatus: decision.record.status,
+              unrecoverable: true,
+            },
+          },
+        };
+      }
+
+      operationId =
+        decision.action === "replay"
+          ? decision.operationId
+          : // 命中一条 failed 记录时沿用它的 operationId：断言/审计认的是同一条
+            // 「操作」，而不是每次重试都造一张新账。真正的「无记录」才新建。
+            (recorded?.operationId ?? generateId());
+      ledger.begin({
+        operationId,
+        operationKey,
+        toolName: tool.name,
+        sessionId: context.sessionId,
+        taskId: context.taskId,
+        stepId: context.stepId,
+        input: validated.value,
+        startedAt: Date.now(),
+      });
+    }
+
     // 3. 执行工具（带超时）
     const timeoutMs =
       tool.name === "bash"
@@ -445,6 +576,7 @@ export function createToolExecutor(
       const errorRes = errorResult(
         err instanceof Error ? err : new Error(String(err)),
       );
+      settleLedgerAfterError(ledger, operationId, sideEffect, errorRes.content);
       if (correctedByUser) {
         errorRes.metadata = {
           ...(errorRes.metadata as Record<string, unknown>),
@@ -457,6 +589,7 @@ export function createToolExecutor(
     }
 
     if (result.isError) {
+      settleLedgerAfterError(ledger, operationId, sideEffect, String(result.content));
       // 仍然触发 post-tool-use hooks（即使出错）
       if (correctedByUser) {
         result.metadata = {
@@ -494,6 +627,24 @@ export function createToolExecutor(
 
     // 5. 触发 post-tool-use hooks（可修改结果）
     finalResult = await hooks.triggerPostToolUse(tool.name, validated.value, finalResult, hookCtx);
+
+    if (ledger && operationId) {
+      finalResult.metadata = {
+        ...(finalResult.metadata as Record<string, unknown>),
+        operationId,
+        operationKey,
+        sideEffect,
+      };
+      ledger.complete(operationId, {
+        digest: digestResult(finalResult.content, finalResult.isError),
+        json: {
+          content: finalResult.content,
+          isError: finalResult.isError === true,
+          metadata: finalResult.metadata,
+        },
+        finishedAt: Date.now(),
+      });
+    }
 
     return { input, result: finalResult };
   }

@@ -22,8 +22,12 @@ import type {
   ToolInputCorrectionSource,
   FinishReason,
   SubagentRunner,
+  TaskEvent,
+  TaskState,
+  PendingToolCall,
+  OperationLedger,
 } from "@fengagent/core";
-import { createSystemMessage } from "@fengagent/core";
+import { createSystemMessage, deriveOperationKey } from "@fengagent/core";
 import type { ToolRegistry, ToolExecutor } from "@fengagent/tools";
 import type { ContextManager } from "@fengagent/context";
 import { generateId, getEnvNumber } from "@fengagent/shared/utils";
@@ -226,6 +230,52 @@ export interface AgentLoopOptions {
   agentDepth?: number;
   /** 死循环防护阈值覆盖（缺省走 resolveLoopGuards） */
   guards?: Partial<LoopGuardOptions>;
+  /**
+   * 任务状态运行时（任务可安全恢复）。
+   *
+   * 注入后 loop 在每个 LLM 步前后写 checkpoint：
+   * 步前 `task/pending`（intent，含本步工具批次），步后 `task/step-completed`
+   * （outcome）。未注入时行为与历史完全一致（零回归）。
+   */
+  taskRuntime?: TaskRuntime;
+}
+
+/** loop 侧需要的最小任务存储契约（TaskStore 满足） */
+export interface TaskStateStoreLike {
+  getTask(taskId: string): TaskState | null;
+  appendEvent(taskId: string, event: TaskEvent): TaskState;
+  createTask(input: {
+    taskId: string;
+    sessionId: string;
+    coreIntent: string;
+    at?: number;
+  }): TaskState;
+  ledger: OperationLedger;
+}
+
+/** 任务状态运行时（loop ↔ TaskStore 的接线口） */
+export interface TaskRuntime {
+  store: TaskStateStoreLike;
+  taskId: string;
+}
+
+/** 从会话推导核心意图（只读锚点；恢复时不再改写） */
+function deriveCoreIntent(session: Session, workdir: string): string {
+  const firstUser = session.messages.find((m) => m.role === "user");
+  const text = firstUser
+    ? firstUser.content
+        .filter((b): b is ContentBlock & { type: "text"; text: string } => b.type === "text")
+        .map((b) => b.text)
+        .join(" ")
+        .trim()
+    : "";
+  return text || `${session.title} @ ${workdir}`;
+}
+
+/** 截断一句话摘要（intent / outcome 用） */
+function brief(text: string, max = 200): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max)}…` : one;
 }
 
 /**
@@ -268,12 +318,40 @@ export class AgentLoop {
       inputOverrides?: ToolInputOverride[];
       /** 改参来源标记（默认 hitl；图上重放传 graph），用于图投影溯源 */
       correctionSource?: ToolInputCorrectionSource;
+      /**
+       * 本次运行的任务状态运行时（覆盖构造期注入）。
+       *
+       * 同一个 Agent 实例可能服务多个会话，而任务单元按会话划分，
+       * 因此按会话解析出的 task_id 在这里逐次传入。
+       */
+      taskRuntime?: TaskRuntime;
     },
   ): AsyncGenerator<AgentEvent> {
     let needsContinuation = true;
     let step = 0;
     let consecutiveToolErrorSteps = 0;
     const { maxTurns } = this.options.config;
+
+    // ── 任务状态（结构化 / 可恢复）────────────────────────────────────
+    // 每个 LLM 步是一个最小可恢复单位：步前写 intent，步后写 outcome。
+    const runtime = options?.taskRuntime ?? this.options.taskRuntime;
+    let taskState: TaskState | null = runtime
+      ? runtime.store.getTask(runtime.taskId)
+      : null;
+    if (runtime && !taskState) {
+      taskState = runtime.store.createTask({
+        taskId: runtime.taskId,
+        sessionId: session.id,
+        coreIntent: deriveCoreIntent(session, this.options.workdir),
+      });
+    }
+    /** 本事件落盘后产生的 state_version（乐观锁期望值） */
+    const nextVersion = (): number => (taskState?.stateVersion ?? 0) + 1;
+    /** 写一条任务事件（未注入 taskRuntime 时为空操作） */
+    const writeTask = (event: TaskEvent): void => {
+      if (!runtime) return;
+      taskState = runtime.store.appendEvent(runtime.taskId, event);
+    };
 
     // ── 死循环防护状态（本轮 run 内累积）──────────────────────────────
     const guards = resolveLoopGuards(this.options.guards);
@@ -323,6 +401,47 @@ export class AgentLoop {
       // 3. 准备工具（最后一轮禁用工具）
       const tools = this.options.toolRegistry.materialize();
       const disableTools = step >= maxTurns;
+
+      // 3.5 步前 checkpoint（intent）——最小可恢复单位的「前半」
+      const stepId = generateId();
+      const stepStartedAt = Date.now();
+      const lastUserText = (() => {
+        for (let i = session.messages.length - 1; i >= 0; i--) {
+          const msg = session.messages[i]!;
+          if (msg.role !== "user") continue;
+          const text = msg.content
+            .filter(
+              (b): b is ContentBlock & { type: "text"; text: string } =>
+                b.type === "text",
+            )
+            .map((b) => b.text)
+            .join(" ")
+            .trim();
+          if (text) return text;
+        }
+        return "";
+      })();
+      const stepIntent =
+        brief(lastUserText) || `step ${step}: continue current task`;
+      if (runtime) {
+        writeTask({
+          type: "task/subtask",
+          taskId: runtime.taskId,
+          subtask: stepIntent,
+          at: stepStartedAt,
+        });
+        writeTask({
+          type: "task/checkpoint",
+          taskId: runtime.taskId,
+          checkpoint: {
+            stepId,
+            phase: "intent",
+            stateVersion: nextVersion(),
+            at: stepStartedAt,
+          },
+          at: stepStartedAt,
+        });
+      }
 
       // 4. 调用 LLM
       const messageId = generateId();
@@ -436,7 +555,41 @@ export class AgentLoop {
           inputOverrides: options?.inputOverrides,
           spawnSubagent: this.options.spawnSubagent,
           agentDepth: this.options.agentDepth,
+          operationLedger: runtime?.store.ledger,
+          taskId: runtime?.taskId,
+          stepId,
         };
+
+        // 步内 checkpoint（intent 的后半）：**执行之前**写下本批工具调用。
+        // 崩溃在「工具已执行、turn 未落盘」窗口时，这条记录是恢复端唯一能看出
+        // 「这一步的副作用可能已经发生」的依据。
+        if (runtime) {
+          const pending: PendingToolCall[] = toolCalls.map((tc) => {
+            const def = this.options.toolRegistry.get(tc.name);
+            const kind = def?.sideEffect ? def.sideEffect(tc.input) : "none";
+            return {
+              toolUseId: tc.id,
+              toolName: tc.name,
+              input: tc.input,
+              sideEffect: kind,
+              operationKey:
+                kind === "none"
+                  ? undefined
+                  : def?.operationKey
+                    ? def.operationKey(tc.input)
+                    : deriveOperationKey(tc.name, tc.input),
+              stepId,
+              startedAt: Date.now(),
+            };
+          });
+          writeTask({
+            type: "task/pending",
+            taskId: runtime.taskId,
+            stepId,
+            pending,
+            at: Date.now(),
+          });
+        }
 
         // 收集所有工具调用的结果
         const toolResults: Array<{
@@ -602,6 +755,13 @@ export class AgentLoop {
             `工具调用遇到不可恢复的错误（同一环境下重试必然再次失败），已终止本轮对话。` +
             `原因: ${detail}`;
           log.error("run", `unrecoverable tool result guard: ${message}`);
+          // 非幂等副作用结果 unknown → 任务停在 blocked，等待人工核对后显式放行
+          writeTask({
+            type: "task/status",
+            taskId: runtime?.taskId ?? "",
+            status: "blocked",
+            at: Date.now(),
+          });
           yield { type: "error", error: { message } };
           yield { type: "turn-end", reason: "error" };
           return;
@@ -713,6 +873,46 @@ export class AgentLoop {
           return;
         }
 
+        // 步后 checkpoint（outcome）——最小可恢复单位的「后半」：
+        // pendingTools 随本步结算清空，completedSteps 追加这一步。
+        if (runtime) {
+          const outcomeAt = Date.now();
+          writeTask({
+            type: "task/step-completed",
+            taskId: runtime.taskId,
+            step: {
+              stepId,
+              intent: stepIntent,
+              outcome: brief(
+                toolResults
+                  .map(
+                    (tr) =>
+                      `${toolNames.get(tr.toolUseId) ?? "?"}: ${
+                        tr.result.isError ? "error" : "ok"
+                      }`,
+                  )
+                  .join(", ") || "tool batch completed",
+              ),
+              toolUseIds: toolCalls.map((tc) => tc.id),
+              finishReason: "tool_use",
+              startedAt: stepStartedAt,
+              finishedAt: outcomeAt,
+            },
+            at: outcomeAt,
+          });
+          writeTask({
+            type: "task/checkpoint",
+            taskId: runtime.taskId,
+            checkpoint: {
+              stepId,
+              phase: "outcome",
+              stateVersion: nextVersion(),
+              at: outcomeAt,
+            },
+            at: outcomeAt,
+          });
+        }
+
         needsContinuation = true;
       } else {
         // 无工具调用 — 结束循环
@@ -726,6 +926,42 @@ export class AgentLoop {
         session.tokenCount =
           this.options.contextManager.estimateTokens(session.messages);
         needsContinuation = false;
+
+        // 无工具步同样是一个可恢复单位（outcome：本步未发起任何工具）
+        if (runtime) {
+          const outcomeAt = Date.now();
+          writeTask({
+            type: "task/step-completed",
+            taskId: runtime.taskId,
+            step: {
+              stepId,
+              intent: stepIntent,
+              outcome: brief(textAccumulator) || "no tool calls",
+              toolUseIds: [],
+              finishReason,
+              startedAt: stepStartedAt,
+              finishedAt: outcomeAt,
+            },
+            at: outcomeAt,
+          });
+          writeTask({
+            type: "task/checkpoint",
+            taskId: runtime.taskId,
+            checkpoint: {
+              stepId,
+              phase: "outcome",
+              stateVersion: nextVersion(),
+              at: outcomeAt,
+            },
+            at: outcomeAt,
+          });
+          writeTask({
+            type: "task/status",
+            taskId: runtime.taskId,
+            status: "completed",
+            at: outcomeAt,
+          });
+        }
       }
 
       // 6. 轮次结束

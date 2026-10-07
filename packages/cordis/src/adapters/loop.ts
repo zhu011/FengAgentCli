@@ -24,6 +24,11 @@ export interface LoopPluginOptions {
    * 缺省时回退到 ctx.tools.execute 直调（仅用于不装配 executor 的轻量测试运行时）。
    */
   toolExecutor?: ToolExecutor;
+  /**
+   * 任务状态仓（任务可安全恢复）。提供时每轮对话按会话映射到一个 `task_id`，
+   * 步级 checkpoint 与副作用台账随之生效；缺省时 loop 行为与历史完全一致。
+   */
+  taskStore?: import("@fengagent/agent").TaskStore;
 }
 
 /** Loop 插件 — 提供 ctx.loop */
@@ -50,6 +55,7 @@ export function loopPlugin(options: LoopPluginOptions) {
       spawnSubagent: options.spawnSubagent,
       agentDepth: options.agentDepth,
       toolExecutor: options.toolExecutor,
+      taskStore: options.taskStore,
     });
     return service as LoopService;
   }

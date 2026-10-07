@@ -13,12 +13,14 @@ import type {
 } from "@fengagent/core";
 import { createSession, createUserMessage, createSystemMessage } from "@fengagent/core";
 import { AgentLoop } from "./loop.ts";
-import type { AgentLoopOptions } from "./loop.ts";
+import type { AgentLoopOptions, TaskRuntime } from "./loop.ts";
 import type { SessionStore } from "./session.ts";
+import type { TaskStore } from "./task-store.ts";
 import type { ToolContext } from "@fengagent/core/tool";
 import type { ToolRegistry } from "@fengagent/tools";
 import type { ContextManager } from "@fengagent/context";
 import { createLogger, writeSessionLog } from "@fengagent/shared";
+import { generateId } from "@fengagent/shared";
 
 const log = createLogger("agent");
 
@@ -26,6 +28,11 @@ const log = createLogger("agent");
 export interface AgentOptions extends AgentLoopOptions {
   /** 会话存储（可选，不传则不持久化） */
   sessionStore?: SessionStore;
+  /**
+   * 任务状态仓（可选）。注入后每轮 prompt 会按会话解析 `task_id`：
+   * 步级 checkpoint、pending_tools、副作用台账随之生效（任务可安全恢复）。
+   */
+  taskStore?: TaskStore;
 }
 
 /** 权限请求回调类型（从 ToolContext 提取） */
@@ -58,6 +65,7 @@ export type RequestPermission = ToolContext["requestPermission"];
 export class Agent {
   private loop: AgentLoop;
   private sessionStore?: SessionStore;
+  private taskStore?: TaskStore;
   private config: Config;
   private workdir: string;
   private contextManager: ContextManager;
@@ -66,10 +74,26 @@ export class Agent {
   constructor(options: AgentOptions) {
     this.loop = new AgentLoop(options);
     this.sessionStore = options.sessionStore;
+    this.taskStore = options.taskStore;
     this.config = options.config;
     this.workdir = options.workdir;
     this.contextManager = options.contextManager;
     this.toolRegistry = options.toolRegistry;
+  }
+
+  /**
+   * 解析会话对应的任务运行时（一个会话 ↔ 一个可恢复 task_id）。
+   *
+   * @param session - 当前会话
+   * @returns 注入 loop 的运行时；未配置任务仓时 undefined
+   */
+  private taskRuntimeFor(session: Session): TaskRuntime | undefined {
+    if (!this.taskStore) return undefined;
+    const existing = this.taskStore.getTaskBySession(session.id);
+    return {
+      store: this.taskStore,
+      taskId: existing?.taskId ?? generateId(),
+    };
   }
 
   /**
@@ -119,7 +143,11 @@ export class Agent {
     yield { type: "session-start", session: sess };
 
     // 运行 Agent Loop
-    for await (const event of this.loop.run(sess, options)) {
+    const taskRuntime = this.taskRuntimeFor(sess);
+    for await (const event of this.loop.run(sess, {
+      ...options,
+      ...(taskRuntime ? { taskRuntime } : {}),
+    })) {
       // 会话 JSONL 日志：message-end 时记录助手消息
       if (event.type === "message-end") {
         const assistantMsg = sess.messages.find((m) => m.id === event.messageId);

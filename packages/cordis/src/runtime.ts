@@ -56,6 +56,7 @@ export const BUILTIN_PLUGIN_REGISTRY: Record<string, BuiltinPluginFactory> = {
       spawnSubagent: config.spawnSubagent as never,
       agentDepth: config.agentDepth as number | undefined,
       toolExecutor: config.toolExecutor as never,
+      taskStore: config.taskStore as never,
     }),
   [BUILTIN_PLUGINS.GRAPH]: (config) =>
     graphPlugin({ store: config.store as never }),

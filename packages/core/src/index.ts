@@ -34,6 +34,44 @@ export type {
   ToolInputCorrectionSource,
 } from "./tool.ts";
 
+// 结构化任务状态（任务可安全恢复）
+export type {
+  TaskState,
+  TaskStatus,
+  TaskEvent,
+  TaskEventType,
+  PendingToolCall,
+  CompletedStep,
+  Checkpoint,
+  CheckpointPhase,
+} from "./task-state.ts";
+export {
+  TASK_EVENT_TYPES,
+  TaskStateError,
+  createTaskState,
+  isTaskEventType,
+  reduceTaskState,
+  replayTaskState,
+  stableJson,
+  taskStateEquals,
+} from "./task-state.ts";
+
+// 副作用台账（幂等键 / 恢复决策）
+export type {
+  SideEffectKind,
+  OperationStatus,
+  OperationRecord,
+  OperationLedger,
+  OperationReplayDecision,
+  BeginOperationInput,
+} from "./operation-ledger.ts";
+export {
+  decideOperationReplay,
+  deriveOperationKey,
+  digestResult,
+  inputFingerprint,
+} from "./operation-ledger.ts";
+
 // Agent 类型
 export type { AgentConfig, AgentInfo, SubagentParams, SubagentResult, SubagentRunner } from "./agent.ts";
 

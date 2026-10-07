@@ -74,6 +74,15 @@ export interface SubagentResult {
   text: string;
   /** 摘要 */
   summary?: string;
+  /**
+   * 本次派遣是否**真的**恢复了既有 task_id 对应的子会话。
+   *
+   * `taskId` 参数被接受 ≠ 恢复成功：会话仓/任务仓未注入、或落盘记录已丢失时
+   * 只能新建。此处如实回报，避免「说了续跑、实际新建」的静默谎言。
+   */
+  resumed?: boolean;
+  /** 未恢复成功时的原因（`resumed === false` 且请求了 task_id 时有值） */
+  resumeFallbackReason?: string;
 }
 
 /** 子 Agent 派遣函数类型（由 agent 层实现并注入到 ToolContext） */

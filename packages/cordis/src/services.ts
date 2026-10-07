@@ -398,9 +398,34 @@ export class LoopServiceImpl extends Service implements LoopService {
       agentDepth?: number;
       /** 真实工具执行器（含校验/权限/hooks）；缺省回退 ctx.tools.execute 直调 */
       toolExecutor?: import("@fengagent/tools").ToolExecutor;
+      /**
+       * 任务状态仓（任务可安全恢复）。注入后每轮对话会按会话建立/续用一个
+       * `task_id`：步级 checkpoint + 副作用台账随 loop 一起生效。
+       */
+      taskStore?: import("@fengagent/agent").TaskStore;
     },
   ) {
     super(ctx, "loop");
+  }
+
+  /**
+   * 解析本会话的可恢复任务单元。
+   *
+   * 一个会话对应一个任务：已存在就续用（恢复场景），否则生成一个新 task_id
+   * ——真正的 `task/created`（core_intent 只读锚点）由 loop 在首次运行时落盘，
+   * 这里只负责「同一个会话永远映射到同一个 task_id」。
+   *
+   * @param session - 当前会话
+   * @returns AgentLoop 的 taskRuntime 片段（未注入任务仓时为空对象）
+   */
+  private taskRuntimeFor(
+    session: Session,
+  ): { taskRuntime: import("@fengagent/agent").TaskRuntime } | null {
+    const store = this.options.taskStore;
+    if (!store) return null;
+    const existing = store.getTaskBySession(session.id);
+    const taskId = existing?.taskId ?? generateId();
+    return { taskRuntime: { store, taskId } };
   }
 
   async *run(
@@ -467,6 +492,7 @@ export class LoopServiceImpl extends Service implements LoopService {
       workdir,
       spawnSubagent: this.options.spawnSubagent,
       agentDepth: this.options.agentDepth,
+      ...(this.taskRuntimeFor(session) ?? {}),
     });
 
     // 对话即节点：为用户输入建立节点（幂等：同一 messageId 不会重复追加）
