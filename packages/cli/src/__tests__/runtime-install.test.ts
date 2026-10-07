@@ -67,14 +67,12 @@ afterEach(() => {
 // ──────────────────────────────────────────────
 
 describe("readProjectCredentials", () => {
-  test("合并项目级与分支级配置，分支级优先", () => {
+  test("读取项目级配置凭据", () => {
     const projectDir = makeTempDir("feng-proj-");
     writeJson(join(projectDir, ".fengagent", "config.json"), {
       provider: "openai-compatible",
       openaiCompatibleApiKey: "sk-project",
       dataDir: ".fengagent-cordis",
-    });
-    writeJson(join(projectDir, ".fengagent-cordis", "config.json"), {
       model: "deepseek-v4-pro",
     });
 
@@ -85,14 +83,14 @@ describe("readProjectCredentials", () => {
     expect(merged.model).toBe("deepseek-v4-pro");
   });
 
-  test("分支级同名键覆盖项目级", () => {
+  test("不读 refactor 分支的分支级配置（main 配置面隔离）", () => {
     const projectDir = makeTempDir("feng-proj-");
     writeJson(join(projectDir, ".fengagent", "config.json"), { model: "from-project" });
     writeJson(join(projectDir, ".fengagent-cordis", "config.json"), {
       model: "from-cordis",
     });
 
-    expect(readProjectCredentials(projectDir).model).toBe("from-cordis");
+    expect(readProjectCredentials(projectDir).model).toBe("from-project");
   });
 
   test("配置文件缺失时返回空对象", () => {

@@ -38,7 +38,6 @@ function isolatedPaths(dir: string) {
   return {
     globalConfigPath: join(dir, "global", "config.json"),
     projectConfigPath: join(dir, "project", "config.json"),
-    cordisConfigPath: join(dir, "cordis", "config.json"),
   };
 }
 
@@ -250,13 +249,12 @@ describe("loadConfig 显式配置层", () => {
     expect(config.anthropicApiKey).toBe("sk-opt");
   });
 
-  test("显式配置层优先于项目/分支配置，但低于 FENG_* 环境变量", async () => {
+  test("显式配置层优先于项目配置，但低于 FENG_* 环境变量", async () => {
     const dir = makeTempDir();
     const paths = isolatedPaths(dir);
     const explicitPath = join(dir, "shared", "config.json");
 
     writeJson(paths.projectConfigPath, { model: "from-project", temperature: 0.5 });
-    writeJson(paths.cordisConfigPath, { model: "from-cordis" });
     writeJson(explicitPath, { model: "from-explicit", provider: "openai" });
 
     const config = await loadConfig(undefined, {
@@ -267,7 +265,7 @@ describe("loadConfig 显式配置层", () => {
 
     // 环境变量最高
     expect(config.model).toBe("from-env");
-    // 显式层覆盖项目/分支层
+    // 显式层覆盖项目层
     expect(config.provider).toBe("openai");
     // 低层未被覆盖的键保留
     expect(config.temperature).toBe(0.5);

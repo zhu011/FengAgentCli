@@ -2,7 +2,10 @@
  * @fengagent/core — 配置系统
  *
  * ConfigSchema (Zod)、ConfigLayer、loadConfig 函数。
- * 配置分层加载：内置默认值 → 全局配置 → 项目配置 → 分支级配置（.fengagent-cordis）→ 环境变量 → CLI 参数。
+ * 配置分层加载：内置默认值 → 全局配置 → 项目配置 → 显式配置路径 → 环境变量 → CLI 参数。
+ *
+ * 分支隔离：main 只读自己的项目配置 `.fengagent/config.json`，不读 refactor 分支的
+ * 分支级配置 `.fengagent-cordis/config.json`（AGE-29 配置隔离收口）。
  * 参考 ARCHITECTURE.md 第 5 节。
  */
 
@@ -20,7 +23,6 @@ import {
   COMPACT_THRESHOLD,
   CONFIG_FILE_ENV,
   CONTEXT_WINDOW,
-  CORDIS_CONFIG_PATH,
   DEFAULT_CORS_ORIGIN,
   DEFAULT_DATA_DIR,
   DEFAULT_LOG_LEVEL,
@@ -365,8 +367,8 @@ export function maskApiKey(key: string | undefined | null): string {
 // ──────────────────────────────────────────────
 
 /**
- * 将配置补丁合并写入配置文件（默认分支级 `./.fengagent-cordis/config.json`；
- * 项目级 `./.fengagent/config.json` 保持只读回退，不被 /model /provider 覆盖）。
+ * 将配置补丁合并写入配置文件（默认项目级 `./.fengagent/config.json`，与 loadConfig
+ * 实际读取的层一致；main 不写 refactor 分支的 `.fengagent-cordis/config.json`）。
  *
  * 写入策略：
  * 1. 读取现有文件内容（不存在视为空对象）
@@ -409,10 +411,9 @@ export function writeConfigFile(
  * 1. 内置默认值（ConfigSchema.parse({})）
  * 2. 全局配置（~/.fengagent/config.json）
  * 3. 项目配置（./.fengagent/config.json）
- * 4. 分支级配置（./.fengagent-cordis/config.json — 新分支写入层，/model /provider 只落这里）
- * 5. 显式配置路径（`FENG_CONFIG_FILE` / `configFilePath`）— 不依赖 cwd 的最后兜底
- * 6. 环境变量（FENG_* 系列）
- * 7. 命令行参数（cliArgs）
+ * 4. 显式配置路径（`FENG_CONFIG_FILE` / `configFilePath`）— 不依赖 cwd 的最后兜底
+ * 5. 环境变量（FENG_* 系列）
+ * 6. 命令行参数（cliArgs）
  *
  * 最终通过 ConfigSchema 校验，确保类型安全。
  *
@@ -424,7 +425,6 @@ export async function loadConfig(
   options?: {
     globalConfigPath?: string;
     projectConfigPath?: string;
-    cordisConfigPath?: string;
     /** 显式配置文件路径（未传时读取 FENG_CONFIG_FILE 环境变量） */
     configFilePath?: string;
     env?: Record<string, string | undefined>;
@@ -432,7 +432,6 @@ export async function loadConfig(
 ): Promise<Config> {
   const globalPath = options?.globalConfigPath ?? GLOBAL_CONFIG_PATH;
   const projectPath = options?.projectConfigPath ?? PROJECT_CONFIG_PATH;
-  const cordisPath = options?.cordisConfigPath ?? CORDIS_CONFIG_PATH;
   const env = options?.env ?? process.env;
 
   // 1. 内置默认值
@@ -444,15 +443,11 @@ export async function loadConfig(
   // 3. 项目配置
   const projectConfig = await readConfigFile(projectPath);
 
-  // 4. 分支级配置（.fengagent-cordis/config.json — 最高文件层）
-  const cordisConfig = await readConfigFile(cordisPath);
-
   // 逐层合并（低优先级 → 高优先级）
   let merged = deepMerge(defaults, globalConfig);
   merged = deepMerge(merged, projectConfig);
-  merged = deepMerge(merged, cordisConfig);
 
-  // 5. 显式配置路径 — cwd 之外的最后兜底（宿主可在全新空工作目录里拉起运行时）
+  // 4. 显式配置路径 — cwd 之外的最后兜底（宿主可在全新空工作目录里拉起运行时）
   const explicitPath =
     options?.configFilePath ?? envStr(env, CONFIG_FILE_ENV, "");
   if (explicitPath) {

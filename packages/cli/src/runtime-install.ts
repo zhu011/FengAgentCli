@@ -24,7 +24,7 @@ import {
   type PartialConfig,
   type PortableCredentialKey,
 } from "@fengagent/core";
-import { CORDIS_CONFIG_PATH, PROJECT_CONFIG_PATH } from "@fengagent/shared";
+import { PROJECT_CONFIG_PATH } from "@fengagent/shared";
 
 /** 本地运行时注册文件内容 */
 export interface RuntimeRegistration {
@@ -91,15 +91,16 @@ export function resolveWorkdir(): string | undefined {
 }
 
 /**
- * 读取项目配置根目录下的凭据来源（项目级 + 分支级，分支级优先）。
+ * 读取项目配置根目录下的凭据来源（main 只读自己的项目配置）。
+ *
+ * 不读 refactor 分支的 `.fengagent-cordis/config.json`：main 与 refactor 的配置面
+ * 互相隔离，避免把另一分支的凭据/模型选择提升进全局配置（AGE-29 配置隔离收口）。
  *
  * @param dir - 项目配置根目录
- * @returns 合并后的凭据补丁（分支级覆盖项目级）
+ * @returns 凭据补丁
  */
 export function readProjectCredentials(dir: string): PartialConfig {
-  const project = readConfigFileSync(join(dir, PROJECT_CONFIG_PATH));
-  const cordis = readConfigFileSync(join(dir, CORDIS_CONFIG_PATH));
-  return { ...project, ...cordis } as PartialConfig;
+  return readConfigFileSync(join(dir, PROJECT_CONFIG_PATH)) as PartialConfig;
 }
 
 /**

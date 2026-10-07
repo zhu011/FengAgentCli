@@ -90,7 +90,7 @@ export function credentialHint(err: unknown, cwd: string = process.cwd()): strin
   return [
     `无法解析 Provider 凭据：${message}`,
     `  工作目录: ${cwd}`,
-    "  已查找的凭据来源: ./.fengagent/config.json、./.fengagent-cordis/config.json、~/.fengagent/config.json" +
+    "  已查找的凭据来源: ./.fengagent/config.json、~/.fengagent/config.json" +
       (process.env.FENG_CONFIG_FILE ? `、FENG_CONFIG_FILE=${process.env.FENG_CONFIG_FILE}` : ""),
     "  修复方式（任选其一）:",
     "    1) 在已配置好的项目目录执行 `fengagent runtime install`，" +
@@ -122,7 +122,7 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
   const { startAcpServer } = await import("@fengagent/server");
 
   // 与 TUI/serve 路径一致：分层加载配置（默认值 → 全局 ~/.fengagent/config.json
-  // → 项目 .fengagent/config.json → 分支 .fengagent-cordis/config.json → FENG_* 环境变量），
+  // → 项目 .fengagent/config.json → FENG_* 环境变量），
   // 再把配置文件中的 API Key / BaseURL / Model 注入为 LLM 环境变量（main 的 injectConfigEnv 方式）。
   const config = await loadConfig();
   const envForLLM: Record<string, string | undefined> = { ...process.env };
