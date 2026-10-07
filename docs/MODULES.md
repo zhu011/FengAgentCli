@@ -64,7 +64,7 @@ interface ToolDefinition<I = unknown, O = unknown> {
 | `safeJsonParse(str)` | 安全 JSON 解析（失败返回 null） |
 | `deepMerge(target, source)` | 深度合并对象 |
 | `getEnv(key, defaultValue?)` | 读取环境变量（带默认值） |
-| `resolveDataRoot(opts?)` | 解析数据根。refactor：`FENG_DATA_DIR` > 配置 `dataDir` > `<workdir>/.fengagent-cordis`；main：`FENG_DATA_DIR` > `<cwd>/.fengagent-cordis`（存在时）> `<cwd>/.fengagent` |
+| `resolveDataRoot(opts?)` | 解析数据根。refactor：`FENG_DATA_DIR` > 配置 `dataDir` > `<workdir>/.fengagent-cordis`；main：`FENG_DATA_DIR` > `<workdir>/.fengagent`（**不探测** refactor 的 `<workdir>/.fengagent-cordis`，两分支数据隔离） |
 | `resolveLogsDir(opts?)` | 解析日志目录 `<数据根>/logs`（写入方与读取方共用同一优先级，避免「写一处、读另一处」） |
 | `resolveSessionStoreRoot(opts?)` | 解析会话仓根（Multica 守护进程指定 `MULTICA_DSH_SESSION_ROOT` 时以它为准，否则同数据根） |
 
