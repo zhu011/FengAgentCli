@@ -11,6 +11,11 @@
  * `canResumeAutomatically = false`，并把原因写进 `requiresConfirmation` ——
  * 调用方必须把这份清单摆给用户显式确认，不得自动继续（规范：结果 unknown
  * 必须显式确认，禁止静默重放）。
+ *
+ * 归因必须查**全量台账行**（`ledgerRows`），不能只看未决项：一条 intent 已写、
+ * 步未结算的待办工具，其台账行可能是 `succeeded`（恢复会跳过）或 `failed`
+ * （恢复会重跑）—— 只看未决项会把这两种情况都误报成「无台账行，重跑安全」，
+ * 文案与真实恢复路径正好相反。
  */
 
 import type {
@@ -83,6 +88,8 @@ export interface TaskRecoveryReport {
   pendingTools: PendingToolCall[];
   /** 台账里未结算的操作（pending / unknown） */
   unresolvedOperations: OperationRecord[];
+  /** 本会话的**全量**台账行（三态归因用；含 succeeded / failed） */
+  ledgerRows: OperationRecord[];
   /** 是否可自动继续 */
   canResumeAutomatically: boolean;
   /** 必须人工确认的原因（空数组 = 无需确认） */
@@ -122,6 +129,9 @@ export function buildTaskRecoveryReport(
   const unresolvedOperations = store.ledger
     .listBySession(session.id)
     .filter((op) => op.status === "pending" || op.status === "unknown");
+  // 三态归因必须看全量台账行：只看未决项会把已 succeeded / failed 的行误判成
+  // 「无台账行」，文案与真实恢复路径反向。
+  const ledgerRows = store.ledger.listBySession(session.id);
 
   const requiresConfirmation: string[] = [];
   const notes: string[] = [];
@@ -139,12 +149,29 @@ export function buildTaskRecoveryReport(
   // pending_tools 里有、但台账没有任何记录的调用：台账在 executor 里紧挨着
   // 副作用之前写，因此「有 intent、无台账行」只能说明进程**在开始这一步的
   // 副作用之前**就死了 —— 安全，重跑一次即可，不作为阻塞项，但要留痕。
+  //
+  // 台账**有行**时按三态归因，绝不套用「无台账行」的文案：
+  //   succeeded → 已成功，恢复跳过；failed → 上次失败，恢复重跑；
+  //   pending / unknown → 上面 unresolvedOperations 已经写过确认项。
   for (const pending of pendingTools) {
     if (pending.sideEffect === "none") continue;
-    const hasRecord = unresolvedOperations.some(
-      (op) => op.operationKey === pending.operationKey,
-    );
-    if (hasRecord) continue;
+    const ledgerRow = pending.operationKey
+      ? latestLedgerRow(ledgerRows, pending.operationKey)
+      : null;
+    if (ledgerRow) {
+      if (ledgerRow.status === "succeeded") {
+        notes.push(
+          `待办工具 ${pending.toolName}（operation_key=${pending.operationKey}）台账已 succeeded：` +
+            `副作用的最终结果已记录，恢复时命中台账**跳过**重复执行（不重跑）。`,
+        );
+      } else if (ledgerRow.status === "failed") {
+        notes.push(
+          `待办工具 ${pending.toolName}（operation_key=${pending.operationKey}）台账上次 failed：` +
+            `失败不等于已生效，恢复时**重跑**该步。`,
+        );
+      }
+      continue;
+    }
     notes.push(
       `待办工具 ${pending.toolName}（stepId=${pending.stepId}）已写入 intent 但无台账行：` +
         `判定为「副作用开始前中断」，重跑安全。`,
@@ -157,7 +184,7 @@ export function buildTaskRecoveryReport(
   for (const orphan of orphans) {
     const kind = sideEffectOf?.(orphan.toolName);
     if (kind === "none" || kind === "idempotent") continue;
-    const tracked = unresolvedOperations.some((op) => op.toolName === orphan.toolName);
+    const tracked = ledgerRows.some((op) => op.toolName === orphan.toolName);
     if (tracked) continue;
     requiresConfirmation.push(
       `orphan 工具调用 ${orphan.toolName}（toolUseId=${orphan.toolUseId}）无对应工具结果，` +
@@ -173,8 +200,29 @@ export function buildTaskRecoveryReport(
     orphans,
     pendingTools,
     unresolvedOperations,
+    ledgerRows,
     canResumeAutomatically: requiresConfirmation.length === 0,
     requiresConfirmation,
     notes,
   };
+}
+
+/**
+ * 按幂等键取最新一条台账行（与 `SqliteOperationLedger.lookup` 同口径：
+ * `started_at` 降序取首条）。
+ *
+ * @param rows - 会话全量台账行
+ * @param operationKey - 幂等键
+ * @returns 命中的最新一行；无命中返回 null
+ */
+function latestLedgerRow(
+  rows: readonly OperationRecord[],
+  operationKey: string,
+): OperationRecord | null {
+  let latest: OperationRecord | null = null;
+  for (const row of rows) {
+    if (row.operationKey !== operationKey) continue;
+    if (!latest || row.startedAt >= latest.startedAt) latest = row;
+  }
+  return latest;
 }

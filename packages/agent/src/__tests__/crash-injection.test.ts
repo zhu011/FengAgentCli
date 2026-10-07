@@ -304,6 +304,11 @@ describe("崩溃注入：子进程硬中断 + 全新连接恢复", () => {
     expect(report.canResumeAutomatically).toBe(true);
     expect(report.unresolvedOperations).toHaveLength(0);
     expect(report.pendingTools).toHaveLength(1);
+    // 归因按台账三态：有行且 succeeded → 「已成功，恢复跳过」，不是「无台账行」
+    expect(report.ledgerRows).toHaveLength(1);
+    expect(report.notes.join(" ")).toContain("succeeded");
+    expect(report.notes.join(" ")).toContain("跳过");
+    expect(report.notes.join(" ")).not.toContain("无台账行");
 
     // 恢复轮：重新发起同一调用 → 命中台账 → 跳过执行
     const events = await runRecoveryRound(store, sessionStore);
