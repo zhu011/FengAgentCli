@@ -327,7 +327,9 @@ describe("会话间真并发 + 按会话隔离（AGE-29 后台运行重做）", 
     const started = manager.startMessageRun(sid, "hello");
     expect(started.ok).toBe(true);
     await waitFor(() => got1.some((e) => e.type === "session-start"));
-    expect(got1.some((e) => e.type === "message-start")).toBe(true);
+    // message-start 经异步边界随后到达（session-start 与 message-start 之间有 await 间隙），
+    // 直接断言会在并行全量负载下时序竞态 —— 等 it 落地再断开（DSH 诊断，AGE-29）
+    await waitFor(() => got1.some((e) => e.type === "message-start"));
     unsub1(); // 模拟客户端断开
 
     // 订阅者 2 晚加入：订阅瞬间应同步回放本次运行已产生的事件
