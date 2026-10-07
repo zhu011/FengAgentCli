@@ -16,7 +16,7 @@
 | `config.ts` | `ConfigSchema`（Zod）、`Config` 类型、`loadConfig()` |
 | `permission.ts` | `Permission`、`PermissionResult`（allow / deny / ask） |
 | `task-state.ts` | `TaskState`（`core_intent` 只读锚点 / `current_subtask` / `pending_tools` / `completed_steps` / `context_snapshot` / `state_version`）、`task/*` 事件词汇、纯函数 reducer `reduceTaskState` / `replayTaskState` |
-| `operation-ledger.ts` | `SideEffectKind`、`OperationLedger` 接口、`OperationRecord`、`decideOperationReplay()`、`deriveOperationKey()` |
+| `operation-ledger.ts` | `SideEffectKind`、`OperationLedger` 接口、`OperationRecord`、`decideOperationReplay()`、`deriveOperationKey()`、`inputFingerprint()`（可读前缀 + 全量入参 FNV-1a 摘要）、`fnv1aHash()` |
 
 ### 核心接口
 
@@ -195,7 +195,7 @@ Windows PowerShell 5.1 不支持 `&&`，描述里显式提示改用 `;`。每次
 | `Agent` | `agent.ts` | Agent 类：状态管理、事件发射、会话生命周期 |
 | `SessionStore` | `session.ts` | SQLite 会话持久化（`bun:sqlite`） |
 | `TaskStore` | `task-store.ts` | SQLite 任务状态仓（`task_states` / `task_events`，`state_version` 乐观锁）+ 副作用台账 `SqliteOperationLedger`（`operation_ledger`，`operation_key` 唯一索引） |
-| `buildTaskRecoveryReport` | `task-recovery.ts` | 恢复核对：orphan 工具调用检测 + 台账未决项 + 强制人工确认清单 |
+| `buildTaskRecoveryReport` | `task-recovery.ts` | 恢复核对：orphan 工具调用检测 + 台账未决项 + 待办 intent 的台账三态归因（succeeded / failed / 无行）+ 强制人工确认清单 |
 | `AgentDefinition` | `agent-definition.ts` | 从 `.fengagent/agents/*.md` 加载 Agent 定义 |
 | `PluginLoader` | `plugin-loader.ts` | 从 `.fengagent/plugins/` 加载插件 |
 

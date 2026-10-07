@@ -14,6 +14,7 @@
 4. [扩展点设计](#4-扩展点设计)
 5. [配置系统设计](#5-配置系统设计)
 6. [关键技术方案](#6-关键技术方案)
+7. [任务可安全恢复](#7-任务可安全恢复)
 
 ---
 
@@ -1428,3 +1429,163 @@ function findCutPoint(messages: Message[], keepTokens: number): number {
 - 未来如需更复杂的服务组合可渐进引入
 
 **影响**：手动管理依赖注入和错误处理，代码量略多但更直观。
+
+---
+
+## 7. 任务可安全恢复
+
+历史消息只是**原始记录**。任务目标、当前步骤、待调用工具、已完成的动作都埋在
+自然语言里，进程崩溃后没有任何结构化依据可判断「哪一步已经落过副作用」——
+重放只能是赌博。本章把这层补上。
+
+### 7.1 三层事实
+
+| 层 | 载体 | 回答的问题 |
+|----|------|-----------|
+| 会话消息 | `sessions.db`（读模型）+ 事件日志（事实源） | 聊过什么 |
+| **任务状态** | `task_states` + `task_events`（`task/*` 事件） | 任务到哪一步了 |
+| **副作用台账** | `operation_ledger` | 这一步的外部动作到底做没做 |
+
+三层都在同一个数据根下（`tasks.db` 与会话库并排），表名互不重叠，
+`CREATE TABLE IF NOT EXISTS` —— 老库开箱可用，无需迁移。
+
+### 7.2 结构化任务状态（TaskState）
+
+`TaskState`（`packages/core/src/task-state.ts`）字段：
+
+| 字段 | 语义 |
+|------|------|
+| `core_intent` | **只读锚点**：任务核心意图，创建后任何事件都改不动（二次 `task/created` 直接抛 `TaskStateError`） |
+| `current_subtask` | 当前子任务 |
+| `pending_tools` | 已写 intent、尚未结算的工具调用（**执行之前**写入） |
+| `completed_steps` | 已结算的步骤（intent / outcome / toolUseIds / finishReason） |
+| `context_snapshot` | 结构化上下文快照，恢复时直接可用 |
+| `state_version` | 单调递增，checkpoint 的乐观锁版本 |
+
+状态只能经 `task/*` 事件推进，reducer 是**纯函数**（不读墙钟、不读随机数）：
+`replayTaskState(events)` 与实时推进的状态逐字节一致。词汇同时登记在
+`packages/events` 的 `SESSION_EVENT_TYPES` 里，与既有事件同源同序。
+
+### 7.3 最小可恢复单位 = 一个 LLM 步 + 它的工具批次
+
+```
+task/checkpoint(intent)          ← 步前：本步打算做什么
+task/pending[...]                ← 工具批次**执行之前**写下（含 operation_key）
+        ── 工具执行（副作用发生）──
+task/step-completed(outcome)     ← 步后：本步结果，pendingTools 随之清空
+task/checkpoint(outcome)
+```
+
+「工具已执行、turn 未落盘」的窗口里，磁盘上恰好停在 `task/pending` 之后：
+这就是恢复端判定「本步副作用可能已发生」的唯一依据。
+
+### 7.4 副作用台账与 `operation_id`
+
+写外部系统的工具在 `ToolDefinition` 上声明副作用类别与幂等键：
+
+```ts
+sideEffect(input): "none" | "idempotent" | "non-idempotent"
+operationKey(input): string   // 缺省 = 工具名 + 稳定序列化入参
+```
+
+执行顺序是安全性的全部来源 —— **先记账、再执行**：
+
+```
+begin(operation_id, operation_key)  →  status=pending     ← 必须在副作用之前
+execute()                           →  副作用发生
+complete(digest, result)            →  status=succeeded
+（执行报错：幂等 → failed，可重试；非幂等 → unknown，不允许静默重放）
+```
+
+幂等键由**内容**派生（不掺 `toolUseId` / 时间戳），因此崩溃恢复后模型重新发起
+的同一调用必然命中同一条记录。类目键缺省形如 `<工具名>::<入参指纹>`，入参指纹
+是「短可读前缀 + `#` + **全量入参**的 FNV-1a 32 位摘要」（`inputFingerprint`）：
+前缀只是给人扫键用的修饰，**哈希覆盖完整入参**——只截断不哈希会让「长前缀相同、
+尾部不同」的两次调用撞同一个键，恢复时命中的是别人的 `succeeded` 记录，副作用
+漏做且无人察觉。唯一索引落在 `operation_key` 上，并发进入也只有一条 —— 去重在
+存储层，不依赖调用方自觉。
+
+### 7.5 恢复决策
+
+`decideOperationReplay(record, kind)` 是唯一分派点：
+
+| 台账状态 | `none` / 未命中 | `idempotent` | `non-idempotent` |
+|----------|----------------|--------------|------------------|
+| 无记录 | 执行 | 执行 | 执行 |
+| `succeeded` | 跳过（复用记录结果） | 跳过 | **跳过** |
+| `failed` | 执行 | 执行（重置为 pending） | 执行 |
+| `pending` / `unknown` | 执行 | 重放（沿用同一 `operation_id`） | **强制人工核对** |
+
+非幂等的未决记录返回 `metadata.operationReviewRequired = true` 且标
+`unrecoverable`：执行器**拒绝执行**，循环层立即结算并把任务置为 `blocked`。
+这是「不许静默重放」在执行路径上的落点，不是一句文档承诺。
+
+### 7.6 未决调用核对（orphan 检测）
+
+`buildTaskRecoveryReport(store, session, sideEffectOf)` 把三份事实对到一起：
+消息历史里「有 tool-use 无 tool-result」的 orphan、`pending_tools`、
+台账里 `pending`/`unknown` 的记录。只要存在**非幂等**工具的未决记录，
+`canResumeAutomatically = false`，原因写入 `requiresConfirmation`
+（每一条都可读、可展示给用户），调用方必须显式确认才能继续。
+
+`pending_tools` 里的每条 intent 按台账**三态**归因（读全量 `ledgerRows`，
+不是只读未决项）：有行且 `succeeded` → 「已成功，恢复跳过」；有行且 `failed`
+→ 「上次失败，恢复重跑」；**没有对应行** → 进程死在 executor 记账之前，
+副作用没开始，重跑安全。三者都记入 `notes` 而不阻塞。归因必须看全量行：
+只看未决项会把已结算的记录当成「无行」，文案与真实恢复路径正好相反。
+
+### 7.7 session / task 分层
+
+会话（`session_id`）是对话容器，任务（`task_id`）是可恢复单元：
+一个会话映射一个任务（`getTaskBySession`），子 Agent 的每次派遣也是一个
+`task_id`。`task` 工具的 `task_id` 参数**真的**会接着同一个子会话跑
+（注入会话仓 + 任务仓时）；拿不到落盘记录时结果里如实回报
+`resumed="false"` 与原因，而不是静默新建却宣称续跑。
+
+### 7.8 验收
+
+```bash
+bun test packages/core/src/__tests__/task-state.test.ts        # 块 1/2：锚点、重放对拍、版本单调
+bun test packages/core/src/__tests__/operation-ledger.test.ts  # 块 3：恢复决策、幂等键稳定性
+bun test packages/agent/src/__tests__/task-store.test.ts       # 块 1/2/3/4：乐观锁、台账去重、orphan
+bun test packages/tools/src/__tests__/operation-ledger-gate.test.ts # 块 3：先记账再执行、人工核对闸
+bun test packages/agent/src/__tests__/task-resume.test.ts      # 块 5：task_id 真恢复 / 未恢复如实回报
+bun test packages/agent/src/__tests__/crash-injection.test.ts  # 块 6：子进程硬中断 + 全新连接恢复
+```
+
+块 6 的崩溃注入走**独立子进程的 `process.exit`**（不经任何 catch/finally），
+恢复走全新连接 + 全新 `TaskStore` 实例，断言的是外部副作用计数：
+
+| 点位 | 中断时刻 | 台账 | 恢复行为 | 副作用计数 |
+|------|---------|------|---------|-----------|
+| ① | 台账 begin 后、副作用前 | pending | 人工核对闸挡住 | 保持 0 |
+| ② | 副作用已发生、工具未返回 | pending | 人工核对闸挡住 | 保持 1 |
+| ③ | 工具结果已产出、turn 未落盘 | succeeded | 自动恢复 + 跳过 | 保持 1 |
+
+变体：幂等工具在 ② 窗口 → 允许重放，外部状态仍只有 1 条。
+
+**已知边界**：跨进程恢复依赖会话库落在宿主指定的数据根
+（daemon 注入 `MULTICA_DSH_SESSION_ROOT` + `MULTICA_TOKEN`）。该前置未落地前，
+上述 1–6 块按「进程内恢复」验收；跨进程一格标注为待平台侧前置。
+
+---
+
+---
+
+### ADR-005: 任务状态 / 副作用台账作为恢复的唯一依据
+
+- **背景**：崩溃后靠自然语言历史判断「哪一步做过」不可靠；
+  「工具已执行、turn 未落盘」窗口下重放会把外部副作用做两遍；
+- **决策**：新增 `TaskState`（只读锚点 + 步级 checkpoint + `state_version` 乐观锁）
+  与 `operation_ledger`（执行**前**记账、内容派生幂等键、非幂等未决强制人工核对）；
+  未注入任务仓时三者全部旁路，行为与历史完全一致；
+- **收益**：崩溃窗口的副作用从「靠运气」变成「存储层保证只发生一次」，
+  且验收物是子进程硬中断 + 全新连接的可复现用例，而不是日志里的一句「已跳过」。
+
+### ADR-006: `task_id` 是恢复单元，不是一句宣传
+
+- **背景**：`task` 工具描述曾声称「传 `task_id` 会继续同一个子会话」，
+  实现却每次 `createSession` 新建 —— 说了续跑、实际失忆；
+- **决策**：注入会话仓 + 任务仓时按 `task_id` 读回子会话续跑；拿不到记录时
+  在结果里如实回报 `resumed="false"` 与原因，绝不静默宣称续跑；
+- **收益**：多 Agent 的长任务可以真的分段推进，模型不会被「以为上下文还在」误导。
