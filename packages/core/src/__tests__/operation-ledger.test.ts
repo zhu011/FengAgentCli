@@ -5,7 +5,9 @@
  * 1. 恢复决策四分派：无记录→执行 / 已成功→跳过 / 未决+幂等→重放 /
  *    未决+非幂等→**强制人工核对**；
  * 2. 幂等键是内容派生的（跨进程稳定）——不掺 toolUseId / 时间戳；
- * 3. 入参键序不影响幂等键（同一逻辑操作必须算出同一个 key）。
+ * 3. 入参键序不影响幂等键（同一逻辑操作必须算出同一个 key）；
+ * 4. 入参指纹对**全量**入参做 FNV-1a 哈希：长前缀 + 不同尾部不得撞键，
+ *    可读前缀只是修饰（回归：截断式指纹会让两次不同操作静默共键）。
  */
 
 import { describe, expect, test } from "bun:test";
@@ -13,6 +15,7 @@ import {
   decideOperationReplay,
   deriveOperationKey,
   digestResult,
+  fnv1aHash,
   inputFingerprint,
 } from "../operation-ledger.ts";
 import type { OperationRecord } from "../operation-ledger.ts";
@@ -102,9 +105,38 @@ describe("幂等键派生", () => {
     );
   });
 
-  test("超长入参被截断（键长度有界）", () => {
+  test("超长入参：键长有界（可读前缀 + 全量哈希）", () => {
     const key = deriveOperationKey("t", { blob: "x".repeat(5000) });
-    expect(key.length).toBeLessThanOrEqual("t::".length + 512);
+    // 前缀截断 + "…#" + 8 位十六进制 → 远小于线性长度
+    expect(key.length).toBeLessThanOrEqual("t::".length + 64 + "…#".length + 8);
+  });
+
+  test("长前缀 + 不同尾部入参 **不撞键**（旧实现对 512 字符截断会撞）", () => {
+    const head = "y".repeat(4000);
+    // 两者前 512 个字符逐字节相同，只有尾部不同 —— 截断式指纹必然同键
+    const a = { action: "append", body: `${head}-TAIL_ALPHA` };
+    const b = { action: "append", body: `${head}-TAIL_BETA` };
+    expect(inputFingerprint(a, 512).slice(0, 512)).toBe(
+      inputFingerprint(b, 512).slice(0, 512),
+    );
+    // 哈希覆盖全量入参 → 键必须不同，恢复时不会被静默误判为「已成功 → 跳过」
+    expect(deriveOperationKey("external_write", a)).not.toBe(
+      deriveOperationKey("external_write", b),
+    );
+    expect(inputFingerprint(a)).not.toBe(inputFingerprint(b));
+  });
+
+  test("指纹带可读前缀 + 8 位十六进制摘要（人眼可扫键）", () => {
+    const fp = inputFingerprint({ key: "k1" });
+    expect(fp.startsWith('{"key":"k1"}')).toBe(true);
+    expect(fp).toMatch(/…#[0-9a-f]{8}$/);
+    expect(fp).toContain(fnv1aHash('{"key":"k1"}'));
+  });
+
+  test("哈希跨调用稳定：同一入参两次派生逐字节相同", () => {
+    const input = { nested: { b: [1, 2, 3], a: "x" }, flag: true };
+    expect(inputFingerprint(input)).toBe(inputFingerprint(input));
+    expect(fnv1aHash("fengagent")).toBe(fnv1aHash("fengagent"));
   });
 
   test("循环引用入参不抛（降级为 String）", () => {
