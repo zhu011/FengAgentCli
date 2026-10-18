@@ -204,6 +204,45 @@ describe("ReflectionStore — 注入闭环与事件流", () => {
     expect(picked.map((c) => c.id)).toEqual([unsafe.id, failed.id]);
     store.close();
   });
+
+  test("recordInjection 撞上并发 CAS 时重试成功（不是静默丢一次注入）", () => {
+    const store = new ReflectionStore(dbPath, { now: () => 2_000 });
+    const card = store.create(input());
+
+    // 模拟「读到的 revision 已陈旧」：第一次 CAS 必冲突，之后放行
+    let conflicted = 0;
+    const realTransition = store.transition.bind(store);
+    store.transition = ((id, expected, patch, at) => {
+      if (conflicted === 0) {
+        conflicted++;
+        // 别的写入者抢先把 revision 推进了一格（只改 lesson，不动注入计数）
+        realTransition(id, expected, { lesson: "被别人先写了" }, at);
+        throw new ReflectionError("stale revision", "stale_revision");
+      }
+      return realTransition(id, expected, patch, at);
+    }) as typeof store.transition;
+
+    const updated = store.recordInjection([card.id], "session-race", 2_100);
+
+    expect(conflicted).toBe(1); // 真的撞了一次
+    expect(updated).toBe(1); // 重试后记上了
+    const after = store.get(card.id)!;
+    expect(after.status).toBe("injected");
+    expect(after.effect?.injectedCount).toBe(1);
+    expect(store.events(card.id).at(-1)!.type).toBe("reflect/injected");
+    store.close();
+  });
+
+  test("recordInjection 持续冲突 → 有界重试后放弃这张卡，不抛给主流程", () => {
+    const store = new ReflectionStore(dbPath, { now: () => 3_000 });
+    const card = store.create(input());
+    store.transition = (() => {
+      throw new ReflectionError("always stale", "stale_revision");
+    }) as typeof store.transition;
+
+    expect(store.recordInjection([card.id], "session-stuck", 3_100)).toBe(0);
+    store.close();
+  });
 });
 
 describe("ReflectionStore — 作用域隔离", () => {

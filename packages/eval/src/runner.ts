@@ -220,7 +220,7 @@ export async function runTestSet(options: RunTestSetOptions): Promise<TestSetRun
   let aborted = false;
   let abortReason: string | undefined;
 
-  for (const testCase of cases) {
+  for (const [index, testCase] of cases.entries()) {
     if (aborted) break;
 
     // 成本/耗时上限
@@ -235,7 +235,8 @@ export async function runTestSet(options: RunTestSetOptions): Promise<TestSetRun
       break;
     }
 
-    const caseId = caseIdOf(testCase);
+    // 用例 id：必须带下标，否则没写 id 的用例全叫 case-0（trace 文件互相覆盖）
+    const caseId = caseIdOf(testCase, index);
     const caseStart = now();
     let events: AgentEvent[] = [];
     let finalText = "";

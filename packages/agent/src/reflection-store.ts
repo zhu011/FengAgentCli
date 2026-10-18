@@ -121,6 +121,9 @@ export interface ReflectionStoreOptions {
 /** 默认存活期：14 天（与 FENG_REFLECT_TTL_MS 默认一致） */
 const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
+/** `recordInjection` 的「读 → CAS」重试次数（并发注入时重读最新 revision 再试） */
+const RECORD_INJECTION_ATTEMPTS = 3;
+
 function safeParse<T>(text: string): T {
   return JSON.parse(text) as T;
 }
@@ -391,6 +394,10 @@ export class ReflectionStore {
   /**
    * 记录一次注入（状态 → injected，`effect.injectedCount` 累加）。
    *
+   * 「读 → CAS」是两步：真正并发注入同一张卡时，后到的一方会撞上 `stale_revision`。
+   * 这里做**有界重试**（重读最新 revision 再试），重试仍冲突就放弃这张卡 ——
+   * 注入记账不是主线事务，不该把异常抛给对话主循环。
+   *
    * @param ids - 本轮注入的卡片 id
    * @param sessionId - 注入到的会话
    * @param at - 时间戳
@@ -400,20 +407,32 @@ export class ReflectionStore {
     const when = at ?? this.now();
     let updated = 0;
     for (const id of ids) {
-      const card = this.get(id);
-      if (!card) continue;
-      const effect: ReflectionEffect = {
-        injectedCount: (card.effect?.injectedCount ?? 0) + 1,
-        lastInjectedAt: when,
-      };
-      this.transition(
-        id,
-        card.revision,
-        { status: card.status === "adopted" ? "adopted" : "injected", effect },
-        when,
-      );
-      this.appendEvent({ type: "reflect/injected", cardId: id, sessionId, at: when });
-      updated++;
+      for (let attempt = 0; attempt < RECORD_INJECTION_ATTEMPTS; attempt++) {
+        const card = this.get(id);
+        if (!card) break; // 卡片不存在/已删除 → 跳过，不算更新
+        const effect: ReflectionEffect = {
+          injectedCount: (card.effect?.injectedCount ?? 0) + 1,
+          lastInjectedAt: when,
+        };
+        try {
+          this.transition(
+            id,
+            card.revision,
+            { status: card.status === "adopted" ? "adopted" : "injected", effect },
+            when,
+          );
+        } catch (err) {
+          if (err instanceof ReflectionError && err.code === "stale_revision") {
+            // 版本陈旧 → 重读最新 revision 再试；重试用尽就放弃这张卡
+            if (attempt < RECORD_INJECTION_ATTEMPTS - 1) continue;
+            break;
+          }
+          throw err;
+        }
+        this.appendEvent({ type: "reflect/injected", cardId: id, sessionId, at: when });
+        updated++;
+        break;
+      }
     }
     return updated;
   }

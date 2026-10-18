@@ -1,7 +1,8 @@
 # AGE-29 · RSI 首期交付记录（P0 自省卡 + P1 验证闸）
 
 范围：阶段 1（P0 自省卡）+ 阶段 2（P1 测试集执行器 / 最小变更器 / 验证闸）。
-分支：`refactor/cordis-graph-architecture`，交付提交 `6cddd5a`（基于 `ba5c61d`）。
+分支：`refactor/cordis-graph-architecture`，首期交付提交 `6cddd5a`（基于 `ba5c61d`）；
+运行态接线（第五节）为第二次交付，提交见 `git log` 的 `feat(rsi,wire)`。
 
 ## 一、这一期到底补了哪两段断链
 
@@ -28,7 +29,7 @@
 | 类型 + 事件词汇 | `packages/core/src/reflection.ts` | `ReflectionCard`（`revision` 乐观锁）、`REFLECT_EVENT_TYPES`（created/updated/injected/expired/adopted/rejected）、`hasReflectionEvidence` / `isReflectionInjectable` / `reflectionRank` |
 | 存储 | `packages/agent/src/reflection-store.ts` | `reflections` + `reflection_events`；`create` 走证据门（无证据抛 `evidence_required`），`ingest` 无证据返回 `null`；`transition` 用 `UPDATE ... WHERE id=? AND revision=?`（changes=0 → `stale_revision`）；`expireDue` 做 TTL 清理并留痕；`recordInjection` 写回 `effect.injectedCount` |
 | 注入 | `packages/context/src/reflection.ts` | 排序 = 严重度（unsafe 100 / human_negative 90 / judge_failed 80 / test_failed 70 / guard_tripped 60）× 证据数 × 新近度；硬预算 ≤5 条 / ≤600 token；超出时「截断该卡 lesson（留省略号）」或「剩余 < 40 token 直接丢弃」 |
-| 装配 | `packages/server/src/create-runtime-agent.ts`、`packages/cli/src/acp-mode.ts` | 每轮重载重新取可注入卡；store 异常降级为无卡，不打断主循环 |
+| 装配 | `packages/server/src/create-runtime-agent.ts`、`packages/cli/src/acp-mode.ts` | 每轮重载重新取可注入卡；store 异常降级为无卡，不打断主循环；装配完成后按实际注入卡 id 调 `recordInjection`（见 5.2） |
 | 卡从哪来 | `packages/eval/src/reflect-cards.ts` | `failed/partial/tool_misused/inefficient → judge_failed`，`unsafe → judge_unsafe`；judge **调用失败**（`LLM_FAILURE_NOTE_PREFIX`）不入卡 |
 
 开关与数据落点（`packages/shared/src/reflect-env.ts`）：
@@ -128,3 +129,69 @@ bun test                       → 1255 pass / 0 fail / 91 files（31s）
    `gate.test.ts` 的确定性假数据覆盖。
 5. **meta 层（阶段 3：版本化继承 / 结果记忆 / 阈值元学习）未做**：`revision` + 事件流 + 实验台账
    已经把「版本 / 效果」的数据结构准备好，但尚无版本注册表与阈值校准。
+
+## 五、第二次交付：运行态接线（补齐「默认运行下闭环真的通」）
+
+首期验收结论是「机制层 A/B/C 全过，但运行态接线缺失」——默认运行下 `reflections.db` 永远为空、
+无卡生产者、无注入记账。这一节记录补接线后的**运行态事实**（代码落点 + 默认路径证据）。
+
+### 5.1 产卡跳：`runEval --judge` 真的执行用例并产卡
+
+| 环节 | 落点 | 说明 |
+|---|---|---|
+| 串联 | `packages/eval/src/reflect-pipeline.ts` | `runTestSetCards`：读测试集 → `runTestSet` 真跑 → 用例判分 → `cardsFromJudgeResults` → `ingestCard` |
+| 用例判分 | `packages/eval/src/judge.ts` → `judgeCaseTrace` | 按**真跑 trace**（输入/期望/步数/token/最终文本）判分；模型只回 thinking 或空响应 → 记 `LLM 调用失败`（**不产卡**，铁律 1） |
+| 证据 | `reflect-cards.ts` 的 `evidenceRef` | 证据指针 = 真跑落盘的 `<数据根>/reflect/traces/<测试集>/<用例>.trace.json`，可回查 |
+| 接线根 | `eval/src/index.ts`（CLI 装配根） | `wireCardPipeline` 建真 `ReflectionStore` + 每用例一个真 `Agent`（隔离会话、不落会话库），`ingestCard = store.ingest` |
+| 无日志也能产卡 | `runEval` | 以前没有 `llm-trace-*.jsonl` 就 `exit(1)`；现在有测试集就走产卡跳（不再依赖历史日志） |
+
+默认路径实测（`FENG_DATA_DIR` 指向临时数据根，测试集 1 条故意不达标的用例）：
+
+```
+bun run eval --judge --max-cases=1
+==== 测试集真跑 → 自省卡（RSI 产卡跳）====
+  测试集 rsi-smoke: 跑 1 条（通过 0 / 失败 1，1.0 步、1439 token） → 产卡 1 张、入库 1 张
+```
+
+库里随即出现 1 行 `reflections`（`status=proposed`，`evidence` 指向 `.../traces/rsi-smoke/s1.trace.json`）
+与 1 条 `reflect/card-created` 事件。
+
+### 5.2 记账跳：装配后按实际注入卡 id 调 `recordInjection`
+
+| 环节 | 落点 | 说明 |
+|---|---|---|
+| 注入结果外露 | `context/src/system-context.ts` → `onReflectionInjected` | 只有**真的注入了卡**（小节非空）才回调一次；关开关/无卡/预算丢光不回调 |
+| 会话归属 | `context/src/manager.ts` → `ReflectionInjectionRecord` | 系统提示按实例缓存，`assemble(session)` 是唯一知道会话 id 的地方：装配完成后记账一次并清空（不会被每步放大 `injectedCount`） |
+| 三个装配点 | `server/src/create-runtime-agent.ts`、`cli/src/acp-mode.ts`、`eval/index.ts`（评测 Agent） | 回调里 `store.recordInjection(cardIds, sessionId)`，异常只 warn 不打断 |
+| 并发 | `agent/src/reflection-store.ts` | 「读 → CAS」改为**有界重试**（3 次），仍冲突就放弃这张卡的记账，不抛给主循环 |
+
+默认路径实测（同一数据根再跑一次 `--judge`）：上一轮产出的卡被注入，卡片 `status` 变 `injected`、
+`effect.injectedCount=1`，事件流出 `reflect/injected`（带会话 id）；该轮 token 也从 1439 → 2045
+（注入小节真的进了上下文）。
+
+### 5.3 顺手修掉的次要项
+
+- **A8 保留项**：`create-runtime-agent.ts` 的 `ReflectionStore` 构造包了 try/catch —— 库打不开只
+  warn，`reflectionStore` 降级为 `null`，Agent 照常创建（有测试：把 `<数据根>/reflect` 做成文件）。
+- **`caseIdOf` 缺 index**：`runTestSet` 现在传下标，无名用例是 `case-0/case-1…`，trace 文件不再互相覆盖。
+- **gate 成本上限**：基线双集也受 `maxExperimentTokens` 约束（此前基线自身不受限）。
+- **双集重叠校验**：`runVerificationGate` 新增可选 `heldInCaseIds` / `heldOutCaseIds`，重叠即拒绝 +
+  留痕（拿同一批题自证不算独立验证）。
+- **测试集 BOM**：`parseTestSet` 剥 UTF-8 BOM —— Windows 编辑器存的测试集不再静默变成「无可用用例」。
+
+### 5.4 本轮证据
+
+- `bun test` = **1275 pass / 0 fail / 92 files**（首期 1255/0/91 → 新增 20 条用例、1 个测试文件）；
+  `bun run typecheck` = 0 error。
+- 新增/补充的定向用例：`eval/reflect-pipeline.test.ts`（产卡跳 + `runEval` 默认路径）、
+  `context/reflection-inject.test.ts`（注入记账三态）、`server/reflect-loop.test.ts`（装配 → 记账 →
+  事件流 + 计数不被每步放大）、`cli/runtime-agent.test.ts`（A8 降级 + 装配点记账）、
+  `eval/gate.test.ts`（重叠拒绝 + 成本约束基线）、`agent/reflection-store.test.ts`（CAS 重试）。
+
+### 5.5 仍然没做的（不粉饰）
+
+- `runVerificationGate` 仍无 CLI 子命令（实验触发仍需调用方）；`runEval` 只补了「产卡跳」，
+  没顺手把验证闸也接进 CLI。
+- 评测 Agent 不吃会话库（避免污染会话列表），所以评测期间的注入记账只出现在
+  `reflection_events`，不产生会话记录。
+- 阶段 3（版本化继承 / 阈值元学习）依旧未做。

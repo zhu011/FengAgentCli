@@ -216,6 +216,113 @@ describe("P0 闭环：证据 → 自省卡 → 注入下一轮", () => {
 });
 
 // ──────────────────────────────────────────────
+// 2b. 注入记账（运行态接线）：装配 → recordInjection → 卡片 injected + 事件流
+// ──────────────────────────────────────────────
+
+describe("P0 注入记账：装配后按实际注入卡 id 记账", () => {
+  /** 与装配点同口径的 context manager（真 store + 真注入 + 真记账） */
+  function makeRecordingManager(llm: ScriptedLLM) {
+    return createContextManager({
+      config: {
+        contextWindow: CONFIG.contextWindow,
+        compactThreshold: CONFIG.compactThreshold,
+        compactKeepTokens: CONFIG.compactKeepTokens,
+        disableCompact: true,
+        smallModel: CONFIG.smallModel,
+      },
+      summaryGenerator: llm,
+      systemContextOptions: {
+        workdir,
+        loadMemory: false,
+        loadAgentsMd: false,
+        reflectDataRoot: dataRoot,
+        reflections: () => {
+          store.expireDue();
+          return store.selectForInjection({ at: Date.now() });
+        },
+      },
+      onReflectionInjected: ({ sessionId, cardIds }) => {
+        if (cardIds.length === 0) return;
+        store.recordInjection(cardIds, sessionId);
+      },
+    });
+  }
+
+  test("装配 → 卡片进 injected + reflect/injected 事件 + injectedCount=1", async () => {
+    const card = store.ingest({
+      trigger: "judge_failed",
+      lesson: "装配后要记账，否则 injectedCount 恒为 0",
+      evidence: [{ kind: "trace", ref: "trace-record-1" }],
+    })!;
+    const cm = makeRecordingManager(new ScriptedLLM());
+    const session = createSession("test-model");
+
+    const ctx = await cm.assemble(session);
+    expect(ctx.system).toContain("装配后要记账");
+
+    const reloaded = store.get(card.id)!;
+    expect(reloaded.status).toBe("injected");
+    expect(reloaded.effect?.injectedCount).toBe(1);
+    expect(store.events(card.id).map((e) => e.type)).toEqual([
+      "reflect/card-created",
+      "reflect/card-updated",
+      "reflect/injected",
+    ]);
+    const injected = store.events(card.id).at(-1) as { sessionId?: string };
+    expect(injected.sessionId).toBe(session.id);
+  });
+
+  test("系统提示缓存命中时不再记账（injectedCount 不被每步放大）", async () => {
+    const card = store.ingest({
+      trigger: "judge_failed",
+      lesson: "一步一记账会把计数刷爆",
+      evidence: [{ kind: "trace", ref: "t-2" }],
+    })!;
+    const cm = makeRecordingManager(new ScriptedLLM());
+    const session = createSession("test-model");
+    await cm.assemble(session);
+    await cm.assemble(session);
+    await cm.assemble(session);
+    expect(store.get(card.id)!.effect?.injectedCount).toBe(1);
+
+    // 显式失效缓存 → 重新注入 → 再记一次（下一轮真的又注入了才该 +1）
+    cm.invalidateSystemPrompt();
+    await cm.assemble(session);
+    expect(store.get(card.id)!.effect?.injectedCount).toBe(2);
+  });
+
+  test("记账失败不打断装配（store 记账口抛错 → 系统提示照常返回）", async () => {
+    store.ingest({
+      trigger: "judge_failed",
+      lesson: "记账炸了也不能挡住对话",
+      evidence: [{ kind: "trace", ref: "t-3" }],
+    });
+    const broken = createContextManager({
+      config: {
+        contextWindow: CONFIG.contextWindow,
+        compactThreshold: CONFIG.compactThreshold,
+        compactKeepTokens: CONFIG.compactKeepTokens,
+        disableCompact: true,
+        smallModel: CONFIG.smallModel,
+      },
+      summaryGenerator: new ScriptedLLM(),
+      systemContextOptions: {
+        workdir,
+        loadMemory: false,
+        loadAgentsMd: false,
+        reflectDataRoot: dataRoot,
+        reflections: () => store.selectForInjection({ at: Date.now() }),
+      },
+      onReflectionInjected: () => {
+        throw new Error("写库失败");
+      },
+    });
+    const ctx = await broken.assemble(createSession("test-model"));
+    expect(ctx.system).toContain("过往教训");
+  });
+});
+
+// ──────────────────────────────────────────────
 // 3. 测试集执行器：真跑 AgentLoop
 // ──────────────────────────────────────────────
 

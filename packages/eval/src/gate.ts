@@ -112,6 +112,15 @@ export interface RunVerificationGateOptions {
   now?: () => number;
   /** 实验 id（测试可注入） */
   id?: string;
+  /**
+   * 双集用例 id（可选）：给了才做「两集不重叠」校验。
+   *
+   * held-in 与 held-out 由调用方各自提供，API 层看不到用例；把 id 交上来就能在
+   * 开始跑之前拦下「拿同一批用例自证」的伪验证（重叠 → 直接拒绝 + 回滚留痕）。
+   */
+  heldInCaseIds?: readonly string[];
+  /** held-out 用例 id（与 {@link heldInCaseIds} 配对使用） */
+  heldOutCaseIds?: readonly string[];
 }
 
 /** 默认上限 */
@@ -265,6 +274,21 @@ export function listExperiments(
 }
 
 /**
+ * 双集重叠的用例 id（空数组 = 不重叠 / 未提供时也算不重叠）。
+ *
+ * @param heldIn - held-in 用例 id
+ * @param heldOut - held-out 用例 id
+ */
+export function overlappingCaseIds(
+  heldIn: readonly string[] | undefined,
+  heldOut: readonly string[] | undefined,
+): string[] {
+  if (!heldIn || !heldOut) return [];
+  const out = new Set(heldOut);
+  return [...new Set(heldIn)].filter((id) => out.has(id));
+}
+
+/**
  * 跑一次完整实验：基线双集 → 应用 overlay → 候选双集 → 采纳/拒绝 → 回滚/留痕。
  *
  * 任何异常都会走「拒绝 + 回滚 + 留痕」路径，不会把半应用的 overlay 留在数据根里。
@@ -276,23 +300,64 @@ export async function runVerificationGate(
   const cfg = { ...DEFAULT_GATE_LIMITS, ...(options.limits ?? {}) };
   const at = now();
 
+  const reasons: string[] = [];
+  let aborted = false;
+  let costTokens = 0;
+
+  // 0. 双集重叠校验（真验证的前提：held-out 不能是 held-in 的复制）
+  //    重叠 → 不跑（跑也白跑），直接按「拒绝 + 留痕」落账。
+  const overlap = overlappingCaseIds(options.heldInCaseIds, options.heldOutCaseIds);
+  if (overlap.length > 0) {
+    const snapshot = readPromptOverlay(options.dataRoot);
+    const rejected: GateExperiment = {
+      id: options.id ?? `exp-${at.toString(36)}-${options.card.id.slice(0, 8)}`,
+      cardId: options.card.id,
+      changeId: "none",
+      verdict: "rejected",
+      reasons: [
+        `双集重叠：${overlap.length} 条用例同时出现在 held-in 与 held-out` +
+        `（${overlap.slice(0, 5).join(", ")}），不构成独立验证`,
+      ],
+      rolledBack: readPromptOverlay(options.dataRoot).content === snapshot.content,
+      baseline: { heldIn: EMPTY_METRICS, heldOut: EMPTY_METRICS },
+      candidate: { heldIn: EMPTY_METRICS, heldOut: EMPTY_METRICS },
+      costTokens: 0,
+      aborted: false,
+      createdAt: at,
+    };
+    persistExperiment(options.dataRoot, rejected);
+    options.onRejected?.(rejected);
+    return rejected;
+  }
+
+  // 成本上限对**基线**同样生效（此前只在候选开始前检查，基线自身不受约束）
+  const runBaselineOne = async (
+    which: "held-in" | "held-out",
+  ): Promise<TestSetRun | null> => {
+    if (costTokens > cfg.maxExperimentTokens) {
+      aborted = true;
+      reasons.push(
+        `单次实验成本超限：已用 ${costTokens} token > ${cfg.maxExperimentTokens}（中止，未跑基线 ${which}）`,
+      );
+      return null;
+    }
+    const run = await options.runBaseline(which);
+    costTokens += run.totalTokens;
+    return run;
+  };
+
   // 1. 基线双集
-  const baselineHeldIn = await options.runBaseline("held-in");
-  const baselineHeldOut = await options.runBaseline("held-out");
+  const baselineHeldIn = await runBaselineOne("held-in");
+  const baselineHeldOut = await runBaselineOne("held-out");
   const baseline: DualSetMetrics = {
-    heldIn: toGateMetrics(baselineHeldIn),
-    heldOut: toGateMetrics(baselineHeldOut),
+    heldIn: baselineHeldIn ? toGateMetrics(baselineHeldIn) : EMPTY_METRICS,
+    heldOut: baselineHeldOut ? toGateMetrics(baselineHeldOut) : EMPTY_METRICS,
   };
 
   // 2. 生成并应用最小变更（只写 prompt-overlay.md）
   let change: OverlayChange | null = null;
   let snapshot: OverlaySnapshot = readPromptOverlay(options.dataRoot);
-  const reasons: string[] = [];
-  let aborted = false;
   let candidate: DualSetMetrics = { heldIn: EMPTY_METRICS, heldOut: EMPTY_METRICS };
-  let costTokens =
-    baselineHeldIn.totalTokens +
-    baselineHeldOut.totalTokens;
 
   try {
     change = proposePromptOverlayChange({
