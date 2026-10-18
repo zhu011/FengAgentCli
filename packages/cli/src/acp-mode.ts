@@ -284,6 +284,17 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
           }
         },
       },
+      // 注入记账（RSI P0 运行态接线）：装配完系统提示 → 按实际注入的卡 id 记账
+      onReflectionInjected: ({ sessionId, cardIds }) => {
+        if (!reflectionStore || cardIds.length === 0) return;
+        try {
+          reflectionStore.recordInjection(cardIds, sessionId);
+        } catch (err) {
+          process.stderr.write(
+            `Warn: 注入记账失败（${sessionId}）：${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }
+      },
     });
     const sessionStore = storeFor(workdir);
     return new Agent({

@@ -89,4 +89,16 @@ describe("测试集解析", () => {
     expect(ts.cases).toHaveLength(0);
     rmSync(dir, { recursive: true });
   });
+
+  test("带 UTF-8 BOM 的测试集也能解析（Windows 编辑器存的文件不该静默变「无可用用例」）", () => {
+    const dir = mkdtempSync(join(tmpdir(), "feng-testset-bom-"));
+    const file = join(dir, "bom.json");
+    const body = JSON.stringify({ name: "bom", cases: [{ id: "c1", input: "题" }] });
+    writeFileSync(file, `\uFEFF${body}`, "utf-8");
+    const ts = parseTestSet(file);
+    expect(ts.valid).toBe(true);
+    expect(ts.name).toBe("bom");
+    expect(ts.cases).toHaveLength(1);
+    rmSync(dir, { recursive: true });
+  });
 });

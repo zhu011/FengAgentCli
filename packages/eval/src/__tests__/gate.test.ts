@@ -318,3 +318,67 @@ describe("默认上限", () => {
     expect(DEFAULT_GATE_LIMITS.epsilon).toBeLessThan(1);
   });
 });
+
+describe("契约补丁：双集重叠 + 成本上限覆盖基线", () => {
+  test("held-in 与 held-out 用例重叠 → 直接拒绝 + 留痕（拿同一批题自证不算验证）", async () => {
+    let ran = 0;
+    const experiment = await runVerificationGate({
+      dataRoot,
+      card: CARD,
+      id: "exp-overlap",
+      heldInCaseIds: ["c1", "c2", "c3"],
+      heldOutCaseIds: ["c3", "c4"],
+      runBaseline: async (which) => {
+        ran++;
+        return fakeRun({ setName: which, passRate: 1, completion: 90 });
+      },
+      runCandidate: async (which) => {
+        ran++;
+        return fakeRun({ setName: which, passRate: 1, completion: 90 });
+      },
+    });
+
+    expect(experiment.verdict).toBe("rejected");
+    expect(experiment.reasons.join("\n")).toContain("双集重叠");
+    expect(experiment.reasons.join("\n")).toContain("c3");
+    expect(ran).toBe(0); // 重叠时白跑没意义 → 一次都不跑
+    expect(listExperiments(dataRoot, { verdict: "rejected" })).toHaveLength(1);
+  });
+
+  test("两集不重叠 → 照常按指标判定（不误伤）", async () => {
+    const experiment = await runVerificationGate({
+      dataRoot,
+      card: CARD,
+      id: "exp-disjoint",
+      heldInCaseIds: ["c1", "c2"],
+      heldOutCaseIds: ["c3", "c4"],
+      runBaseline: async (which) => fakeRun({ setName: which, passRate: 0.75, completion: 80 }),
+      runCandidate: async (which) => fakeRun({ setName: which, passRate: 0.75, completion: 80 }),
+    });
+    expect(experiment.verdict).toBe("adopted");
+  });
+
+  test("成本上限也约束基线（基线跑完第一集就超限 → 中止并如实记成本）", async () => {
+    let candidateRuns = 0;
+    const experiment = await runVerificationGate({
+      dataRoot,
+      card: CARD,
+      id: "exp-cost-baseline",
+      limits: { maxExperimentTokens: 100 },
+      runBaseline: async (which) => fakeRun({ setName: which, passRate: 1, completion: 90, tokens: 300 }),
+      runCandidate: async (which) => {
+        candidateRuns++;
+        return fakeRun({ setName: which, passRate: 1, completion: 95, tokens: 300 });
+      },
+    });
+
+    expect(experiment.verdict).toBe("rejected");
+    expect(experiment.aborted).toBe(true);
+    expect(experiment.reasons.join("\n")).toContain("成本超限");
+    expect(candidateRuns).toBe(0); // 基线都超了，不再烧候选
+    // 基线第二集没跑 → 指标为空但成本如实记录（不谎报「跑完了」）
+    expect(experiment.baseline.heldOut.caseCount).toBe(0);
+    expect(experiment.costTokens).toBe(1_200); // 只算了真的跑过的基线第一集（4 × 300）
+    expect(existsSync(promptOverlayPath(dataRoot))).toBe(false);
+  });
+});

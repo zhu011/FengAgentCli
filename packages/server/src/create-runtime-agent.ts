@@ -255,10 +255,20 @@ export async function createRuntimeAgent(
     env: options.env,
     configDataDir: config.dataDir,
   });
-  const reflectionStore =
-    (options.enableSessionStore ?? true)
-      ? new ReflectionStore(`${dataDir}/reflect/reflections.db`)
-      : null;
+  // A8 降级：库打不开（磁盘/权限/被占用）不应阻止 Agent 创建 ——
+  // 注入通道退化为「无卡继续」，与读路径的降级同口径。
+  let reflectionStore: ReflectionStore | null = null;
+  if (options.enableSessionStore ?? true) {
+    try {
+      reflectionStore = new ReflectionStore(`${dataDir}/reflect/reflections.db`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `Warn: 自省卡仓不可用（${dataDir}/reflect/reflections.db）：${message}\n`,
+      );
+      reflectionStore = null;
+    }
+  }
   const contextManager = createContextManager({
     config: {
       contextWindow: config.contextWindow,
@@ -283,6 +293,17 @@ export async function createRuntimeAgent(
           return [];
         }
       },
+    },
+    // 注入记账（RSI P0 运行态接线）：系统提示装配完成后按**实际注入的卡 id** 记账 ——
+    // 卡片进 injected、事件流出 reflect/injected、injectedCount 不再恒为 0。
+    onReflectionInjected: ({ sessionId, cardIds }) => {
+      if (!reflectionStore || cardIds.length === 0) return;
+      try {
+        reflectionStore.recordInjection(cardIds, sessionId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`Warn: 注入记账失败（${sessionId}）：${message}\n`);
+      }
     },
   });
 

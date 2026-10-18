@@ -19,7 +19,8 @@ import { createRuntime } from "../../../cordis/src/runtime.ts";
 import { BUILTIN_PLUGINS } from "../../../cordis/src/types.ts";
 import { MemoryGraphStore } from "../../../graph/src/index.ts";
 import { RuntimeAgent, reloadProvider, createRuntimeAgent } from "@fengagent/server";
-import { mkdtempSync, rmSync } from "node:fs";
+import { ReflectionStore } from "@fengagent/agent";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -357,6 +358,74 @@ describe("RuntimeAgent — 经 createRuntime 装配", () => {
 
     // 底层 LLM Client 已被替换（热加载），Agent 无需重建
     expect(result.llmClient.getClient()).not.toBe(originalClient);
+
+    await result.runtime.stop();
+  });
+
+  test("A8：自省库打不开也不阻止 Agent 创建（reflectionStore 降级为 null）", async () => {
+    const workdir = makeTempDir();
+    // 让 `<数据根>/reflect` 是个「文件」而不是目录 → ReflectionStore 构造必失败
+    writeFileSync(join(workdir, "reflect"), "not a directory", "utf-8");
+    const env = {
+      FENG_PROVIDER: "openai-compatible",
+      FENG_MODEL: "model-a",
+      OPENAI_COMPATIBLE_API_KEY: "sk-test-a8",
+      OPENAI_COMPATIBLE_BASE_URL: "https://api.example.com",
+      OPENAI_COMPATIBLE_MODEL: "model-a",
+    };
+
+    const result = await createRuntimeAgent({
+      env,
+      workdir,
+      // 存储开着：会话库/任务库正常，只有自省库注定失败
+      cliArgs: { dataDir: workdir },
+    });
+    await result.runtime.start();
+
+    expect(result.reflectionStore).toBeNull();
+    expect(result.sessionStore).not.toBeNull();
+    // Agent 照常创建（注入通道退化为「无卡继续」；这里不发网络请求）
+    expect(result.agent).toBeDefined();
+    expect(typeof result.agent.prompt).toBe("function");
+    expect(result.makeAgent()).toBeDefined();
+
+    await result.runtime.stop();
+  });
+
+  test("运行态接线：装配点按实际注入卡 id 记账（injected + reflect/injected）", async () => {
+    const workdir = makeTempDir();
+    const env = {
+      FENG_PROVIDER: "openai-compatible",
+      FENG_MODEL: "model-a",
+      // 故意指向必然拒绝的地址：装配（含注入记账）发生在 LLM 调用之前
+      OPENAI_COMPATIBLE_API_KEY: "sk-test-record",
+      OPENAI_COMPATIBLE_BASE_URL: "http://127.0.0.1:1",
+      OPENAI_COMPATIBLE_MODEL: "model-a",
+    };
+
+    // 先按数据根建库并放一张带证据的卡（模拟「评测已经产过卡」）
+    const seed = new ReflectionStore(join(workdir, "reflect", "reflections.db"));
+    const card = seed.create({
+      trigger: "judge_failed",
+      lesson: "接线验证：这条教训应当被注入并记账",
+      evidence: [{ kind: "trace", ref: "seed-trace" }],
+    });
+    seed.close();
+
+    const result = await createRuntimeAgent({ env, workdir, cliArgs: { dataDir: workdir } });
+    await result.runtime.start();
+    expect(result.reflectionStore).not.toBeNull();
+
+    // 发一轮（LLM 会失败，但系统提示装配与注入记账已经发生）
+    for await (const _event of result.agent.prompt("你好", makeSession())) {
+      // 事件内容不影响本用例断言
+    }
+
+    const after = result.reflectionStore!.get(card.id)!;
+    expect(after.status).toBe("injected");
+    expect(after.effect?.injectedCount).toBe(1);
+    const types = result.reflectionStore!.events(card.id).map((e) => e.type);
+    expect(types).toContain("reflect/injected");
 
     await result.runtime.stop();
   });

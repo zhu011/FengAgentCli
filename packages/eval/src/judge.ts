@@ -16,6 +16,7 @@
 import type { LLMClient, LLMRequest } from "@fengagent/llm";
 import type { ContentBlock } from "@fengagent/core";
 import type { SessionTrace, JudgeResult, AnalysisResult } from "./analyzer.ts";
+import type { CaseTrace, RunnerVerdict } from "./runner.ts";
 
 /** LLM-judge 选项 */
 export interface JudgeOptions {
@@ -304,7 +305,7 @@ export async function judgeAllSessions(
 }
 
 /**
- * 将 judge 结果合并进 AnalysisResult。
+ * 把 judge 结果合并进 AnalysisResult。
  *
  * @param result - 原始分析结果
  * @param judgeResults - judge 评判结果
@@ -315,6 +316,97 @@ export function mergeJudgeResults(
   judgeResults: JudgeResult[],
 ): AnalysisResult {
   return { ...result, judgeResults };
+}
+
+/** 用例级 judge 选项 */
+export interface CaseJudgeOptions extends JudgeOptions {
+  /** 评判用的模型（缺省用客户端配置的模型） */
+  model?: string;
+}
+
+/**
+ * 从用例 trace 构建判分摘要（真跑出来的「这一步做了什么」）。
+ *
+ * 与 {@link buildSessionSummary}（历史 LLM trace）不同，这里的输入是**刚执行完的
+ * 用例**：有输入、期望、真实步数 / token / 耗时、最终文本与错误。
+ */
+export function buildCaseSummary(trace: CaseTrace): string {
+  const lines: string[] = [];
+  lines.push(`用例 ID: ${trace.caseId}`);
+  lines.push(`用例输入: ${truncate(trace.input, 500)}`);
+  if (trace.expected !== undefined && trace.expected !== "") {
+    lines.push(`期望输出: ${truncate(trace.expected, 500)}`);
+  }
+  lines.push(`实际轮次: ${trace.steps}`);
+  lines.push(`工具调用次数: ${trace.toolCalls}`);
+  lines.push(`token: 输入 ${trace.tokens.input} / 输出 ${trace.tokens.output}`);
+  lines.push(`耗时: ${trace.durationMs}ms`);
+  if (trace.errors.length > 0) {
+    lines.push(`运行期错误: ${trace.errors.join("; ")}`);
+  }
+  lines.push("");
+  lines.push("--- 最终输出 ---");
+  lines.push(truncate(trace.finalText === "" ? "(空)" : trace.finalText, 2000));
+  return lines.join("\n");
+}
+
+/**
+ * 对一个**真跑过**的用例做 LLM-judge 判分（RSI P1 产卡链路的判分口）。
+ *
+ * judge 自身调用失败时，`note` 以 {@link LLM_FAILURE_NOTE_PREFIX} 开头 ——
+ * 于是 `cardsFromJudgeResults` 不会为「评测器坏了」产卡（铁律 1）。
+ *
+ * @param trace - 用例 trace
+ * @param options - 判分选项（llmClient 必需）
+ * @returns 判分结论
+ */
+export async function judgeCaseTrace(
+  trace: CaseTrace,
+  options: CaseJudgeOptions,
+): Promise<RunnerVerdict> {
+  const request: LLMRequest = {
+    model: options.model ?? "",
+    system: options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+    messages: [
+      {
+        id: `judge-case-${trace.caseId}`,
+        role: "user" as const,
+        content: [{ type: "text" as const, text: buildCaseSummary(trace) }],
+        createdAt: Date.now(),
+      },
+    ],
+    maxTokens: 500,
+    temperature: 0,
+  };
+
+  try {
+    const response = await options.llmClient.generate(request);
+    // 模型只回了 thinking / 空内容 → 这是判分器没给出结论，不是「被评对象失败」：
+    // 记成 LLM 调用失败，下游（cardsFromJudgeResults）因此不会拿它产卡。
+    const hasText = response.content.some(
+      (b) => b.type === "text" && typeof b.text === "string" && b.text.trim() !== "",
+    );
+    if (!hasText) {
+      return {
+        completionScore: 0,
+        conclusion: "failed",
+        note: `${LLM_FAILURE_NOTE_PREFIX}: 模型未返回判定文本（thinking-only / 空响应）`,
+      };
+    }
+    const parsed = parseJudgeResponse(response.content, trace.caseId);
+    return {
+      completionScore: parsed.completionScore,
+      correctnessScore: parsed.correctnessScore,
+      conclusion: parsed.conclusion,
+      ...(parsed.note === undefined ? {} : { note: parsed.note }),
+    };
+  } catch (err) {
+    return {
+      completionScore: 0,
+      conclusion: "failed",
+      note: `${LLM_FAILURE_NOTE_PREFIX}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /**

@@ -10,12 +10,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReflectionCard } from "@fengagent/core";
+import { createSession } from "@fengagent/core";
 import {
   buildReflectionInjection,
   renderReflectionLine,
   REFLECTION_SECTION_TITLE,
 } from "../reflection.ts";
 import { loadSystemContext } from "../system-context.ts";
+import { createContextManager } from "../manager.ts";
 import { countTokensInText } from "../token-counter.ts";
 
 // 用真实墙钟做基准：注入通道的默认 now 是 Date.now()，写死过去的时间会让卡片被当成过期。
@@ -239,5 +241,105 @@ describe("loadSystemContext — 注入接线", () => {
     });
     const section = ctx.slice(ctx.indexOf("过往教训"));
     expect(section.split("\n").filter((l) => l.startsWith("- [")).length).toBe(2);
+  });
+});
+
+describe("注入记账（运行态接线：装配后按实际注入卡 id 记账）", () => {
+  let dir: string;
+
+  /** 记账回调收到的记录 */
+  type Rec = {
+    sessionId: string;
+    cardIds: string[];
+    truncated: string[];
+    dropped: string[];
+    tokens: number;
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "feng-reflect-record-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function manager(
+    cards: () => ReflectionCard[],
+    records: Rec[],
+    env: Record<string, string | undefined> = EMPTY_ENV,
+  ) {
+    return createContextManager({
+      config: {
+        contextWindow: 200_000,
+        compactThreshold: 0.85,
+        compactKeepTokens: 8000,
+        disableCompact: true,
+        smallModel: "small",
+      },
+      summaryGenerator: { generate: async () => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 } }) } as never,
+      systemContextOptions: {
+        workdir: dir,
+        loadMemory: false,
+        loadAgentsMd: false,
+        reflections: cards,
+        reflectEnv: env,
+      },
+      onReflectionInjected: (record) => records.push(record),
+    });
+  }
+
+  test("assemble 后按实际注入的卡 id 记账一次（带会话 id）", async () => {
+    const picked = card({ id: "rec-1", lesson: "记账用教训" });
+    const records: Rec[] = [];
+    const cm = manager(() => [picked], records);
+    const session = createSession("test-model");
+    await cm.assemble(session);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]!.sessionId).toBe(session.id);
+    expect(records[0]!.cardIds).toEqual(["rec-1"]);
+    expect(records[0]!.tokens).toBeGreaterThan(0);
+
+    // 系统提示按实例缓存：再装配不会重复记账（injectedCount 不会被循环步数放大）
+    await cm.assemble(session);
+    expect(records).toHaveLength(1);
+  });
+
+  test("无卡 / 开关关闭 → 不记账（不会产生空记账）", async () => {
+    const records: Rec[] = [];
+    await manager(() => [], records).assemble(createSession("test-model"));
+    expect(records).toHaveLength(0);
+
+    const off: Rec[] = [];
+    await manager(() => [card({ id: "x" })], off, { FENG_REFLECT_INJECT: "off" }).assemble(
+      createSession("test-model"),
+    );
+    expect(off).toHaveLength(0);
+  });
+
+  test("记账回调抛错不影响系统提示装配", async () => {
+    const cm = createContextManager({
+      config: {
+        contextWindow: 200_000,
+        compactThreshold: 0.85,
+        compactKeepTokens: 8000,
+        disableCompact: true,
+        smallModel: "small",
+      },
+      summaryGenerator: { generate: async () => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 } }) } as never,
+      systemContextOptions: {
+        workdir: dir,
+        loadMemory: false,
+        loadAgentsMd: false,
+        reflections: [card({ lesson: "记账炸了也要能装配" })],
+        reflectEnv: EMPTY_ENV,
+      },
+      onReflectionInjected: () => {
+        throw new Error("store 挂了");
+      },
+    });
+    const ctx = await cm.assemble(createSession("test-model"));
+    expect(ctx.system).toContain("过往教训");
+    expect(ctx.system).toContain("记账炸了也要能装配");
   });
 });

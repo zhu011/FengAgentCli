@@ -41,6 +41,12 @@ export interface CardsFromJudgeOptions {
   target?: string;
   /** 只处理这些会话（默认全部） */
   sessionIds?: string[];
+  /**
+   * 证据指针覆盖（返回 undefined 时用默认 `<sessionId>#judge`）。
+   *
+   * 用例真跑的场景里传真实 trace 文件路径 —— 「这条教训从哪来」直接可点开核对。
+   */
+  evidenceRef?: (result: JudgeResult) => string | undefined;
 }
 
 /** 结论 → 触发源（null = 不产生卡片） */
@@ -101,10 +107,12 @@ export function cardsFromJudgeResults(
     const trigger = triggerForConclusion(result.conclusion);
     if (trigger === null) continue;
 
+    const evidenceRef = options.evidenceRef?.(result) ?? `${result.sessionId}#judge`;
+
     drafts.push({
       trigger,
       lesson: lessonForConclusion(result),
-      evidence: [{ kind: "trace", ref: `${result.sessionId}#judge`, detail: result.note }],
+      evidence: [{ kind: "trace", ref: evidenceRef, detail: result.note }],
       signal: {
         conclusion: result.conclusion,
         completionScore: result.completionScore,

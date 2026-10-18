@@ -79,4 +79,5 @@ export type {
   ContextManager,
   ContextManagerOptions,
   AssembledContext,
+  ReflectionInjectionRecord,
 } from "./manager.ts";

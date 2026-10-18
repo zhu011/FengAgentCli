@@ -59,6 +59,9 @@ export function parseTestSet(file: string): TestSet {
   } catch {
     return { name, file, cases: [], valid: false, shape: "read_error" };
   }
+  // Windows 编辑器/PowerShell 常把测试集存成「UTF-8 with BOM」，
+  // 而 JSON.parse 见到 U+FEFF 会直接抛 → 文件被判 invalid（静默变成「无可用用例」）。
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
 
   let json: unknown;
   try {

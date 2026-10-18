@@ -14,7 +14,7 @@ import {
 } from "@fengagent/shared";
 import type { ReflectionCard } from "@fengagent/core";
 import { buildMemoryPrompt } from "./memory.ts";
-import { buildReflectionInjection } from "./reflection.ts";
+import { buildReflectionInjection, type ReflectionInjection } from "./reflection.ts";
 
 /** 系统上下文加载选项 */
 export interface SystemContextOptions {
@@ -46,6 +46,14 @@ export interface SystemContextOptions {
   reflectDataRoot?: string;
   /** 自省注入环境变量（默认 process.env；测试可注入） */
   reflectEnv?: Record<string, string | undefined>;
+  /**
+   * 注入记账回调（RSI P0 运行态接线）。
+   *
+   * 只有在**系统提示里真的出现自省小节**时才调用一次（关开关 / 无卡 / 预算把卡全丢光
+   * → 不调用）；参数是本次注入的完整结果，`cards` 就是实际注入的卡。
+   * 回调抛异常不影响系统提示装配（记账失败不该打断对话）。
+   */
+  onReflectionInjected?: (injection: ReflectionInjection) => void;
 }
 
 /**
@@ -88,6 +96,14 @@ function resolveReflectionSection(options: SystemContextOptions): string {
       maxCards: budget.maxCards,
       maxTokens: budget.maxTokens,
     });
+    // 真的注入了才算「注入记账」：卡被预算丢光 → text 为空 → 不记账
+    if (injection.text !== "") {
+      try {
+        options.onReflectionInjected?.(injection);
+      } catch {
+        // 记账失败不影响系统提示装配（与注入降级同口径）
+      }
+    }
     return injection.text;
   } catch {
     // 注入失败 → 降级为无卡继续（不打断主循环）
