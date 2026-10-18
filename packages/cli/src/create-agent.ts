@@ -28,6 +28,7 @@ import {
   Agent as AgentClass,
   SessionStore,
   TaskStore,
+  ReflectionStore,
   createAgentDefinitionLoader,
   createSubagentRunner,
 } from "@fengagent/agent";
@@ -202,6 +203,23 @@ export async function createAgent(
     process.stderr.write(`MCP: initialization error: ${message}\n`);
   }
 
+  // RSI 自省卡仓（P0）：与会话库同根（reflect/reflections.db）。
+  // 未启用（enableStore=false → 无跨轮持久化即无「继承」可言）或异常时降级为无卡。
+  // （enableStore 在此提前声明，会话/任务仓沿用同一开关。）
+  const enableStore = options.enableSessionStore ?? true;
+  let reflectionStore: ReflectionStore | null = null;
+  if (enableStore) {
+    try {
+      reflectionStore = new ReflectionStore(
+        `${expandTilde(config.dataDir)}/reflect/reflections.db`,
+      );
+    } catch (err) {
+      process.stderr.write(
+        `Warn: 自省卡仓不可用：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
+
   // 6. 上下文管理器
   const contextManager = createContextManager({
     config: {
@@ -212,12 +230,25 @@ export async function createAgent(
       smallModel: config.smallModel,
     },
     summaryGenerator: llmClient,
-    systemContextOptions: { workdir, loadAgentsMd: false },
+    // RSI 自省注入：每轮重载重新取可注入卡；store 异常时降级为无卡。
+    systemContextOptions: {
+      workdir,
+      loadAgentsMd: false,
+      reflectDataRoot: expandTilde(config.dataDir),
+      reflections: () => {
+        if (!reflectionStore) return [];
+        try {
+          reflectionStore.expireDue();
+          return reflectionStore.selectForInjection({ at: Date.now() });
+        } catch {
+          return [];
+        }
+      },
+    },
   });
 
   // 7. 会话存储
   let sessionStore: SessionStore | null = null;
-  const enableStore = options.enableSessionStore ?? true;
   if (enableStore) {
     const dataDir = expandTilde(config.dataDir);
     try {

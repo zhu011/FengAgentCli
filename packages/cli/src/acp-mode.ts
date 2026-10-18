@@ -108,7 +108,7 @@ export function credentialHint(err: unknown, cwd: string = process.cwd()): strin
  */
 export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpModeHandle> {
   const { loadConfig, createSession: createSessionFactory } = await import("@fengagent/core");
-  const { Agent, SessionStore, TaskStore } = await import("@fengagent/agent");
+  const { Agent, ReflectionStore, SessionStore, TaskStore } = await import("@fengagent/agent");
   const { resolveSessionStoreRoot } = await import("@fengagent/shared");
   const { createClientFromEnv } = await import("@fengagent/llm");
   const {
@@ -164,6 +164,34 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
 
   /** 任务状态仓缓存（与会话库同 workdir 同数据根；表名互不重叠） */
   const taskStores = new Map<string, InstanceType<typeof TaskStore>>();
+
+  /** 自省卡仓缓存（RSI P0；按数据根缓存，避免多连接互锁） */
+  const reflectionStores = new Map<string, InstanceType<typeof ReflectionStore>>();
+
+  /**
+   * 取该数据根的自省卡仓（RSI P0：证据 → 卡 → 下一轮注入）。
+   *
+   * 打不开时返回 undefined —— 注入通道降级为「无卡继续」，对话不受影响。
+   *
+   * @param dataRoot - 数据根（与会话库同根）
+   */
+  function reflectionStoreFor(
+    dataRoot: string,
+  ): InstanceType<typeof ReflectionStore> | undefined {
+    const cached = reflectionStores.get(dataRoot);
+    if (cached) return cached;
+    try {
+      mkdirSync(join(dataRoot, "reflect"), { recursive: true });
+      const store = new ReflectionStore(join(dataRoot, "reflect", "reflections.db"));
+      reflectionStores.set(dataRoot, store);
+      return store;
+    } catch (err) {
+      process.stderr.write(
+        `Warn: 自省卡仓不可用（${dataRoot}）：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return undefined;
+    }
+  }
 
   /**
    * 取该 workdir 的任务状态仓（结构化任务状态 + 步级 checkpoint + 副作用台账）。
@@ -242,6 +270,9 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
     const toolExecutor = createToolExecutor(permissionChecker, hookRegistry, {
       unattendedPermissionPolicy: ACP_UNATTENDED_PERMISSION_POLICY,
     });
+    // RSI 自省注入：数据根与自省库都按会话工作目录解析（与 tasks.db / sessions.db 同根）
+    const reflectRoot = resolveSessionStoreRoot({ workdir });
+    const reflectionStore = reflectionStoreFor(reflectRoot);
     const contextManager = createContextManager({
       config: {
         contextWindow: config.contextWindow,
@@ -252,7 +283,20 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
       },
       summaryGenerator: llmClient,
       // ACP 路径同样禁用 AGENTS.md 注入（与对话卡死修复一致，防止运行时指令注入系统提示）
-      systemContextOptions: { workdir, loadAgentsMd: false },
+      systemContextOptions: {
+        workdir,
+        loadAgentsMd: false,
+        reflectDataRoot: reflectRoot,
+        reflections: () => {
+          if (!reflectionStore) return [];
+          try {
+            reflectionStore.expireDue();
+            return reflectionStore.selectForInjection({ at: Date.now() });
+          } catch {
+            return [];
+          }
+        },
+      },
     });
     const sessionStore = storeFor(workdir);
     return new Agent({

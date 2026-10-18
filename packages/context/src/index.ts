@@ -17,6 +17,18 @@ export {
 export { loadSystemContext } from "./system-context.ts";
 export type { SystemContextOptions } from "./system-context.ts";
 
+// 自省卡注入通道（RSI P0：硬预算 ≤5 条 / ≤600 token）
+export {
+  buildReflectionInjection,
+  renderReflectionLine,
+  REFLECTION_SECTION_TITLE,
+  MIN_TRUNCATE_TOKENS,
+} from "./reflection.ts";
+export type {
+  ReflectionInjection,
+  ReflectionInjectionOptions,
+} from "./reflection.ts";
+
 // 记忆系统
 export {
   loadMemory,

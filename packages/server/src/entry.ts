@@ -10,7 +10,7 @@
 
 import { loadConfig } from "@fengagent/core";
 import { Agent } from "@fengagent/agent";
-import { SessionStore, TaskStore } from "@fengagent/agent";
+import { SessionStore, TaskStore, ReflectionStore } from "@fengagent/agent";
 import { createClientFromEnv } from "@fengagent/llm";
 import {
   createToolRegistry,
@@ -86,6 +86,17 @@ async function main() {
     log.warn("main", `任务状态仓不可用：${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // RSI 自省卡仓（P0）：与 sessions.db / tasks.db 同数据根（reflect/reflections.db）。
+  // 未启用（FENG_REFLECT_INJECT=off 时注入层自会旁路）或异常时降级为无卡，不打断主循环。
+  let reflectionStore: ReflectionStore | undefined;
+  try {
+    reflectionStore = new ReflectionStore(
+      join(resolveDataRoot({ workdir }), "reflect", "reflections.db"),
+    );
+  } catch (err) {
+    log.warn("main", `自省卡仓不可用：${err instanceof Error ? err.message : String(err)}`);
+  }
+
   function createAgent(): Agent {
     const toolRegistry = createToolRegistry();
     registerBuiltinTools(toolRegistry);
@@ -99,7 +110,22 @@ async function main() {
         smallModel: config.smallModel,
       },
       summaryGenerator: client,
-      systemContextOptions: { workdir, loadAgentsMd: false },
+      // RSI 自省注入：每轮重载重新取可注入卡（评测写入卡片 → 下一轮注入）；
+      // store 异常时降级为无卡。FENG_REFLECT_INJECT=off 时注入层整体旁路。
+      systemContextOptions: {
+        workdir,
+        loadAgentsMd: false,
+        reflectDataRoot: resolveDataRoot({ workdir }),
+        reflections: () => {
+          if (!reflectionStore) return [];
+          try {
+            reflectionStore.expireDue();
+            return reflectionStore.selectForInjection({ at: Date.now() });
+          } catch {
+            return [];
+          }
+        },
+      },
     });
     return new Agent({
       llmClient: client,

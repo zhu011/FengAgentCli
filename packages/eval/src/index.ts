@@ -42,6 +42,64 @@ export {
 export type { JudgeOptions, MessageTraceInfo } from "./judge.ts";
 export { parseTestSet, listTestSets } from "./testset.ts";
 export type { TestCase, TestSet } from "./testset.ts";
+
+// judge 结论 → 自省卡草稿（RSI P0 的「卡从哪来」；纯映射，不落盘）
+export {
+  cardsFromJudgeResults,
+  triggerForConclusion,
+  lessonForConclusion,
+} from "./reflect-cards.ts";
+export type { ReflectionCardDraft, CardsFromJudgeOptions } from "./reflect-cards.ts";
+
+// 测试集执行器（RSI P1 地基：用例 → 隔离会话真跑 → 采 trace → 判分）
+export {
+  runTestSet,
+  aggregateRun,
+  summarizeEvents,
+  createAgentSessionRunner,
+  caseIdOf,
+  makeTestSet,
+} from "./runner.ts";
+export type {
+  AgentSessionRunner,
+  CaseOutcome,
+  CaseTrace,
+  RunnerVerdict,
+  RunTestSetOptions,
+  TestSetRun,
+} from "./runner.ts";
+
+// 最小变更器（写回边界：只写数据根 prompt-overlay.md）
+export {
+  applyPromptOverlayChange,
+  assertWriteBoundary,
+  promptOverlayPath,
+  proposePromptOverlayChange,
+  readPromptOverlay,
+  restorePromptOverlay,
+  PROMPT_OVERLAY_BASENAME,
+} from "./mutator.ts";
+export type { OverlayChange, OverlaySnapshot } from "./mutator.ts";
+
+// 验证闸（Self-Harness 式：held-in/held-out 双集 + 护栏 + 成本上限 + 回滚/留痕）
+export {
+  compareGate,
+  toGateMetrics,
+  runVerificationGate,
+  persistExperiment,
+  listExperiments,
+  experimentsDir,
+  experimentsLedgerPath,
+  overlayIsEmpty,
+  DEFAULT_GATE_LIMITS,
+} from "./gate.ts";
+export type {
+  DualSetMetrics,
+  GateExperiment,
+  GateLimits,
+  GateMetrics,
+  RunVerificationGateOptions,
+} from "./gate.ts";
 export {
   NON_PRODUCTION_SOURCES,
   traceSourceOf,

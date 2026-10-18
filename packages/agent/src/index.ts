@@ -33,6 +33,15 @@ export { SessionStore } from "./session.ts";
 export { TaskStore, SqliteOperationLedger } from "./task-store.ts";
 export type { TaskStoreOptions } from "./task-store.ts";
 
+// 自省卡仓（RSI P0：SQLite + 乐观锁 + reflect/* 事件流）
+export { ReflectionStore } from "./reflection-store.ts";
+export type {
+  CreateReflectionInput,
+  TransitionReflectionInput,
+  ListReflectionFilter,
+  ReflectionStoreOptions,
+} from "./reflection-store.ts";
+
 // 恢复核对（未决调用 orphan 检测）
 export {
   buildTaskRecoveryReport,
