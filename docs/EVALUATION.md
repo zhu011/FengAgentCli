@@ -172,12 +172,15 @@ bun run eval --optimize
   ├─ 规则诊断（diagnose：规则 + LLM-judge 结论，阈值触发）
   └─ 建议报告落盘 <数据根>/optimizations/optimization-{date}.md
         ↓
-人工 / 评测协作方审阅建议（本模块保守默认：只出建议、不自动改配置）
+人工 / 评测协作方审阅建议（仅「建议 → 人工执行」这一档：自动化写回见第 4 节）
         ↓
 修改系统提示词 / 工具描述 / Skill 后再次对话
         ↓
 回归评测（bun run eval）验证指标变化
 ```
+
+> 自 v0.2 起，评测结论不再只落在报告里：**带证据的自省卡会进入下一轮系统提示**，
+> 而**自改进写回必须过验证闸（A/B 双集 + 回滚 + 留痕）**。见第 4 节。
 
 ### 3.2 诊断规则
 
@@ -252,3 +255,84 @@ const suggestions = diagnose(result, {
 - **规则驱动优先**：确定性、零成本、可解释——适合常规场景；LLM-judge 存在长度偏差 / 自偏好 / 非确定性等失败模式（DeepEval 实践结论），默认不启用。
 - **LLM-judge 扩展点**：`diagnose()` 输入为 `AnalysisResult`（评测引擎输出），未来可接入 KG 评测引擎的 LLM-judge 深度分析结果（如错误样本语义归类、计划质量评分），作为新增诊断规则输入，接口不变。
 - **WebUI 衔接**：建议报告 Markdown 落盘于数据根 `optimizations/`，WebUI **评测页**「自优化建议」区块可直接浏览 / 导出（观测页展示的是调用链与图表，不含建议报告）。
+
+## 四、RSI 首期：自省卡（P0）+ 验证闸（P1）
+
+Self-Harness 式的小闭环：**带证据的反思进入下一轮**，**自改进写回必须过验证闸**。
+定位是 RSI 的 L1 最小实现（Last AI Built by Humans 口径：跨任务保留的持久系统状态 +
+人类定验收），不是「模型自评自改」。
+
+### 4.1 P0 自省卡：证据 → 卡 → 注入
+
+| 环节 | 落点 | 说明 |
+|---|---|---|
+| 卡片类型 | `packages/core/src/reflection.ts` | `ReflectionCard`（状态机 `/revision` 乐观锁）+ `REFLECT_EVENT_TYPES`（`reflect/*`） |
+| 卡从哪来 | `packages/eval/src/reflect-cards.ts` | judge 结论 → 草稿：`failed/partial/tool_misused/inefficient` → `judge_failed`，`unsafe` → `judge_unsafe`；judge **调用失败**不入卡 |
+| 存储 | `packages/agent/src/reflection-store.ts` | SQLite `reflections` + `reflection_events`（`CREATE TABLE IF NOT EXISTS`，老库开箱可用） |
+| 注入 | `packages/context/src/reflection.ts` | 排序（严重度 × 证据数 × 新近度）+ 硬预算，渲染成「过往教训」小节 |
+| 装配 | `packages/server/src/create-runtime-agent.ts`、`packages/cli/src/acp-mode.ts` | 每轮重载时从仓里取可注入卡；store 异常降级为无卡 |
+
+**三条铁律**（有测试锁死，见「变异审计」）：
+
+1. 只收带证据的卡：`evidence[]` 为空或 `ref` 空白 → 直接丢弃（存储层与注入层各挡一次）；
+2. 硬预算：≤ **5 条** / ≤ **600 token**，超出按「逐张累加 → 剩余够就截断该卡 lesson → 否则丢弃」；
+3. TTL：默认 14 天，到期不注入并可清理（`expireDue`），拒绝/过期卡永不注入。
+
+**开关**：
+
+| 环境变量 | 默认 | 作用 |
+|---|---|---|
+| `FENG_REFLECT_INJECT` | `on` | `off` 一键关（自省卡与 overlay 两段都不注入，主流程行为不变） |
+| `FENG_REFLECT_MAX_CARDS` | `5` | 单次注入条数上限 |
+| `FENG_REFLECT_MAX_TOKENS` | `600` | 单次注入 token 上限 |
+| `FENG_REFLECT_TTL_MS` | `1209600000`（14 天） | 卡片存活期 |
+
+数据落点：`<数据根>/reflect/reflections.db`。
+
+### 4.2 P1 测试集执行器：终于真的执行用例
+
+历史问题：`--judge` 只把测试集**列名**，judge 评的是 trace 历史会话，用例从未被执行。
+`packages/eval/src/runner.ts` 补上这一段：
+
+```
+TestCase → 隔离会话（每用例新建 Agent）→ 采 trace（步数/token/耗时/最终文本）
+        → 判分（judge 注入项）→ { caseId, passed, score, traceRef }
+```
+
+- 判分只看 judge 结论 + 完成度阈值；`failed / unsafe / tool_misused` 一律 fail；
+- `traceDir` 给定时每条用例落 `<caseId>.trace.json`（可核对，`traceRef` 指向它）；
+- 成本/耗时上限：超限即中止，后续用例不执行（`aborted` + `abortReason`）。
+
+### 4.3 P1 验证闸：写回必须过 A/B
+
+**写回边界（首期唯一落点）**：`<数据根>/reflect/prompt-overlay.md`。
+不写仓库文件、不写 `AGENTS.md`、不改代码与 skill —— 越界目标在**写盘之前**抛
+`write_boundary_violation`（`packages/eval/src/mutator.ts`）。
+
+闸门判定（`packages/eval/src/gate.ts`，对齐 Self-Harness）：
+
+| 项 | 规则 |
+|---|---|
+| 双集 | held-in 与 held-out **都**要跑；任一没跑 → 拒绝 |
+| 主指标 | 通过率、平均完成度都不得劣于基线（默认零容差） |
+| 护栏 | 步数 ×1.5 / token ×1.5 / 耗时 ×2 以内 |
+| 成本 | 单次实验（基线 + 候选）token 超 `maxExperimentTokens` → 中止 + 拒绝 |
+| 回滚 | 拒绝一律内容级回滚（原来不存在 → 删回不存在） |
+| 留痕 | 采纳与拒绝都写 `<数据根>/reflect/experiments/<id>.json` + `experiments.jsonl` |
+
+采纳后 overlay 保留，`loadSystemContext` 下一轮把「本项目学到的规则」注入系统提示 ——
+这就是「写回 → 下一轮生效」那一跳；`FENG_REFLECT_INJECT=off` 时连同它一起关闭。
+
+查询台账：`listExperiments(dataRoot, { verdict: "rejected" })`。
+
+### 4.4 测试与门禁
+
+- P0/P1 单测：`packages/core/src/__tests__/reflection.test.ts`、
+  `packages/agent/src/__tests__/reflection-store.test.ts`、
+  `packages/context/src/__tests__/reflection-inject.test.ts`、
+  `packages/eval/src/__tests__/{runner,mutator,gate,reflect-cards}.test.ts`；
+- 端到端（真 Agent + 真 SQLite + 真 overlay）：
+  `packages/server/src/__tests__/reflect-loop.test.ts`；
+- 变异审计：弄坏比较方向 / 双集检查 / 证据门 / TTL / 回滚 / 乐观锁 / 预算 / 真跑，
+  对应测试必须变红（`M1–M8`）。
+

@@ -5,9 +5,14 @@
   "exports": {
     ".": "./src/index.ts",
     "./analyzer": "./src/analyzer.ts",
-    "./reporter": "./src/reporter.ts"
+    "./reporter": "./src/reporter.ts",
+    "./runner": "./src/runner.ts",
+    "./mutator": "./src/mutator.ts",
+    "./gate": "./src/gate.ts",
+    "./reflect-cards": "./src/reflect-cards.ts"
   },
   "dependencies": {
+    "@fengagent/core": "workspace:*",
     "@fengagent/shared": "workspace:*"
   }
 }

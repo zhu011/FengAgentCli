@@ -176,9 +176,10 @@ Windows PowerShell 5.1 不支持 `&&`，描述里显式提示改用 `;`。每次
 | `ContextManager` | `manager.ts` | 上下文组装（系统提示 + 历史）、压缩触发 |
 | `CompactionEngine` | `compaction.ts` | 摘要 head 段 + 保留 recent 段 |
 | `TokenCounter` | `token-counter.ts` | Token 估算（chars / 4 启发式） |
-| `SystemContextLoader` | `system-context.ts` | 加载日期、MEMORY.md；AGENTS.md 按 `loadAgentsMd` 选项注入（CLI / ACP 路径默认 `false` 不注入，避免项目指令触发工具调用循环导致对话卡死） |
+| `SystemContextLoader` | `system-context.ts` | 加载日期、MEMORY.md；AGENTS.md 按 `loadAgentsMd` 选项注入（CLI / ACP 路径默认 `false` 不注入，避免项目指令触发工具调用循环导致对话卡死）；自省段：自省卡「过往教训」+ 验证闸采纳后写回的 `<数据根>/reflect/prompt-overlay.md`（`FENG_REFLECT_INJECT=off` 一键关，失败降级为无卡） |
 | `MemoryManager` | `memory.ts` | MEMORY.md 加载/注入 + `<数据根>/memory/` 目录（先读数据根，空则只读回退 main 的 `.fengagent/memory`） |
 | `VectorMemory` | `vector-memory.ts` | 向量化存储 + 检索 |
+| `buildReflectionInjection` | `reflection.ts` | 自省卡注入通道（RSI P0）：排序 + 硬预算（≤5 条 / ≤600 token，超出截断或丢弃）→ 渲染「过往教训」小节 |
 
 ### 压缩策略
 
@@ -198,6 +199,7 @@ Windows PowerShell 5.1 不支持 `&&`，描述里显式提示改用 `;`。每次
 | `SessionStore` | `session.ts` | SQLite 会话持久化（`bun:sqlite`） |
 | `TaskStore` | `task-store.ts` | SQLite 任务状态仓（`task_states` / `task_events`，`state_version` 乐观锁）+ 副作用台账 `SqliteOperationLedger`（`operation_ledger`，`operation_key` 唯一索引） |
 | `buildTaskRecoveryReport` | `task-recovery.ts` | 恢复核对：orphan 工具调用检测 + 台账未决项 + 待办 intent 的台账三态归因（succeeded / failed / 无行）+ 强制人工确认清单 |
+| `ReflectionStore` | `reflection-store.ts` | SQLite 自省卡仓（RSI P0）：`reflections`（`revision` 乐观锁）+ `reflection_events`（`reflect/*` 事件流）；证据门在存储层（无证据 `ingest` 返回 null）；TTL 清理 `expireDue` |
 | `AgentDefinition` | `agent-definition.ts` | 从 `.fengagent/agents/*.md` 加载 Agent 定义 |
 | `PluginLoader` | `plugin-loader.ts` | 兼容旧插件加载器（从 `.fengagent/plugins/` 加载 `FengPlugin` 类）；本分支推荐 Cordis 插件 `ctx.plugin`（见下） |
 
@@ -451,6 +453,11 @@ Graph Engineering：对话即节点 / 可溯源 / 可回退（零运行时依赖
 | `self-optimize.ts` | 规则 + judge 诊断（`diagnose` / `DEFAULT_THRESHOLDS`），建议落盘 `optimizations/optimization-{日志日期}.md` |
 | `testset.ts` | 测试集加载（`<数据根>/testsets/*.json`，AgentBench / DeepEval 风格宽容解析） |
 | `judge.ts` | LLM-judge（`judgeMessage()` 单条消息评判：完成度 / 正确性 / 结论 note） |
+| `runner.ts` | **测试集执行器**（RSI P1）：用例 → 隔离会话真跑 → 采 trace（步数/token/耗时）→ 判分；`traceDir` 落 `*.trace.json` |
+| `mutator.ts` | **最小变更器**（RSI P1）：只写 `<数据根>/reflect/prompt-overlay.md`，越界目标在写盘前抛 `write_boundary_violation`，支持内容级回滚 |
+| `gate.ts` | **验证闸**（RSI P1）：held-in/held-out 双集 A/B + 护栏（步数/token/耗时）+ 成本上限 + 拒绝回滚 + 实验台账留痕 |
+| `reflect-cards.ts` | judge 结论 → 自省卡草稿（`judge_failed` / `judge_unsafe`；judge 调用失败不入卡） |
 | `index.ts` | 包导出 + `runEval()` 编排（CLI 与服务端 POST /api/eval/reports 共用） |
 
 命令：`bun run eval`（`--date` / `--all` / `--file` / `--exclude-model` / `--optimize` / `--judge`，详见 [CONFIGURATION.md](./CONFIGURATION.md) 与 [EVALUATION.md](./EVALUATION.md)）。
+RSI 首期（自省卡 + 验证闸）的机制、预算与门禁口径见 [EVALUATION.md](./EVALUATION.md) 第 4 节。

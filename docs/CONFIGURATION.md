@@ -47,6 +47,19 @@
 | `FENG_DISABLE_COMPACT` | `disableCompact` | `false` | 禁用自动压缩 |
 | `FENG_TOOL_OUTPUT_MAX_CHARS` | `toolOutputMaxChars` | `2000` | 工具输出最大字符数 |
 
+## RSI 自省与自改进配置（P0 自省卡 / P1 验证闸）
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `FENG_REFLECT_INJECT` | `on` | 自省注入开关；`off` 一键关闭（自省卡与 `prompt-overlay.md` 两段都不注入） |
+| `FENG_REFLECT_MAX_CARDS` | `5` | 单次注入卡片条数上限（硬预算） |
+| `FENG_REFLECT_MAX_TOKENS` | `600` | 单次注入 token 上限（硬预算） |
+| `FENG_REFLECT_TTL_MS` | `1209600000`（14 天） | 自省卡存活期，到期不再注入并可清理 |
+
+数据落点（默认 `<数据根>/reflect/`）：`reflections.db`（卡片 + 事件流）、
+`prompt-overlay.md`（验证闸采纳后写回的唯一落点）、`experiments/`、`experiments.jsonl`
+（实验台账，拒绝也留痕）。详见 `docs/EVALUATION.md` 第 4 节。
+
 ## 服务配置
 
 | 环境变量 | 配置键 | 默认值 | 说明 |

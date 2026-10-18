@@ -56,6 +56,31 @@ export {
   taskStateEquals,
 } from "./task-state.ts";
 
+// 自省卡（RSI P0：带证据的反思 + reflect/* 事件词汇）
+export type {
+  ReflectionCard,
+  ReflectionStatus,
+  ReflectionTrigger,
+  ReflectionScope,
+  ReflectionTargetKind,
+  ReflectionEvidence,
+  ReflectionSignal,
+  ReflectionEffect,
+  ReflectEvent,
+  ReflectEventType,
+} from "./reflection.ts";
+export {
+  REFLECTION_TRIGGERS,
+  REFLECTION_SEVERITY,
+  REFLECT_EVENT_TYPES,
+  ReflectionError,
+  assertValidReflectionCard,
+  hasReflectionEvidence,
+  isReflectEventType,
+  isReflectionInjectable,
+  reflectionRank,
+} from "./reflection.ts";
+
 // 副作用台账（幂等键 / 恢复决策）
 export type {
   SideEffectKind,

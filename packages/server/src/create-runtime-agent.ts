@@ -16,6 +16,7 @@
 import type { Agent } from "@fengagent/agent";
 import {
   Agent as AgentClass,
+  ReflectionStore,
   SessionStore,
   TaskStore,
   createAgentDefinitionLoader,
@@ -172,6 +173,10 @@ export interface CreateRuntimeAgentResult {
    * `enableSessionStore=false` 时为 null —— 届时 loop 不写 checkpoint、工具不入账。
    */
   taskStore: TaskStore | null;
+  /**
+   * 自省卡仓（RSI P0）。`enableSessionStore=false` 时为 null（无持久化 → 无跨轮继承）。
+   */
+  reflectionStore: ReflectionStore | null;
   agentDefinitionLoader: ReturnType<typeof createAgentDefinitionLoader>;
   subagentRunner: SubagentRunner;
   hookRegistry: HookRegistry;
@@ -243,6 +248,17 @@ export async function createRuntimeAgent(
   }
 
   // 5. 上下文管理器（走 ctx.context 插件）
+  //    数据根必须先定：自省注入（自省卡 + 验证闸写回的 prompt-overlay.md）按它定位。
+  //    存储未启用时不建自省库 —— 没有跨轮持久化也就没有「继承」可言。
+  const dataDir = resolveDataRoot({
+    workdir,
+    env: options.env,
+    configDataDir: config.dataDir,
+  });
+  const reflectionStore =
+    (options.enableSessionStore ?? true)
+      ? new ReflectionStore(`${dataDir}/reflect/reflections.db`)
+      : null;
   const contextManager = createContextManager({
     config: {
       contextWindow: config.contextWindow,
@@ -252,7 +268,22 @@ export async function createRuntimeAgent(
       smallModel: config.smallModel,
     },
     summaryGenerator: llmClient,
-    systemContextOptions: { workdir, loadMemory: true, loadAgentsMd: false },
+    systemContextOptions: {
+      workdir,
+      loadMemory: true,
+      loadAgentsMd: false,
+      reflectDataRoot: dataDir,
+      // 每轮重载都重新取（评测写入卡片 → 下一轮注入）；store 异常时降级为无卡
+      reflections: () => {
+        if (!reflectionStore) return [];
+        try {
+          reflectionStore.expireDue();
+          return reflectionStore.selectForInjection({ at: Date.now() });
+        } catch {
+          return [];
+        }
+      },
+    },
   });
 
   // 6. 会话存储 + 图存储（走 ctx.storage / ctx.graph 插件）
@@ -260,11 +291,6 @@ export async function createRuntimeAgent(
   let sessionStore: SessionStore | null = null;
   let taskStore: TaskStore | null = null;
   const enableStore = options.enableSessionStore ?? true;
-  const dataDir = resolveDataRoot({
-    workdir,
-    env: options.env,
-    configDataDir: config.dataDir,
-  });
   if (enableStore) {
     // 首次运行单向幂等导入 main 遗留数据（只读 main、import.marker 去重、自环防护）
     importMainData({ workdir, env: options.env, configDataDir: config.dataDir });
@@ -408,6 +434,7 @@ export async function createRuntimeAgent(
     llmClient,
     sessionStore,
     taskStore,
+    reflectionStore,
     agentDefinitionLoader,
     subagentRunner,
     hookRegistry,
