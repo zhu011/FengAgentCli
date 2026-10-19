@@ -144,6 +144,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 - **观测**：每次 LLM 调用自动落盘 trace 日志（`<数据根>/logs/llm-trace-{date}.jsonl`，含耗时 / token / 工具调用 / 错误，测试环境自动跳过）。WebUI 顶栏「📡 观测」页：日期切换 + 汇总指标卡 + **调用链树**（会话→消息→LLM 调用→工具调用四层展开，节点含参数 / 返回 / 耗时 / token 明细）+ 指标图表
 - **评测**：`bun run eval` 分析 trace 生成报告（`<数据根>/logs/eval-report-{date}.md`，含概览 / 模型对比 / 工具分析等 8–9 块）；支持 `--date= / --all / --file= / --exclude-model=`；WebUI「🧪 评测」页：测试集管理（`<数据根>/testsets/*.json`）、报告浏览与导出，以及**一键生成报告**（「生成报告 / 生成报告 + 自优化」按钮等价再跑一次 eval，报告 date 为生成日、建议 date 为日志日）
 - **自优化**：`bun run eval --optimize` 评测后自动诊断；`bun run eval --judge` 跑「测试集→LLM-judge→diagnose→建议报告」全链路评测（自动加载 LLM 配置，测试集见 `<数据根>/testsets/*.json`），输出可执行调优建议（系统提示词 / 工具描述 / 上下文策略，含 LLM-judge 结论驱动规则）至 `<数据根>/optimizations/optimization-{date}.md`，WebUI 评测页可直接浏览
+- **RSI（自省卡）**：`bun run eval --judge` 会**真跑** `<数据根>/testsets/*.json` 里的测试集，按 judge 结论把「教训」落成带证据的自省卡（`<数据根>/reflect/reflections.db`）；之后正常对话（TUI / WebUI）系统提示会自动多出「过往教训」一节，`FENG_REFLECT_INJECT=off` 一键关，`FENG_REFLECT_MAX_CARDS/MAX_TOKENS` 控预算 —— 日常操作见 [docs/RSI-USAGE.md](docs/RSI-USAGE.md)
 - **每轮对话深链**：聊天页每条消息右侧「查看调用链」「查看评测」按钮，按每轮对话粒度跳转到观测/评测页（deep-link `?sessionId=X&messageId=Y`，用户消息自动解析到其后助手轮次，工具循环多步全部纳入）；会话列表每个会话行也有「查看观测 / 查看评测」入口，跳转后经消息选择器定位任意一轮；旧日志（无 messageId）自动按文本匹配回退
 - **中断会话回放**：若会话在 Loop 未收尾时被终止（服务被杀 / 死循环被终止），SQLite/事件日志可能只落了用户消息——消息选择器会**自动从 trace 日志补齐缺失的助手轮次**，保证每一轮调用链/评测仍可回放
 - 完整说明见 [docs/EVALUATION.md](docs/EVALUATION.md)（可观测性接入 / 评测手册 / 自优化流程 / LLM-judge 数据结构对齐）
@@ -171,6 +172,7 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 | [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent / Skill |
 | [实验沙箱](docs/SANDBOX.md) | 沙箱安全模型与编程接口 |
 | [评测与自优化](docs/EVALUATION.md) | 可观测性接入、评测模块使用手册、自优化流程 |
+| [RSI 日常使用指南](docs/RSI-USAGE.md) | 测试集 JSON 结构与路径、`eval --judge` 产卡、对话自动注入、`FENG_REFLECT_*` 开关、观察与边界 |
 | [在线文档站](https://zhu011.github.io/FengAgentCli/) | 交互式文档 |
 
 ## 🧱 项目结构

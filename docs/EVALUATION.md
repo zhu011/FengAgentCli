@@ -262,6 +262,9 @@ Self-Harness 式的小闭环：**带证据的反思进入下一轮**，**自改�
 定位是 RSI 的 L1 最小实现（Last AI Built by Humans 口径：跨任务保留的持久系统状态 +
 人类定验收），不是「模型自评自改」。
 
+> **日常操作**（放测试集 → `bun run eval --judge` 产卡 → 对话里怎么被注入 → `FENG_REFLECT_*` 开关
+> → 怎么观察 → 现在能用/还不能一键用什么）见 [RSI-USAGE.md](RSI-USAGE.md)。本节讲机制与判定规则。
+
 ### 4.1 P0 自省卡：证据 → 卡 → 注入
 
 | 环节 | 落点 | 说明 |
@@ -324,6 +327,10 @@ TestCase → 隔离会话（每用例新建 Agent）→ 采 trace（步数/token
 这就是「写回 → 下一轮生效」那一跳；`FENG_REFLECT_INJECT=off` 时连同它一起关闭。
 
 查询台账：`listExperiments(dataRoot, { verdict: "rejected" })`。
+
+> **入口边界**：`runVerificationGate` 目前是**库级 API**（`@fengagent/eval` 导出），没有 CLI 子命令，
+> 也没有 WebUI/HTTP 入口 —— 「验证 → 自动采纳 → 写回 overlay」要自己写脚本调用。可照抄的调用骨架见
+> [RSI-USAGE.md §6.2](RSI-USAGE.md#62-不能一键要写代码)。
 
 ### 4.4 测试与门禁
 
