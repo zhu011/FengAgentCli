@@ -1,0 +1,93 @@
+event: session-start
+data: {"type":"session-start","session":{"id":"8fbaac0b-c93d-45e6-83a7-cb780b9f15b7","title":"New Session","messages":[{"id":"7ebb7992-3254-4ebe-b9eb-eeeb4d8919f2","role":"user","content":[{"type":"text","text":"请原样回复这个暗号：WebUI完成态-D5-3a7e"}],"createdAt":1792423157447}],"model":"deepseek-v4-pro","createdAt":1792423146933,"updatedAt":1792423157447,"status":"running","tokenCount":0}}
+
+event: message-start
+data: {"type":"message-start","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","role":"assistant"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"The"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" user asks"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" me to reply verb"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"atim with a"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" code phrase"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":". This"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" is a simple request"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":". Let me just"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" reply with"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" the exact text"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":".\n\nThe instruction"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" says to reply"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" the"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" code phrase verb"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"atim: \"Web"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"UI完成态-D"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"5-3a"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"7e\"\n\n"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"I should just"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" output this"}
+
+event: thinking-delta
+data: {"type":"thinking-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":" text directly."}
+
+event: text-delta
+data: {"type":"text-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"WebUI完成态"}
+
+event: text-delta
+data: {"type":"text-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"-D5-3"}
+
+event: text-delta
+data: {"type":"text-delta","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3","text":"a7e"}
+
+event: usage
+data: {"type":"usage","inputTokens":1524,"outputTokens":73}
+
+event: message-end
+data: {"type":"message-end","messageId":"67332b89-750d-4a8e-9a6f-d4c65ffc12d3"}
+
+event: turn-end
+data: {"type":"turn-end","reason":"end_turn"}
+
+event: session-end
+data: {"type":"session-end"}
+
+event: run-end
+data: {"type":"run-end","sessionId":"8fbaac0b-c93d-45e6-83a7-cb780b9f15b7"}
+
