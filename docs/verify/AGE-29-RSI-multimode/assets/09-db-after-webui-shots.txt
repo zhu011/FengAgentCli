@@ -1,0 +1,8 @@
+== reflections ==
+{"id":"9f482b22","rev":3,"status":"injected","trigger":"judge_failed","lesson":"上一轮任务未完成（完成度 0）：先确认目标再动手，必要时拆步（judge: Agent 未能执行 bash 工具，因缺少","effect":"{\"injectedCount\":2,\"lastInjectedAt\":1792422219029}"}
+== reflection_events (5) ==
+1 reflect/card-created sid=- cards=[]
+2 reflect/card-updated sid=- cards=[]
+3 reflect/injected sid=8ecb8db9 cards=[]
+4 reflect/card-updated sid=- cards=[]
+5 reflect/injected sid=8b37b416 cards=[]

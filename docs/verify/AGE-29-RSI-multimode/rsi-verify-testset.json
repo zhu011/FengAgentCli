@@ -1,0 +1,15 @@
+{
+  "name": "rsi-verify",
+  "cases": [
+    {
+      "id": "case-greet",
+      "input": "请原样回复这个暗号：多端验证-A1-7c31",
+      "expected": "多端验证-A1-7c31"
+    },
+    {
+      "id": "case-fail",
+      "input": "请用 bash 工具执行 echo RSI-E2E-9f2c 并贴出输出",
+      "expected": "RSI-E2E-9f2c"
+    }
+  ]
+}

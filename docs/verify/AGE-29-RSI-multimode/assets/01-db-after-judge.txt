@@ -1,0 +1,5 @@
+tables: reflections, reflection_events, sqlite_sequence
+cards: 1
+{"id":"9f482b22-a86e-4bb2-9046-9f774d7d60f5","revision":1,"scope":"project","scope_key":"project:default","status":"proposed","trigger":"judge_failed","signal_json":"{\"conclusion\":\"failed\",\"completionScore\":0,\"correctnessScore\":0,\"sessionId\":\"rsi-verify/case-fail\"}","lesson":"上一轮任务未完成（完成度 0）：先确认目标再动手，必要时拆步（judge: Agent 未能执行 bash 工具，因缺少用户批准回调，最终输出为空，未完成用户要求输出 RSI-E2E-9f2c 的任务。）","eviden
+events: 1
+1 reflect/card-created "{\"type\":\"reflect/card-created\",\"cardId\":\"9f482b22-a86e-4bb2-9046-9f774d7d60f5\",\"trigger\":

@@ -1,0 +1,7 @@
+[2026-10-19T15:01:48.702Z] [INFO] [cli] [main] CLI start, args=--print 请原样回复这个暗号：CLI注入验证-B2-4e8a
+[2026-10-19T15:01:48.791Z] [INFO] [agent] [prompt] start text preview=请原样回复这个暗号：CLI注入验证-B2-4e8a, sessionId=8ecb8db9-11d3-4ced-93a0-7ac0160fcb85
+[2026-10-19T15:01:48.823Z] [INFO] [agent-loop] [run] loop start step=1, model=deepseek-v4-pro
+[2026-10-19T15:01:48.875Z] [INFO] [agent-loop] [run] LLM call start model=deepseek-v4-pro, messageCount=1
+CLI注入验证-B2-4e8a[2026-10-19T15:01:51.545Z] [INFO] [agent-loop] [run] turn end reason=end_turn, step=1
+[2026-10-19T15:01:51.568Z] [INFO] [agent] [prompt] completed sessionId=8ecb8db9-11d3-4ced-93a0-7ac0160fcb85
+
