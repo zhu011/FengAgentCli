@@ -91,10 +91,11 @@ D:\AgentCode\FengAgentCli\.fengagent-cordis\testsets\my-set.json
 
 每条用例都是一个**全新 Agent 实例、全新会话**，用例之间不共享上下文，也**不写入会话库**（不会出现在你的会话列表里）。
 
-但工作目录要注意：用例 Agent 的 `workdir` 是**你执行 `bun run eval` 时所在的目录**（`wireCardPipeline` 里取的是 `process.cwd()`）。`<数据根>/reflect/eval-work` 虽然会建出来并作为「隔离目录」传给执行器上下文，但当前执行器（`createAgentSessionRunner`）**并不使用它**。也就是说：
+工作目录也是隔离的：用例 Agent 的 `workdir` 是 `<数据根>/reflect/eval-work/<caseId>`（每条用例一个子目录，跑之前自动建好），**不是**你执行 `bun run eval` 时所在的目录。也就是说：
 
-- 用例里如果让 Agent 调 `bash` / 写文件，**会作用在你当前仓库目录**；
-- 测试集请尽量写成**只读、无副作用**的用例（问答题、单文件读取、纯文本断言），或先切到专门的目录再跑 `bun run eval`。
+- 用例里让 Agent 调 `bash` / 写文件，落到的是那条用例自己的隔离目录，**不会**动你的仓库；
+- 用例之间也互不可见：A 用例写的文件，B 用例看不到；
+- 收工后想清理，直接删 `<数据根>/reflect/eval-work/` 即可（也可以留着当调试现场）。
 
 ## 2. 跑评测并产卡
 
@@ -165,7 +166,7 @@ bun run eval --judge --max-cases=3   # 每个测试集最多跑 3 条用例（�
 |---|---|
 | 自省卡库（SQLite） | `<数据根>/reflect/reflections.db` |
 | 每条用例的 trace（可核对） | `<数据根>/reflect/traces/<测试集名>/<caseId>.trace.json` |
-| 用例隔离工作目录 | `<数据根>/reflect/eval-work`（会建出来，但**当前执行器未使用**；用例实际跑在 `bun run eval` 的 cwd，见 1.3） |
+| 用例隔离工作目录 | `<数据根>/reflect/eval-work/<caseId>`（每条用例一个子目录，自动创建；用例的工具读写都落在里面，见 1.3） |
 | 评测报告 | `<数据根>/logs/eval-report-{生成日}.md` |
 | 自优化建议 | `<数据根>/optimizations/optimization-{日志日}.md` |
 
@@ -238,7 +239,7 @@ bun run eval --judge --max-cases=3   # 每个测试集最多跑 3 条用例（�
 | `FENG_REFLECT_INJECT` | `on` | `off`（也接受 `0` / `false` / `no`，大小写与空格不敏感）→ **自省卡和 `prompt-overlay.md` 两段一起关**，系统提示回到没有 RSI 的历史形态 |
 | `FENG_REFLECT_MAX_CARDS` | `5` | 单次注入卡片条数上限 |
 | `FENG_REFLECT_MAX_TOKENS` | `600` | 单次注入 token 上限（估算口径 字符/4） |
-| `FENG_REFLECT_TTL_MS` | `1209600000`（14 天） | **当前只解析、未接线**：卡片实际存活期由 `ReflectionStore` 内部的 14 天常量决定，改这个变量不会改变过期时间（见 6.4） |
+| `FENG_REFLECT_TTL_MS` | `1209600000`（14 天） | **已接线**：装配点（server / ACP / eval）经 `resolveReflectStoreOptions()` 把它传给 `ReflectionStore`，改这个变量即改变**新建卡片**的过期时间；已在库里的卡仍按各自的 `expires_at` 走（见 6.4） |
 
 两条约定：
 
@@ -376,20 +377,21 @@ listExperiments(".fengagent-cordis", { verdict: "rejected" });
 | 没有 `fengagent reflect …` 子命令 | 卡片只能查库 |
 | 没有卡片面板 / HTTP API | WebUI 的「评测」页只有测试集/报告/建议，不含卡片 |
 | 执行器成本上限未接线 | `runTestSet` 支持 `maxTokens` / `maxDurationMs`，但 CLI 只传 `--max-cases`；长时间/贵模型请自己压 `--max-cases` |
-| 用例 workdir 未真正隔离 | `eval-work` 会被创建但执行器未使用，用例跑在 `bun run eval` 的 cwd（见 §1.3）；用例请写成只读、无副作用 |
 | 通过阈值不可配 | 固定 60（`passThreshold` 默认值），CLI 无参数 |
+| 用例隔离目录不会自动清理 | `eval-work/<caseId>/` 会累积（每条用例一个）；想清就删 `<数据根>/reflect/eval-work/` |
 | `lesson` 模板化 | 5 类模板 + judge note 截断 120 字，不能自定义文案 |
 | 卡片不会自动被采纳 | 从 `proposed/injected` 到 `adopted` 必须过验证闸（也就是必须写脚本） |
 | 注入不是每轮重算 | 系统提示实例级缓存；新卡要**新会话**才看得到 |
 | 没有定时/自动评测 | 得手动 `bun run eval --judge`（没接进调度） |
 
-### 6.4 一个需要留意的实现现状：`FENG_REFLECT_TTL_MS`
+### 6.4 `FENG_REFLECT_TTL_MS` 的生效范围（已接线）
 
-`FENG_REFLECT_TTL_MS` 会被 `resolveReflectBudget()` 解析进预算对象，但**当前没有任何调用方消费它的 `ttlMs`**：卡片存活期来自 `ReflectionStore` 构造函数里的 `DEFAULT_TTL_MS = 14 天` 常量，装配点都是 `new ReflectionStore(path)`（不传 `ttlMs`）。因此：
+`FENG_REFLECT_TTL_MS` 会被 `resolveReflectBudget()` 解析进预算对象，同时经 `resolveReflectStoreOptions()` 直接传给 `ReflectionStore` 的构造参数 —— server 运行态、ACP 模式、eval 产卡跳三处装配点都走这一条口径。因此：
 
-- 改 `FENG_REFLECT_TTL_MS` **当前不会**改变卡片过期时间；
-- 想调整存活期，得在装配处传 `ttlMs`（改代码）或直接改库里的 `expires_at`；
-- 文档/代码注释里写的「14 天」是准确的，但「可配」目前名不副实。
+- 改 `FENG_REFLECT_TTL_MS` 会改变**此后新建卡片**的 `expires_at`（测试里断言过：设 `60000` 时新卡存活期就是 60 秒，未设/非法时回退 14 天）；
+- **已经在库里的卡不受影响**：过期时间在写入时固化，改环境变量不会回溯修改历史卡片；
+- 想过期清理，仍由 `expireDue()` 在每轮注入前把 `expires_at <= now` 的卡置为 `expired`（事件流留痕）；
+- 写 `0` 不是「立刻过期」而是非法值 → 回退默认 14 天（避免手滑把卡写成永不过期的反语义）。
 
 ## 7. 排查清单
 

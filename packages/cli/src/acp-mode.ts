@@ -107,7 +107,7 @@ export function credentialHint(err: unknown, cwd: string = process.cwd()): strin
 export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpModeHandle> {
   const { loadConfig, createSession: createSessionFactory } = await import("@fengagent/core");
   const { Agent, ReflectionStore, SessionStore, TaskStore } = await import("@fengagent/agent");
-  const { resolveSessionStoreRoot } = await import("@fengagent/shared");
+  const { resolveReflectStoreOptions, resolveSessionStoreRoot } = await import("@fengagent/shared");
   const { createClientFromEnv } = await import("@fengagent/llm");
   const {
     createToolRegistry,
@@ -171,7 +171,11 @@ export async function startAcpMode(options: AcpModeOptions = {}): Promise<AcpMod
     if (cached) return cached;
     try {
       mkdirSync(join(dataRoot, "reflect"), { recursive: true });
-      const store = new ReflectionStore(join(dataRoot, "reflect", "reflections.db"));
+      const store = new ReflectionStore(
+        join(dataRoot, "reflect", "reflections.db"),
+        // `FENG_REFLECT_TTL_MS` 真正接线：存活期由环境变量决定，改它即生效
+        resolveReflectStoreOptions(),
+      );
       reflectionStores.set(dataRoot, store);
       return store;
     } catch (err) {

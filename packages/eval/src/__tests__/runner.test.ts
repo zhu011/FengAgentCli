@@ -279,6 +279,67 @@ describe("createAgentSessionRunner — 接真实 Agent", () => {
   });
 });
 
+describe("用例工作目录隔离", () => {
+  test("给了隔离根：每条用例落到 <根>/<caseId>，且目录真的建好", async () => {
+    const root = mkdtempSync(join(tmpdir(), "feng-runner-iso-"));
+    const seen: string[] = [];
+    try {
+      await runTestSet({
+        testSet: makeTestSet("iso", [
+          { id: "c1", input: "1" },
+          { id: "c2", input: "2" },
+        ]),
+        workdir: root,
+        agent: {
+          async run(_input, ctx) {
+            seen.push(ctx.workdir);
+            return { events: events({ turns: 1 }), finalText: "ok" };
+          },
+        },
+        judge: () => ({ completionScore: 90, conclusion: "completed" }),
+      });
+
+      expect(seen).toEqual([join(root, "c1"), join(root, "c2")]);
+      for (const dir of seen) expect(existsSync(dir)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("没给隔离根时沿用进程 cwd（历史行为，不额外建目录）", async () => {
+    const seen: string[] = [];
+    await runTestSet({
+      testSet: makeTestSet("cwd", [{ id: "only", input: "x" }]),
+      agent: {
+        async run(_input, ctx) {
+          seen.push(ctx.workdir);
+          return { events: events({ turns: 1 }), finalText: "ok" };
+        },
+      },
+      judge: () => ({ completionScore: 90, conclusion: "completed" }),
+    });
+
+    expect(seen).toEqual([process.cwd()]);
+  });
+
+  test("createAgentSessionRunner 把 ctx 透传给工厂（否则 Agent 绑在进程 cwd）", async () => {
+    const seen: Array<{ caseId: string; workdir: string }> = [];
+    const runner = createAgentSessionRunner((ctx) => {
+      seen.push(ctx);
+      return {
+        async *prompt(_text: string) {
+          yield { type: "text-delta", messageId: "m", text: "ok" } as AgentEvent;
+          yield { type: "turn-end", reason: "end_turn" } as AgentEvent;
+        },
+      };
+    });
+
+    const caseWorkdir = join(tmpdir(), "feng-runner-iso", "c9");
+    await runner.run("输入", { caseId: "c9", workdir: caseWorkdir });
+    expect(seen).toEqual([{ caseId: "c9", workdir: caseWorkdir }]);
+  });
+});
+
 describe("aggregateRun — 聚合口径", () => {
   test("空用例集：全部指标为 0（不除零）", () => {
     const run = aggregateRun("empty", []);

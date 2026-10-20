@@ -288,7 +288,7 @@ Self-Harness 式的小闭环：**带证据的反思进入下一轮**，**自改�
 | `FENG_REFLECT_INJECT` | `on` | `off` 一键关（自省卡与 overlay 两段都不注入，主流程行为不变） |
 | `FENG_REFLECT_MAX_CARDS` | `5` | 单次注入条数上限 |
 | `FENG_REFLECT_MAX_TOKENS` | `600` | 单次注入 token 上限 |
-| `FENG_REFLECT_TTL_MS` | `1209600000`（14 天） | 卡片存活期 |
+| `FENG_REFLECT_TTL_MS` | `1209600000`（14 天） | 卡片存活期（经 `resolveReflectStoreOptions()` 接到三处装配点，改它即改变新卡过期时间） |
 
 数据落点：`<数据根>/reflect/reflections.db`。
 

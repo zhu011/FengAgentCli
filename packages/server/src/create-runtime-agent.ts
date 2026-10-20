@@ -49,6 +49,7 @@ import {
   deepMerge,
   importMainData,
   resolveDataRoot,
+  resolveReflectStoreOptions,
   writeSessionLog,
 } from "@fengagent/shared";
 // 注意：cordis/graph/events 携带 file:./vendor 依赖，bun 从其他 workspace 包按包名解析会失败，
@@ -260,7 +261,11 @@ export async function createRuntimeAgent(
   let reflectionStore: ReflectionStore | null = null;
   if (options.enableSessionStore ?? true) {
     try {
-      reflectionStore = new ReflectionStore(`${dataDir}/reflect/reflections.db`);
+      reflectionStore = new ReflectionStore(
+        `${dataDir}/reflect/reflections.db`,
+        // `FENG_REFLECT_TTL_MS` 真正接线：存活期由环境变量决定，改它即生效
+        resolveReflectStoreOptions(options.env),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(

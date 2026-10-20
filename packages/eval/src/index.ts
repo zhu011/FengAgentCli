@@ -123,7 +123,7 @@ import { listTestSets } from "./testset.ts";
 import { runTestSetCards, reflectTraceDir } from "./reflect-pipeline.ts";
 import type { AgentSessionRunner, CaseTrace, RunnerVerdict } from "./runner.ts";
 import type { ReflectionCardDraft } from "./reflect-cards.ts";
-import { resolveDataRoot } from "@fengagent/shared";
+import { resolveDataRoot, resolveReflectStoreOptions } from "@fengagent/shared";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "@fengagent/core";
@@ -418,7 +418,7 @@ if (import.meta.main) {
  * （隔离会话、不持久化会话库，避免评测污染会话列表）→ `runTestSetCards`。
  * 被评测的 Agent 自己也吃自省注入并记账 —— 闭环在评测路径上同样成立。
  */
-async function wireCardPipeline(args: {
+export async function wireCardPipeline(args: {
   config: Config;
   llmClient: LLMClient;
 }): Promise<{
@@ -435,12 +435,20 @@ async function wireCardPipeline(args: {
   const { createContextManager } = await import("@fengagent/context");
   const { createAgentSessionRunner } = await import("./runner.ts");
 
-  const workdir = process.cwd();
-  const dataRoot = resolveDataRoot({ workdir, configDataDir: args.config.dataDir });
-  const store = new ReflectionStore(join(dataRoot, "reflect", "reflections.db"));
+  // 数据根按「跑 eval 的当前目录」定位（与产卡/入户口径一致）；
+  // 但**用例自己的工作目录必须是隔离目录** —— 由 `ctx.workdir` 传进来
+  // （`runTestSet` 会给每条用例分 `<隔离根>/<caseId>`），用例的工具读写因此
+  // 不会落到真实工作区，也不会在用例之间互相污染。
+  const cwd = process.cwd();
+  const dataRoot = resolveDataRoot({ workdir: cwd, configDataDir: args.config.dataDir });
+  const store = new ReflectionStore(
+    join(dataRoot, "reflect", "reflections.db"),
+    // `FENG_REFLECT_TTL_MS` 真正接线：存活期由环境变量决定，改它即生效
+    resolveReflectStoreOptions(),
+  );
 
-  /** 每条用例一个全新 Agent（隔离会话 + 全新系统提示缓存 → 重新取可注入卡） */
-  const makeCaseAgent = () => {
+  /** 每条用例一个全新 Agent（隔离会话 + 隔离 workdir + 全新系统提示缓存 → 重新取可注入卡） */
+  const makeCaseAgent = (workdir: string = cwd) => {
     const toolRegistry = createToolRegistry();
     registerBuiltinTools(toolRegistry);
     const contextManager = createContextManager({
@@ -486,7 +494,7 @@ async function wireCardPipeline(args: {
   };
 
   return {
-    caseRunner: createAgentSessionRunner(makeCaseAgent),
+    caseRunner: createAgentSessionRunner((ctx) => makeCaseAgent(ctx.workdir)),
     ingestCard: (draft) => store.ingest(draft),
     dataRoot,
   };

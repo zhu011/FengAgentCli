@@ -58,7 +58,7 @@ export interface RunTestSetCardsOptions {
    * 不传 = 只产草稿不落库（dry-run）；返回 `null`/`undefined` 视为「证据门拒收」。
    */
   ingestCard?: (draft: ReflectionCardDraft) => unknown;
-  /** 隔离工作目录（默认 `process.cwd()`） */
+  /** 隔离工作目录根（每条用例再分 `<根>/<caseId>` 子目录；默认进程 cwd） */
   workdir?: string;
   /** trace 落盘目录（按测试集名给，默认不落盘） */
   traceDir?: (setName: string) => string | undefined;

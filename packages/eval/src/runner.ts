@@ -119,7 +119,7 @@ export interface RunTestSetOptions {
   agent: AgentSessionRunner;
   /** 判分函数（生产 = LLM-judge；测试 = 确定性判分） */
   judge: (trace: CaseTrace) => RunnerVerdict | Promise<RunnerVerdict>;
-  /** 隔离工作目录（默认由调用方准备；不传则不落盘 trace） */
+  /** 隔离工作目录根（每条用例在其中再分 `<根>/<caseId>` 子目录；不传则用进程 cwd） */
   workdir?: string;
   /** trace 落盘目录（默认 `undefined` = 只在内存） */
   traceDir?: string;
@@ -241,9 +241,15 @@ export async function runTestSet(options: RunTestSetOptions): Promise<TestSetRun
     let events: AgentEvent[] = [];
     let finalText = "";
     try {
+      // 工作目录隔离：给了隔离根就每条用例再分一个子目录 —— 用例之间的工具读写
+      // 互不可见；没给隔离根时沿用当前目录（历史行为，由调用方自担）。
+      const caseWorkdir = options.workdir === undefined
+        ? process.cwd()
+        : join(options.workdir, safeFileName(caseId));
+      if (options.workdir !== undefined) mkdirSync(caseWorkdir, { recursive: true });
       const run = await options.agent.run(testCase.input, {
         caseId,
-        workdir: options.workdir ?? process.cwd(),
+        workdir: caseWorkdir,
       });
       events = run.events;
       finalText = run.finalText;
@@ -339,15 +345,19 @@ export function aggregateRun(
  * 用真实 Agent（`Agent#prompt`）构造隔离会话执行器。
  *
  * 每次 `run` 都新建一个 Agent —— 用例之间不共享历史（隔离会话语义）。
+ * 工厂**必须消费入参 `ctx`**：`ctx.workdir` 是该用例的隔离工作目录，Agent 的
+ * 工具读写要落到它上面；忽略 `ctx` 会让用例跑在进程 cwd（真实工作区）里。
  *
- * @param createAgent - 工厂（每次调用返回全新 Agent）
+ * @param createAgent - 工厂（每次调用返回全新 Agent；参数为该用例的 caseId 与隔离 workdir）
  */
 export function createAgentSessionRunner(
-  createAgent: () => { prompt(text: string): AsyncGenerator<AgentEvent> },
+  createAgent: (ctx: { caseId: string; workdir: string }) => {
+    prompt(text: string): AsyncGenerator<AgentEvent>;
+  },
 ): AgentSessionRunner {
   return {
-    async run(input) {
-      const agent = createAgent();
+    async run(input, ctx) {
+      const agent = createAgent(ctx);
       const events: AgentEvent[] = [];
       let finalText = "";
       for await (const event of agent.prompt(input)) {

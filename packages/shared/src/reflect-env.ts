@@ -63,6 +63,20 @@ export function resolveReflectBudget(
   return { maxCards, maxTokens, ttlMs };
 }
 
+/**
+ * `ReflectionStore` 的装配选项：把预算里的 `ttlMs` 真正接到卡片仓上。
+ *
+ * 三处装配点（server 运行态 / ACP 模式 / eval 产卡跳）都必须经它构造卡片仓 ——
+ * 否则 `FENG_REFLECT_TTL_MS` 只是被解析、不生效（卡片仍走库内 14 天常量）。
+ *
+ * @param env - 环境变量（默认 process.env）
+ */
+export function resolveReflectStoreOptions(
+  env: Record<string, string | undefined> = process.env,
+): { ttlMs: number } {
+  return { ttlMs: resolveReflectBudget(env).ttlMs };
+}
+
 /** 读取正整数环境变量（缺省/非法/非正数一律回退） */
 function readPositiveInt(
   env: Record<string, string | undefined>,
