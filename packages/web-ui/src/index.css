@@ -3014,6 +3014,35 @@ body {
   color: var(--text-primary);
 }
 
+/* 窄视口（手机 ~390px）：收起品牌文字、压缩 tab 内距，避免导航溢出裁切 */
+@media (max-width: 560px) {
+  .app-nav {
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .app-nav__brand-name {
+    display: none;
+  }
+
+  .app-nav__brand {
+    margin-right: 0;
+  }
+
+  .app-nav__tabs {
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .app-nav__tab {
+    padding: 6px 8px;
+    font-size: 12px;
+    gap: 4px;
+    white-space: nowrap;
+  }
+}
+
 .app-nav__tab--active {
   background: var(--accent-light);
   color: var(--text-primary);

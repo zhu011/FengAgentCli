@@ -96,6 +96,8 @@ function useAgentTaskSource(client: ApiClient, forceMock: boolean) {
   const mockRef = useRef<AgentTasksMock | null>(null);
   const [mockMode, setMockMode] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
+  /** 探测是否已完成（无论真实/mock）——首屏加载的触发信号 */
+  const [probed, setProbed] = useState(false);
 
   const source = useMemo(() => {
     if (mockMode) {
@@ -108,6 +110,7 @@ function useAgentTaskSource(client: ApiClient, forceMock: boolean) {
   const probe = useCallback(async () => {
     if (forceMock) {
       setMockMode(true);
+      setProbed(true);
       return;
     }
     try {
@@ -118,10 +121,12 @@ function useAgentTaskSource(client: ApiClient, forceMock: boolean) {
       // P2 后端未就绪（404 / 网络错误）→ 回退 mock 演示数据
       setMockMode(true);
       setProbeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProbed(true);
     }
   }, [client, forceMock]);
 
-  return { source, mockMode, probeError, probe };
+  return { source, mockMode, probeError, probe, probed };
 }
 
 export function AgentsPage({ client }: AgentsPageProps) {
@@ -129,7 +134,7 @@ export function AgentsPage({ client }: AgentsPageProps) {
     const params = new URLSearchParams(window.location.search);
     return params.get("mock") === "1";
   }, []);
-  const { source, mockMode, probeError, probe } = useAgentTaskSource(client, forceMock);
+  const { source, mockMode, probeError, probe, probed } = useAgentTaskSource(client, forceMock);
 
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [tasks, setTasks] = useState<AgentTask[]>([]);
@@ -168,12 +173,19 @@ export function AgentsPage({ client }: AgentsPageProps) {
     if (mockMode) void reload();
   }, [mockMode, reload]);
 
-  // mock 模式下周期刷新（真实模式由流式与操作回调驱动）
+  // 探测完成后加载首屏数据（真实模式此前只在 mockMode 翻转时 reload，真实首屏空白——F 段 P0）
   useEffect(() => {
-    if (!mockMode) return;
-    const timer = setInterval(() => void reload(), 1000);
+    if (probed) void reload();
+  }, [probed, reload]);
+
+  // 周期刷新：mock 模式 1s（驱动演示生命周期）；真实模式 5s 轮询列表
+  // （真实列表此前无自动刷新，跨页状态只能靠详情页 SSE 回写——F 段 P1）
+  useEffect(() => {
+    if (!probed) return;
+    const interval = mockMode ? 1_000 : 5_000;
+    const timer = setInterval(() => void reload(), interval);
     return () => clearInterval(timer);
-  }, [mockMode, reload]);
+  }, [mockMode, probed, reload]);
 
   // 详情打开时列表同步该任务状态（真实模式：SSE 收到的 status 更新合并进列表）
   const mergeTask = useCallback((task: AgentTask) => {
@@ -486,11 +498,17 @@ function AgentTaskDetailView({ source, taskId, onBack, onTaskUpdate }: AgentTask
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 订阅轮次：详情内重试后递增，强制 SSE 效应重跑——重置本地 task/events/
+   * 流式文本并重新订阅（此前重试只回写列表，详情停留旧终态——F 段 P1）。
+   */
+  const [streamEpoch, setStreamEpoch] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     let alive = true;
     setStreamText("");
+    setEvents([]);
     setError(null);
 
     void (async () => {
@@ -523,7 +541,7 @@ function AgentTaskDetailView({ source, taskId, onBack, onTaskUpdate }: AgentTask
       alive = false;
       controller.abort();
     };
-  }, [source, taskId, onTaskUpdate]);
+  }, [source, taskId, streamEpoch, onTaskUpdate]);
 
   // 流式输出自动滚动到底
   useEffect(() => {
@@ -584,7 +602,14 @@ function AgentTaskDetailView({ source, taskId, onBack, onTaskUpdate }: AgentTask
               type="button"
               className="ag-btn"
               onClick={() => {
-                void source.retryAgentTask(taskId).then(onTaskUpdate).catch((e) => setError(String(e)));
+                void source
+                  .retryAgentTask(taskId)
+                  .then((t) => {
+                    onTaskUpdate(t);
+                    // 重置本地视图并重订 SSE（新一轮 attempt 的事件与流式输出）
+                    setStreamEpoch((e) => e + 1);
+                  })
+                  .catch((e) => setError(String(e)));
               }}
             >
               <RefreshCw size={14} aria-hidden="true" /> 重试
