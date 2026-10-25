@@ -79,6 +79,23 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
 重连用 `?after=<seq>`（或 `Last-Event-ID`）只补发缺的事件，不重复渲染。
 心跳每 15s 一条注释帧（`: heartbeat`）。
 
+**每次状态转移都推两帧，顺序固定：先 `event`（`task/<status>`），再 `status`。**
+终态也一样 —— 服务端收到终态 `status` 帧就结束流，所以 `task/replied` / `task/failed` /
+`task/cancelled` 事件帧一定在终态 status 之前发出（F 段 P0 修复）。客户端只看
+`event` 帧就能重建完整时间线，`status` 帧只负责驱动状态徽标。
+
+## 4.5 身份隔离（子进程环境与工作目录）
+
+派发出去的目标 agent 是**独立进程**，不该继承我们这侧的身份：
+
+- **环境变量**：只透传系统必需的白名单（`PATH` / `SystemRoot` / `TEMP` / `USERPROFILE` 等，
+  见 `buildAcpChildEnv()`），**不含 `MULTICA_*`**（尤其 task token）与调用方 provider key。
+  目标真需要凭据，在 `<数据根>/runtimes.json` 的 `env` 里显式给，或让它读自己的配置文件。
+- **工作目录**：默认 `~/.fengagent/dispatch-workspace/<数据根指纹>`（**仓库外**）。
+  放在仓库里会让目标读到 `AGENTS.md` / `CLAUDE.md` / `.git`，从而自称成别的 agent、
+  或把这次外派当成在自己项目里干活（F 段 P0）。`POST /api/agent-tasks` 的 `cwd`
+  可显式覆盖，但默认值保证中立。
+
 ## 5. 不重复执行（副作用台账）
 
 每次派发是一个副作用操作：`operationKey = agent-task:<taskId>:attempt-<n>`，
@@ -144,9 +161,11 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
 ## 10. 自测覆盖（`bun test`）
 
 - `packages/agent/src/__tests__/acp-client.test.ts`：真 spawn `fixtures/fake-acp-agent.ts`，
-  握手/建会话/`session/resume`（全参）/增量/权限决策/协议错误/取消/回收。
+  握手/建会话/`session/resume`（全参）/增量/权限决策/协议错误/取消/回收；`buildAcpChildEnv()`
+  的 `MULTICA_*` 不透传。
 - `packages/agent/src/__tests__/agent-task-store.test.ts`：幂等键、7 态转移（含非法转移）、
   事件重放对拍、retry、分页、24h 统计。
 - `packages/server/src/__tests__/agent-tasks-api.test.ts`：派发闭环、失败、取消、retry（含
-  「retry 复用同一目标会话」）、
-  台账回放/未决拦截、启动恢复、以及 §3 全部路由（含 SSE 快照与事件回放）。
+  「retry 复用同一目标会话」）、实时帧顺序（每次转移「事件帧 → 状态帧」，含终态）、
+  SSE 实时推终态事件（`?after=` 之后只可能来自实时推送）、身份隔离（`MULTICA_*` 不透传、
+  默认 cwd 在仓库外）、台账回放/未决拦截、启动恢复、以及 §3 全部路由（含 SSE 快照与事件回放）。

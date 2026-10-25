@@ -118,6 +118,77 @@ export class AcpProtocolError extends Error {
   }
 }
 
+/**
+ * 允许透传给目标子进程的环境变量（小写匹配；Windows 上变量名大小写不敏感）。
+ *
+ * 只放「进程能正常启动」所需的系统变量。**刻意不含**调用方的平台凭据
+ * （`MULTICA_*`，含 task token）与 provider key：派发出去的目标进程不该继承
+ * 我们这侧的身份。目标真需要凭据，就在 `<数据根>/runtimes.json` 的 `env` 里显式给
+ * （或让它读自己的配置文件）。
+ */
+const CHILD_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
+  "path",
+  "pathext",
+  "psmodulepath",
+  "systemroot",
+  "systemdrive",
+  "windir",
+  "comspec",
+  "temp",
+  "tmp",
+  "tmpdir",
+  "home",
+  "userprofile",
+  "homedrive",
+  "homepath",
+  "appdata",
+  "localappdata",
+  "programdata",
+  "programfiles",
+  "programfiles(x86)",
+  "commonprogramfiles",
+  "commonprogramfiles(x86)",
+  "allusersprofile",
+  "number_of_processors",
+  "processor_architecture",
+  "processor_identifier",
+  "processor_level",
+  "processor_revision",
+  "os",
+  "lang",
+  "lc_all",
+  "lc_messages",
+  "tz",
+  "username",
+  "userdomain",
+  "sessionname",
+  "shell",
+  "term",
+  "user",
+  "logname",
+]);
+
+/**
+ * 构造目标子进程的环境变量：系统白名单 + 注册表里显式配置的 `env`。
+ *
+ * @param extra - 显式注入的变量（`runtimes.json` 的 `env`），优先级最高
+ * @returns 精简后的环境变量表
+ */
+export function buildAcpChildEnv(
+  extra: Record<string, string | undefined> = {},
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (CHILD_ENV_ALLOWLIST.has(key.toLowerCase())) env[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
 interface PendingRequest {
   method: string;
   resolve(result: unknown): void;
@@ -167,7 +238,7 @@ export class AcpClient {
     const args = options.args ?? ["acp"];
     this.child = spawn(options.command, args, {
       cwd: options.cwd ?? process.cwd(),
-      env: { ...process.env, ...(options.env ?? {}) },
+      env: buildAcpChildEnv(options.env),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

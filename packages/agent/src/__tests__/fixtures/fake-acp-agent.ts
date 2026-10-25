@@ -58,6 +58,21 @@ function chunk(text: string): void {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runPrompt(text: string, respond: (result: unknown) => void): Promise<void> {
+  // 自检指令：把「目标进程实际拿到了什么环境/cwd」原样回显（身份隔离测试用）
+  if (text.includes("ENV_PROBE")) {
+    const keys = Object.keys(process.env)
+      .filter((key) => key.toLowerCase().startsWith("multica"))
+      .sort();
+    chunk(`multica_env=${keys.length === 0 ? "none" : keys.join(",")}`);
+    respond({ stopReason: "end_turn" });
+    return;
+  }
+  if (text.includes("CWD_PROBE")) {
+    chunk(`cwd=${process.cwd()}`);
+    respond({ stopReason: "end_turn" });
+    return;
+  }
+
   if (text.includes("FAIL")) {
     respond({ jsonrpcError: { code: -32000, message: "目标拒绝执行" } });
     return;

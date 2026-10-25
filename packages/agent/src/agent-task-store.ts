@@ -377,6 +377,34 @@ export class AgentTaskStore {
     } = {},
     at?: number,
   ): AgentTaskRecord {
+    return this.transition(id, next, patch, at).task;
+  }
+
+  /**
+   * 推进状态并**把新产生的事件一起返回**（实时推送要用它）。
+   *
+   * `setStatus()` 是它的薄包装；服务层用这个版本把 `task/<status>` 事件帧推给 SSE
+   * 订阅者，避免「状态变了但时间线里没有对应事件」。
+   *
+   * @param id - 任务 id
+   * @param next - 目标状态
+   * @param patch - 附带字段
+   * @param at - 事件时间（默认 now）
+   * @returns 推进后的任务 + 本次新增的事件（状态未变时为 undefined）
+   * @throws {Error} 任务不存在或转移非法
+   */
+  transition(
+    id: string,
+    next: AgentTaskStatus,
+    patch: {
+      detail?: string;
+      result?: string;
+      error?: string;
+      acpSessionId?: string;
+      attempt?: number;
+    } = {},
+    at?: number,
+  ): { task: AgentTaskRecord; event?: AgentTaskEventRow } {
     const current = this.get(id);
     if (!current) throw new Error(`agent task ${id} not found`);
     if (current.status !== next && !ALLOWED_TRANSITIONS[current.status].includes(next)) {
@@ -416,10 +444,14 @@ export class AgentTaskStore {
     }
     params.push(id);
     this.db.query(`UPDATE agent_tasks SET ${sets.join(", ")} WHERE id = ?`).run(...params);
-    if (current.status !== next) {
-      this.appendEvent(id, `task/${next}` as AgentTaskEventType, patch.detail, when);
-    }
-    return this.get(id)!;
+    const event =
+      current.status === next
+        ? undefined
+        : this.appendEvent(id, `task/${next}` as AgentTaskEventType, patch.detail, when);
+    return {
+      task: this.get(id)!,
+      ...(event === undefined ? {} : { event }),
+    };
   }
 
   /**

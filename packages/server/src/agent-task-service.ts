@@ -41,12 +41,26 @@ import type {
   AcpSessionUpdate,
 } from "@fengagent/agent";
 import type { OperationLedger } from "@fengagent/core";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { digestResult } from "@fengagent/core";
 import { createLogger, generateId } from "@fengagent/shared";
 import { AgentRuntimeRegistry } from "./agent-runtimes.ts";
 import type { RuntimeInfo } from "./agent-runtimes.ts";
 
 const log = createLogger("agent-tasks");
+
+/**
+ * 中立工作目录（**仓库外**）：`~/.fengagent/dispatch-workspace/<数据根指纹>`。
+ *
+ * 派发出去的目标 agent 会在 cwd 里读 `AGENTS.md` / `CLAUDE.md` / `.git` 来推断
+ * 「我是谁、我在哪个项目」，若默认 cwd 落在本仓库里，它就会自报成别的 agent、
+ * 甚至把这次外派当成在自己项目里干活（F 段 P0：身份/环境污染）。
+ */
+function neutralDispatchCwd(dataRoot: string): string {
+  const fingerprint = createHash("sha256").update(dataRoot).digest("hex").slice(0, 8);
+  return join(homedir(), ".fengagent", "dispatch-workspace", fingerprint);
+}
 
 /** 与 WebUI `AgentTask` 契约一致的任务 DTO（时间戳为 ISO 字符串） */
 export interface AgentTaskDto {
@@ -156,7 +170,7 @@ export class AgentTaskService {
     this.now = options.now ?? Date.now;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 120_000;
     this.promptTimeoutMs = options.promptTimeoutMs ?? 600_000;
-    this.defaultCwd = options.defaultCwd ?? join(options.dataRoot, "dispatch-workspace");
+    this.defaultCwd = options.defaultCwd ?? neutralDispatchCwd(options.dataRoot);
     this.ledger = options.ledger;
     this.permissionPolicy = options.permissionPolicy ?? (() => "deny");
     mkdirSync(this.defaultCwd, { recursive: true });
@@ -299,8 +313,7 @@ export class AgentTaskService {
       // 关闭打断在飞的 prompt 请求（否则要等目标侧回 stopReason）
       void active.client.close(300).catch(() => undefined);
     }
-    const next = this.store.setStatus(id, "cancelled", { detail: "用户取消" });
-    this.emit(id, { type: "status", task: toTaskDto(next) });
+    const next = this.transit(id, "cancelled", { detail: "用户取消" });
     this.notifyTerminal(id);
     return toTaskDto(next);
   }
@@ -314,6 +327,13 @@ export class AgentTaskService {
     const task = this.store.get(id);
     if (!task) throw new Error(`任务不存在: ${id}`);
     const reset = this.store.resetForRetry(id);
+    // resetForRetry 已经写了 `task/retried`（旁路事件，不是状态转移）—— 这里补推事件帧，
+    // 再看实时时间线的客户端不会漏掉「重试」这一条。
+    const events = this.store.events(id);
+    const retriedEvent = events[events.length - 1];
+    if (retriedEvent && retriedEvent.type === "task/retried") {
+      this.emit(id, { type: "event", event: toEventDto(retriedEvent) });
+    }
     this.emit(id, { type: "status", task: toTaskDto(reset) });
     this.startDispatch(id);
     return toTaskDto(this.store.get(id) ?? reset);
@@ -445,7 +465,7 @@ export class AgentTaskService {
               : undefined;
           // 上一轮真的派过（否则台账里不会有 succeeded）→ 补一条 dispatched 再收尾，
           // 事件流才与 7 态表一致（created → dispatched → replied）。
-          this.store.setStatus(id, "dispatched", {
+          this.transit(id, "dispatched", {
             detail: "幂等台账命中（该 attempt 已派发过）",
           });
           this.finish(id, "replied", {
@@ -463,10 +483,9 @@ export class AgentTaskService {
     }
 
     // ② 派发（可用性由这一次真 spawn 验证，不额外探测 —— dsh 冷启 13s，翻倍不划算）
-    const dispatched = this.store.setStatus(id, "dispatched", {
+    this.transit(id, "dispatched", {
       detail: `command=${entry.command} ${(entry.args ?? []).join(" ")}`,
     });
-    this.emit(id, { type: "status", task: toTaskDto(dispatched) });
 
     const client = new AcpClient({
       command: entry.command,
@@ -495,8 +514,7 @@ export class AgentTaskService {
           ` resume=${handshake.capabilities.resume}；会话 ${opened.mode}=${sessionId}` +
           (opened.fallbackReason === undefined ? "" : `（resume 回退：${opened.fallbackReason}）`),
       );
-      this.store.setStatus(id, "running", { acpSessionId: sessionId });
-      this.emit(id, { type: "status", task: toTaskDto(this.store.get(id)!) });
+      this.transit(id, "running", { acpSessionId: sessionId });
 
       const result = await client.prompt(sessionId, task.content, {
         onUpdate: (update) => {
@@ -552,7 +570,7 @@ export class AgentTaskService {
     }
   }
 
-  /** 收尾为 replied / cancelled（写结果 + 终态 + 唤醒等待者） */
+  /** 收尾为 replied / cancelled（写结果 + 终态事件 + 终态状态 + 唤醒等待者） */
   private finish(
     id: string,
     status: Extract<AgentTaskStatus, "replied" | "cancelled">,
@@ -560,8 +578,7 @@ export class AgentTaskService {
   ): void {
     const current = this.store.get(id);
     if (!current || isTerminalTaskStatus(current.status)) return;
-    const next = this.store.setStatus(id, status, patch);
-    this.emit(id, { type: "status", task: toTaskDto(next) });
+    this.transit(id, status, patch);
     this.notifyTerminal(id);
   }
 
@@ -569,10 +586,32 @@ export class AgentTaskService {
   private fail(id: string, error: string): void {
     const current = this.store.get(id);
     if (!current || isTerminalTaskStatus(current.status)) return;
-    const next = this.store.setStatus(id, "failed", { error, detail: error.slice(0, 200) });
     log.warn("dispatch", `任务 ${id} 失败: ${error.slice(0, 300)}`);
-    this.emit(id, { type: "status", task: toTaskDto(next) });
+    this.transit(id, "failed", { error, detail: error.slice(0, 200) });
     this.notifyTerminal(id);
+  }
+
+  /**
+   * 推进状态并**按顺序推两帧**：先 `event`（`task/<status>`），再 `status`。
+   *
+   * SSE 路由收到终态 `status` 帧就会结束流，所以终态事件帧必须在它之前发出去 ——
+   * 否则实时时间线里只有状态没有事件（F 段 P0：终态事件不推送）。
+   */
+  private transit(
+    id: string,
+    next: AgentTaskStatus,
+    patch: {
+      detail?: string;
+      result?: string;
+      error?: string;
+      acpSessionId?: string;
+      attempt?: number;
+    } = {},
+  ): AgentTaskRecord {
+    const { task, event } = this.store.transition(id, next, patch);
+    if (event) this.emit(id, { type: "event", event: toEventDto(event) });
+    this.emit(id, { type: "status", task: toTaskDto(task) });
+    return task;
   }
 
   /** 写一条旁路事件并推送 */

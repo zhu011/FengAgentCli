@@ -345,7 +345,8 @@ export async function createRuntimeAgent(
       agentTaskService = new AgentTaskService({
         dataRoot: dataDir,
         ...(taskStore ? { ledger: taskStore.ledger } : {}),
-        defaultCwd: join(dataDir, "dispatch-workspace"),
+        // 不传 defaultCwd：服务默认用「仓库外中立目录」（~/.fengagent/dispatch-workspace/…），
+        // 否则目标 agent 会在 cwd 里读到本仓库的 AGENTS.md/CLAUDE.md 并自报成别的身份。
       });
       // dispatch_task 工具：LLM 在会话里就能把任务派给别的 runtime，结果回流到本会话
       toolRegistry.register(

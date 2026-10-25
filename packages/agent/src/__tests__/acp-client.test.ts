@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { AcpClient, AcpProtocolError } from "../acp-client.ts";
+import { AcpClient, AcpProtocolError, buildAcpChildEnv } from "../acp-client.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "fake-acp-agent.ts");
 
@@ -146,5 +146,30 @@ describe("AcpClient — 握手 / 建会话 / 跑一轮", () => {
       caught = err;
     }
     expect(caught).toBeInstanceOf(Error);
+  });
+});
+
+describe("buildAcpChildEnv — 子进程环境白名单", () => {
+  test("不透传调用方的平台凭据（MULTICA_*），系统变量与显式 env 仍在", () => {
+    const previousToken = process.env.MULTICA_TOKEN;
+    const previousAgentId = process.env.MULTICA_AGENT_ID;
+    process.env.MULTICA_TOKEN = "mat_should_not_leak";
+    process.env.MULTICA_AGENT_ID = "ef81dfc3";
+    try {
+      const env = buildAcpChildEnv({ CUSTOM_RUNTIME_KEY: "runtime-value" });
+      expect(env.MULTICA_TOKEN).toBeUndefined();
+      expect(env.MULTICA_AGENT_ID).toBeUndefined();
+      // 显式给目标的变量照常透传
+      expect(env.CUSTOM_RUNTIME_KEY).toBe("runtime-value");
+      // PATH 这类系统变量必须在（否则目标进程起不来）
+      expect(
+        Object.entries(env).some(([key, value]) => key.toLowerCase() === "path" && value !== ""),
+      ).toBe(true);
+    } finally {
+      if (previousToken === undefined) delete process.env.MULTICA_TOKEN;
+      else process.env.MULTICA_TOKEN = previousToken;
+      if (previousAgentId === undefined) delete process.env.MULTICA_AGENT_ID;
+      else process.env.MULTICA_AGENT_ID = previousAgentId;
+    }
   });
 });

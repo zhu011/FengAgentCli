@@ -186,6 +186,102 @@ describe("AgentTaskService — 派发闭环", () => {
     expect(accepted[accepted.length - 1]!.detail).toContain(`resume=${sessionId}`);
   });
 
+  test("实时帧：每次状态转移都先推 task/<status> 事件帧，再推 status 帧（含终态）", async () => {
+    type Frame = { kind: "event"; type: string } | { kind: "status"; status: string };
+    const frames: Frame[] = [];
+    // 直接从 store 建任务再手动 dispatch，才能从第一条事件开始订阅
+    const { task } = service.store.create({
+      runtime: "fake",
+      content: "普通任务",
+      cwd: dir,
+    });
+    service.subscribe(task.id, (frame) => {
+      if (frame.type === "event") frames.push({ kind: "event", type: frame.event.type });
+      else if (frame.type === "status") frames.push({ kind: "status", status: frame.task.status });
+    });
+
+    await service.dispatch(task.id);
+
+    const kinds = frames
+      .map((f) => (f.kind === "event" ? `event:${f.type}` : `status:${f.status}`))
+      // 权限决策也是一条事件（task/stream-chunk），生命周期断言里排除它
+      .filter((kind) => kind !== "event:task/stream-chunk");
+    // 转移顺序：dispatched → running → replied，每一步都是「事件帧在前、状态帧在后」
+    expect(kinds).toEqual([
+      "event:task/dispatched",
+      "status:dispatched",
+      "event:task/accepted",
+      "event:task/running",
+      "status:running",
+      "event:task/replied",
+      "status:replied",
+    ]);
+  });
+
+  test("实时帧：失败与取消同样先推终态事件帧", async () => {
+    const failedKinds: string[] = [];
+    const failedTask = service.store.create({ runtime: "fake", content: "FAIL x", cwd: dir }).task;
+    service.subscribe(failedTask.id, (frame) => {
+      if (frame.type === "event") failedKinds.push(`event:${frame.event.type}`);
+      else if (frame.type === "status") failedKinds.push(`status:${frame.task.status}`);
+    });
+    await service.dispatch(failedTask.id);
+    expect(failedKinds.slice(-2)).toEqual(["event:task/failed", "status:failed"]);
+
+    const cancelKinds: string[] = [];
+    const slowTask = service.store.create({ runtime: "fake", content: "SLOW 慢", cwd: dir }).task;
+    service.subscribe(slowTask.id, (frame) => {
+      if (frame.type === "event") cancelKinds.push(`event:${frame.event.type}`);
+      else if (frame.type === "status") cancelKinds.push(`status:${frame.task.status}`);
+    });
+    const running = service.dispatch(slowTask.id);
+    await Bun.sleep(120);
+    service.cancel(slowTask.id);
+    await running;
+    expect(cancelKinds.slice(-2)).toEqual(["event:task/cancelled", "status:cancelled"]);
+  });
+
+  test("身份隔离：目标进程不继承 MULTICA_*（含 token）", async () => {
+    const previous = process.env.MULTICA_TOKEN;
+    process.env.MULTICA_TOKEN = "leak-me";
+    try {
+      const created = await service.submit({ runtime: "fake", content: "ENV_PROBE" });
+      const done = await service.waitForTerminal(created.id, 15_000);
+      expect(done.status).toBe("replied");
+      expect(done.result).toContain("multica_env=none");
+    } finally {
+      if (previous === undefined) delete process.env.MULTICA_TOKEN;
+      else process.env.MULTICA_TOKEN = previous;
+    }
+  });
+
+  test("身份隔离：默认 cwd 是仓库外中立目录（不读本仓库 AGENTS.md）", async () => {
+    // 这个用例刻意**不传 defaultCwd**，验证生产默认值（~/.fengagent/dispatch-workspace/…）
+    const bareDir = mkdtempSync(join(tmpdir(), "feng-agent-task-bare-"));
+    const bareRegistry = new AgentRuntimeRegistry({
+      dataRoot: bareDir,
+      entries: [{ name: "fake", command: process.execPath, args: [FIXTURE], enabled: true }],
+    });
+    const bare = new AgentTaskService({
+      dataRoot: bareDir,
+      registry: bareRegistry,
+      autoProbe: false,
+      recoverOnStart: false,
+      promptTimeoutMs: 15_000,
+    });
+    try {
+      const created = await bare.submit({ runtime: "fake", content: "CWD_PROBE" });
+      const done = await bare.waitForTerminal(created.id, 15_000);
+      expect(done.status).toBe("replied");
+      const cwd = (done.result ?? "").replace(/^cwd=/, "").trim();
+      expect(cwd).toContain("dispatch-workspace");
+      expect(cwd.toLowerCase().startsWith(process.cwd().toLowerCase())).toBe(false);
+    } finally {
+      await bare.close();
+      safeRm(bareDir);
+    }
+  });
+
   test("retry：终态 → 新 attempt，事件流留痕 task/retried 且能再次成功", async () => {
     const created = await service.submit({ runtime: "fake", content: "FAIL 先失败" });
     const failed = await service.waitForTerminal(created.id, 15_000);
@@ -341,8 +437,32 @@ describe("Agents API 路由 — P2 契约", () => {
     safeRm(dir);
   });
 
-  test("GET /api/runtimes → RuntimeInfo[]（未探测时为 unprobed）", async () => {
-    const res = await runtimesApp.request("/");
+  test("SSE 实时推送：终态事件帧在终态 status 帧之前发出（P0 回归）", async () => {
+    const created = await service.submit({ runtime: "fake", content: "SLOW 终态事件" });
+    // 等它真的进入 running，再带 after=<当前最后 seq> 连流 —— 这样回放区为空，
+    // 流里出现的事件只可能来自实时推送。
+    for (let i = 0; i < 100; i++) {
+      if (service.getTask(created.id)?.status === "running") break;
+      await Bun.sleep(20);
+    }
+    const before = service.listEvents(created.id);
+    const after = before.length === 0 ? 0 : before[before.length - 1]!.seq;
+
+    const res = await app.request(`/${created.id}/stream?after=${after}`);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+
+    const repliedEventAt = text.indexOf("task/replied");
+    const repliedStatusAt = text.indexOf('"status":"replied"');
+    expect(repliedEventAt).toBeGreaterThan(-1);
+    expect(repliedStatusAt).toBeGreaterThan(-1);
+    // 事件帧先到，终态 status 帧后到（路由收到 status 才 break）
+    expect(repliedEventAt).toBeLessThan(repliedStatusAt);
+    // 确实是「事件帧」而不只是状态里的字段
+    expect(text).toContain("event: event");
+  });
+
+  test("GET /api/runtimes → RuntimeInfo[]（未探测时为 unprobed）", async () => {    const res = await runtimesApp.request("/");
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<Record<string, unknown>>;
     expect(Array.isArray(body)).toBe(true);
