@@ -466,3 +466,110 @@ export interface MarkdownReport {
   path: string;
   content: string;
 }
+
+// ──────────────────────────────────────────────
+// Agents 外派能力（P2 API 契约 — 参见 AGE-35 方案）
+// ──────────────────────────────────────────────
+
+/** 外派任务状态机（7 态；终态：replied / failed / cancelled / expired） */
+export type AgentTaskStatus =
+  | "created"
+  | "dispatched"
+  | "running"
+  | "replied"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
+/** 已注册的外部 agent 运行时 */
+export interface RuntimeInfo {
+  /** 注册名（dispatch_task 的 agent 参数） */
+  name: string;
+  /** 启动命令（含参数） */
+  command: string;
+  /** initialize 握手返回的 agentInfo */
+  agentName: string;
+  agentVersion: string;
+  /** 能力（来自 initialize.agentCapabilities） */
+  capabilities: {
+    resume: boolean;
+    loadSession: boolean;
+    image: boolean;
+  };
+  /** 最近一次探测结果与时间 */
+  probeStatus: "ok" | "unreachable" | "unprobed";
+  probeError?: string;
+  probedAt?: string;
+  /** 是否启用 */
+  enabled: boolean;
+  /** 最近 24h 任务数 */
+  recentTaskCount: number;
+}
+
+/** 外派任务事件（task_events 流的一行；对应 anet 任务详情的时间线） */
+export interface AgentTaskEvent {
+  seq: number;
+  at: string;
+  type:
+    | "task/created"
+    | "task/dispatched"
+    | "task/accepted"
+    | "task/running"
+    | "task/stream-chunk"
+    | "task/replied"
+    | "task/failed"
+    | "task/cancelled"
+    | "task/expired"
+    | "task/retried";
+  detail?: string;
+}
+
+/** 外派任务（列表/详情共用；详情附事件流与流式输出） */
+export interface AgentTask {
+  id: string;
+  /** 派发来源：本机会话 id（或 "dashboard" 表示界面发起） */
+  fromSession: string;
+  /** 目标 runtime 注册名 */
+  runtime: string;
+  status: AgentTaskStatus;
+  content: string;
+  /** 最终回复（replied 后有值） */
+  result?: string;
+  error?: string;
+  createdAt: string;
+  dispatchedAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  /** 耗时（ms，终态后有值） */
+  durationMs?: number;
+  /** 目标侧 ACP sessionId（跨进程 resume 用） */
+  acpSessionId?: string;
+}
+
+export interface AgentTaskListResponse {
+  tasks: AgentTask[];
+  runtimes: RuntimeInfo[];
+}
+
+export interface AgentTaskDetailResponse {
+  task: AgentTask;
+  events: AgentTaskEvent[];
+}
+
+export interface AgentTaskCreateRequest {
+  runtime: string;
+  content: string;
+  /** 可选：绑定本机会话（From 列显示） */
+  fromSession?: string;
+}
+
+/** 任务流式进度（SSE：状态推进 + 输出块） */
+export type AgentTaskStreamEvent =
+  | { type: "status"; task: AgentTask }
+  | { type: "chunk"; text: string }
+  | { type: "event"; event: AgentTaskEvent };
+
+export interface AgentTaskStreamRequest {
+  taskId: string;
+  signal?: AbortSignal;
+}

@@ -18,13 +18,14 @@ import { createApiClient } from "./api/client.ts";
 import { ChatPage } from "./pages/chat.tsx";
 import { ObservabilityPage } from "./pages/observability.tsx";
 import { EvalPage } from "./pages/eval.tsx";
+import { AgentsPage } from "./pages/agents.tsx";
 import { SessionSidebar } from "./components/session-sidebar.tsx";
 import { useSession } from "./hooks/use-session.ts";
 import { type Theme } from "./lib/theme.ts";
 import "./index.css";
 
 /** 应用视图 */
-export type AppView = "chat" | "observability" | "eval";
+export type AppView = "chat" | "observability" | "eval" | "agents";
 
 /** deep-link 目标（会话 + 可选消息） */
 export interface DeepLinkTarget {
@@ -68,7 +69,7 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const v = params.get("view");
-    if (v === "observability" || v === "eval") {
+    if (v === "observability" || v === "eval" || v === "agents") {
       setView(v);
       setDeepLink({
         sessionId: params.get("sessionId") ?? undefined,
@@ -140,6 +141,15 @@ function App() {
           >
             <span aria-hidden="true">🧪</span> 评测
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "agents"}
+            className={`app-nav__tab ${view === "agents" ? "app-nav__tab--active" : ""}`}
+            onClick={() => setView("agents")}
+          >
+            <span aria-hidden="true">🤖</span> Agents
+          </button>
         </div>
       </nav>
 
@@ -173,6 +183,10 @@ function App() {
         ) : view === "observability" ? (
           <div className="app-shell__main">
             <ObservabilityPage client={client} deepLink={deepLink} onNavigate={navigate} />
+          </div>
+        ) : view === "agents" ? (
+          <div className="app-shell__main">
+            <AgentsPage client={client} />
           </div>
         ) : (
           <div className="app-shell__main">

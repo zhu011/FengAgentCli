@@ -9,6 +9,12 @@
 
 import type {
   AgentEvent,
+  AgentTask,
+  AgentTaskCreateRequest,
+  AgentTaskDetailResponse,
+  AgentTaskListResponse,
+  AgentTaskStreamEvent,
+  AgentTaskStreamRequest,
   CallChainResponse,
   EvalOverview,
   GraphData,
@@ -18,6 +24,7 @@ import type {
   ModelsResponse,
   PermissionResult,
   RollbackResponse,
+  RuntimeInfo,
   Session,
   SessionMeta,
   TraceAnalysisResponse,
@@ -213,6 +220,99 @@ export class ApiClient {
     }
 
     yield* this.readSSEBody(res);
+  }
+
+  // ──────────────────────────────────────────────
+  // Agents 外派能力（P2 契约；后端未落地时页面自动回退 mock）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/runtimes — 运行时注册表（含探测状态） */
+  async listRuntimes(): Promise<RuntimeInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/runtimes`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list runtimes");
+    return (await res.json()) as RuntimeInfo[];
+  }
+
+  /** GET /api/agent-tasks — 外派任务列表 */
+  async listAgentTasks(): Promise<AgentTaskListResponse> {
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list agent tasks");
+    return (await res.json()) as AgentTaskListResponse;
+  }
+
+  /** GET /api/agent-tasks/:id — 任务详情 + 事件日志 */
+  async getAgentTask(taskId: string): Promise<AgentTaskDetailResponse> {
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks/${encodeURIComponent(taskId)}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get agent task");
+    return (await res.json()) as AgentTaskDetailResponse;
+  }
+
+  /** POST /api/agent-tasks — 发起外派任务 */
+  async createAgentTask(req: AgentTaskCreateRequest): Promise<AgentTask> {
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to create agent task");
+    return (await res.json()) as AgentTask;
+  }
+
+  /** POST /api/agent-tasks/:id/cancel — 取消（非终态可取消） */
+  async cancelAgentTask(taskId: string): Promise<AgentTask> {
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks/${encodeURIComponent(taskId)}/cancel`, {
+      method: "POST",
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to cancel agent task");
+    return (await res.json()) as AgentTask;
+  }
+
+  /** POST /api/agent-tasks/:id/retry — 重试（终态 failed/cancelled/expired 可重试；幂等台账防重复执行） */
+  async retryAgentTask(taskId: string): Promise<AgentTask> {
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks/${encodeURIComponent(taskId)}/retry`, {
+      method: "POST",
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to retry agent task");
+    return (await res.json()) as AgentTask;
+  }
+
+  /**
+   * GET /api/agent-tasks/:id/stream — 任务流式进度（SSE）。
+   * 与 sendMessage 同一套 fetch + ReadableStream 解析，但事件类型为 AgentTaskStreamEvent。
+   */
+  async *streamAgentTask(req: AgentTaskStreamRequest): AsyncGenerator<AgentTaskStreamEvent> {
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks/${encodeURIComponent(req.taskId)}/stream`, {
+      signal: req.signal,
+    });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to stream agent task");
+    }
+    if (!res.body) {
+      throw new Error("Response has no body");
+    }
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += value;
+      while (true) {
+        const idx = buffer.indexOf("\n\n");
+        if (idx === -1) break;
+        const rawEvent = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const dataLines = rawEvent
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim());
+        if (dataLines.length === 0) continue;
+        try {
+          yield JSON.parse(dataLines.join("\n")) as AgentTaskStreamEvent;
+        } catch {
+          // 忽略无法解析的帧
+        }
+      }
+    }
   }
 
   /**
