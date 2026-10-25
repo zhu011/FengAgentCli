@@ -429,6 +429,9 @@ export class AgentTaskStore {
    * 事件留痕（attempt 递增在事件 detail 与行字段里都可见），再由调用方派发。
    * 不做静默自动重试 —— 每次重试都必须是显式的一条事件。
    *
+   * 注意：`acp_session_id` **保留**（其余尝试态字段清空）—— 重试时若目标声明了
+   * resume 能力，服务层会用这个 id 续聊同一个目标会话，而不是新开一个。
+   *
    * @param id - 任务 id
    * @param detail - 重试原因（写进事件 detail）
    * @returns 重置后的任务（status=created，attempt+1）
@@ -452,7 +455,7 @@ export class AgentTaskStore {
       .query(
         `UPDATE agent_tasks
          SET status = 'created', attempt = ?, dispatched_at = NULL, started_at = NULL,
-             finished_at = NULL, result = NULL, error = NULL, acp_session_id = NULL
+             finished_at = NULL, result = NULL, error = NULL
          WHERE id = ?`,
       )
       .run(attempt, id);

@@ -270,6 +270,32 @@ export class AcpClient {
   }
 
   /**
+   * 复用目标侧既有会话：`session/resume`。
+   *
+   * ACP 的 resume 必须带**全参** —— 实测 kimi 与原版 dsh 会强制校验 `cwd`：
+   * `{ sessionId, cwd, mcpServers }`，缺 cwd 直接拒。目标侧回 `{sessionId}` 就用它，
+   * 没回就沿用传入的 id（网关类实现会这么做）。
+   *
+   * @param sessionId - 上一轮记下的目标会话 id
+   * @param cwd - 目标的绝对工作目录
+   * @param mcpServers - 本桥不接 MCP，默认空数组（不能省略）
+   * @returns 目标侧确认的 sessionId
+   */
+  async resumeSession(
+    sessionId: string,
+    cwd: string,
+    mcpServers: unknown[] = [],
+  ): Promise<string> {
+    const result = (await this.request(
+      "session/resume",
+      { sessionId, cwd, mcpServers },
+      this.requestTimeoutMs,
+    )) as Record<string, unknown>;
+    const resumed = typeof result.sessionId === "string" ? result.sessionId : "";
+    return resumed === "" ? sessionId : resumed;
+  }
+
+  /**
    * 跑一轮：`session/prompt`，期间把 `session/update` 交给 `onUpdate`。
    *
    * @param sessionId - 目标侧会话 id

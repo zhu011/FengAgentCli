@@ -168,6 +168,24 @@ describe("AgentTaskService — 派发闭环", () => {
     expect(() => service.cancel(created.id)).toThrow(/终态/);
   });
 
+  test("retry 复用目标会话：目标有 resume 能力就续聊同一个 acpSessionId", async () => {
+    const created = await service.submit({ runtime: "fake", content: "第一次" });
+    const first = await service.waitForTerminal(created.id, 15_000);
+    expect(first.status).toBe("replied");
+    const sessionId = service.store.get(created.id)!.acpSessionId;
+    expect(sessionId).toBe("fake-session-1");
+
+    service.retry(created.id);
+    const second = await service.waitForTerminal(created.id, 15_000);
+    expect(second.status).toBe("replied");
+    // 同一个目标会话（不是新开一个）
+    expect(service.store.get(created.id)!.acpSessionId).toBe(sessionId);
+    const accepted = service
+      .listEvents(created.id)
+      .filter((e) => e.type === "task/accepted");
+    expect(accepted[accepted.length - 1]!.detail).toContain(`resume=${sessionId}`);
+  });
+
   test("retry：终态 → 新 attempt，事件流留痕 task/retried 且能再次成功", async () => {
     const created = await service.submit({ runtime: "fake", content: "FAIL 先失败" });
     const failed = await service.waitForTerminal(created.id, 15_000);

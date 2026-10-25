@@ -155,6 +155,24 @@ function handle(line: string): void {
     case "session/new":
       send({ jsonrpc: "2.0", id: frame.id!, result: { sessionId: SESSION_ID } });
       return;
+    case "session/resume": {
+      // 与真实现一致：必须带 cwd（缺了按 invalid params 拒），并把 sessionId 回给宿主
+      const params = (frame.params ?? {}) as { sessionId?: string; cwd?: string };
+      if (typeof params.cwd !== "string" || params.cwd === "") {
+        send({
+          jsonrpc: "2.0",
+          id: frame.id!,
+          error: { code: -32602, message: "session/resume 缺少 cwd" },
+        });
+        return;
+      }
+      send({
+        jsonrpc: "2.0",
+        id: frame.id!,
+        result: { sessionId: params.sessionId ?? SESSION_ID },
+      });
+      return;
+    }
     case "session/prompt": {
       const prompt = (frame.params?.prompt ?? []) as Array<{ text?: string }>;
       const text = prompt.map((part) => part.text ?? "").join("");

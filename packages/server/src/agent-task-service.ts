@@ -36,6 +36,7 @@ import type {
   AgentTaskEventRow,
   AgentTaskRecord,
   AgentTaskStatus,
+  AcpHandshake,
   AcpPermissionRequest,
   AcpSessionUpdate,
 } from "@fengagent/agent";
@@ -482,14 +483,18 @@ export class AgentTaskService {
     let text = "";
     try {
       const handshake = await client.initialize();
+      // 建会话：上一 attempt 留下 acpSessionId 且目标声明了 resume 能力 → 续聊同一个
+      // 目标会话（ACP 要求带全参 sessionId + cwd + mcpServers）；否则新建。
+      const opened = await openTargetSession(client, task.cwd, task.acpSessionId, handshake);
+      const sessionId = opened.sessionId;
+      run.sessionId = sessionId;
       this.appendEvent(
         id,
         "task/accepted",
         `握手成功 agent=${handshake.agentInfo.name || "?"} v${handshake.agentInfo.version || "?"}` +
-          ` resume=${handshake.capabilities.resume}`,
+          ` resume=${handshake.capabilities.resume}；会话 ${opened.mode}=${sessionId}` +
+          (opened.fallbackReason === undefined ? "" : `（resume 回退：${opened.fallbackReason}）`),
       );
-      const sessionId = await client.newSession(task.cwd);
-      run.sessionId = sessionId;
       this.store.setStatus(id, "running", { acpSessionId: sessionId });
       this.emit(id, { type: "status", task: toTaskDto(this.store.get(id)!) });
 
@@ -639,9 +644,43 @@ export function toEventDto(row: AgentTaskEventRow): AgentTaskEventDto {
   };
 }
 
+/**
+ * 打开目标会话：能 resume 就续聊同一个目标会话，否则新建。
+ *
+ * ACP 的 `session/resume` 必须带**全参** `{sessionId, cwd, mcpServers}`（缺 cwd 会被
+ * kimi / 原版 dsh 直接拒），因此这里把 cwd 一起传下去。resume 失败（目标不支持、
+ * 会话已被回收）不阻塞派发 —— 回退 `session/new` 并把原因写进 `task/accepted` 的 detail。
+ *
+ * @param client - 已握手的客户端
+ * @param cwd - 目标工作目录（绝对路径）
+ * @param previousSessionId - 上一 attempt 留下的目标会话 id（可空）
+ * @param handshake - 握手结果（据此判断 resume 能力）
+ */
+async function openTargetSession(
+  client: AcpClient,
+  cwd: string,
+  previousSessionId: string | undefined,
+  handshake: AcpHandshake,
+): Promise<{ sessionId: string; mode: "resume" | "new"; fallbackReason?: string }> {
+  const canResume =
+    previousSessionId !== undefined &&
+    previousSessionId !== "" &&
+    handshake.capabilities.resume;
+  if (canResume) {
+    try {
+      const sessionId = await client.resumeSession(previousSessionId, cwd);
+      return { sessionId, mode: "resume" };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const sessionId = await client.newSession(cwd);
+      return { sessionId, mode: "new", fallbackReason: reason.slice(0, 200) };
+    }
+  }
+  return { sessionId: await client.newSession(cwd), mode: "new" };
+}
+
 /** 从 `session/update` 取文本增量（兼容 snake/camel 两套命名） */
-function chunkOf(update: AcpSessionUpdate): string | null {
-  const kind = update.sessionUpdate;
+function chunkOf(update: AcpSessionUpdate): string | null {  const kind = update.sessionUpdate;
   if (
     kind !== "agent_message_chunk" &&
     kind !== "agentMessageChunk" &&

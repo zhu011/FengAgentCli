@@ -56,6 +56,10 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
   不会再派一次）。这是「用户手抖点两下」的闸。
 - **retry 语义**：同 `taskId` 的**新 attempt**（`attempt+1`），事件流里有一条 `task/retried`
   （detail 记录上一状态）。不自动重试 —— 每次重试都必须显式发生。
+- **目标会话复用（`session/resume`）**：任务第一次派发走 `session/new`，`acpSessionId` 记在任务上；
+  retry 时若握手声明了 resume 能力，就带**全参** `{sessionId, cwd, mcpServers}` 续聊**同一个目标会话**
+  （`cwd` 不能省：kimi / 原版 dsh 会强制校验）。resume 失败（目标不支持 / 会话已被回收）自动回退
+  `session/new`，原因写进 `task/accepted` 的 detail，派发不因此失败。
 - **expired**：只在服务重启时把「还没派发出去的 created 任务」转入，没有定时 TTL。
 - **headless 权限**：目标 agent 发 `session/request_permission` 时，策略默认 **deny**，决策写进
   事件流（`task/stream-chunk` + `[permission] <tool> → allow|deny`）。冻结的事件枚举没有独立类型，
@@ -140,8 +144,9 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
 ## 10. 自测覆盖（`bun test`）
 
 - `packages/agent/src/__tests__/acp-client.test.ts`：真 spawn `fixtures/fake-acp-agent.ts`，
-  握手/建会话/增量/权限决策/协议错误/取消/回收。
+  握手/建会话/`session/resume`（全参）/增量/权限决策/协议错误/取消/回收。
 - `packages/agent/src/__tests__/agent-task-store.test.ts`：幂等键、7 态转移（含非法转移）、
   事件重放对拍、retry、分页、24h 统计。
-- `packages/server/src/__tests__/agent-tasks-api.test.ts`：派发闭环、失败、取消、retry、
+- `packages/server/src/__tests__/agent-tasks-api.test.ts`：派发闭环、失败、取消、retry（含
+  「retry 复用同一目标会话」）、
   台账回放/未决拦截、启动恢复、以及 §3 全部路由（含 SSE 快照与事件回放）。

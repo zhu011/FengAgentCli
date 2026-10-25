@@ -52,6 +52,25 @@ describe("AcpClient — 握手 / 建会话 / 跑一轮", () => {
     }
   });
 
+  test("session/resume 带全参（sessionId + cwd + mcpServers）复用同一会话", async () => {
+    const client = makeClient();
+    try {
+      const handshake = await client.initialize();
+      expect(handshake.capabilities.resume).toBe(true);
+      // 目标侧强制校验 cwd：缺了就 -32602（与 kimi / 原版 dsh 同款行为）
+      expect(await client.resumeSession("fake-session-1", import.meta.dir)).toBe(
+        "fake-session-1",
+      );
+      // resume 之后同一 sessionId 仍能正常跑一轮
+      const result = await client.prompt("fake-session-1", "继续", {
+        onPermission: () => "deny",
+      });
+      expect(result.text).toContain("好");
+    } finally {
+      await client.close();
+    }
+  });
+
   test("prompt 的增量按 session/update 逐块到达，权限决策回传并被采纳", async () => {
     const client = makeClient();
     try {
