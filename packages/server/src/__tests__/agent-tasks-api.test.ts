@@ -51,7 +51,7 @@ function safeRm(dir: string): void {
 }
 
 /** 造一个只注册 fake runtime 的服务（真 spawn fixture） */
-function makeService(options: { ledger?: boolean } = {}): {
+function makeService(options: { ledger?: boolean; permissionPolicy?: "allow" | "deny" } = {}): {
   service: AgentTaskService;
   taskStore: TaskStore | null;
   dir: string;
@@ -65,6 +65,9 @@ function makeService(options: { ledger?: boolean } = {}): {
         command: process.execPath,
         args: [FIXTURE],
         enabled: true,
+        ...(options.permissionPolicy === undefined
+          ? {}
+          : { permissionPolicy: options.permissionPolicy }),
       },
     ],
   });
@@ -239,6 +242,23 @@ describe("AgentTaskService — 派发闭环", () => {
     service.cancel(slowTask.id);
     await running;
     expect(cancelKinds.slice(-2)).toEqual(["event:task/cancelled", "status:cancelled"]);
+  });
+
+  test("权限策略按 runtime 可配 allow（复验 marker 用）：回执 allow-once 且事件留痕", async () => {
+    const made = makeService({ permissionPolicy: "allow" });
+    try {
+      const created = await made.service.submit({ runtime: "fake", content: "写个 marker 文件" });
+      const done = await made.service.waitForTerminal(created.id, 15_000);
+      expect(done.status).toBe("replied");
+      expect(done.result).toContain("[perm:allow-once]");
+      const permission = made.service
+        .listEvents(created.id)
+        .find((e) => e.detail?.startsWith("[permission]"));
+      expect(permission?.detail).toContain("allow");
+    } finally {
+      await made.service.close();
+      safeRm(made.dir);
+    }
   });
 
   test("身份隔离：目标进程不继承 MULTICA_*（含 token）", async () => {

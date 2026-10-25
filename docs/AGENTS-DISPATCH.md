@@ -125,7 +125,9 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
   "runtimes": [
     { "name": "fengagent", "command": "fengagent", "args": ["acp"], "enabled": true },
     { "name": "dsh", "command": "dsh-acp", "args": ["acp"], "enabled": true },
-    { "name": "kimi", "command": "kimi", "args": ["acp"], "enabled": true }
+    { "name": "kimi", "command": "kimi", "args": ["acp"], "enabled": true },
+    { "name": "fake-allow", "command": "kimi", "args": ["acp"], "enabled": true,
+      "permissionPolicy": "allow", "env": { "SOME_KEY": "值" } }
   ],
   "probes": { "kimi": { "status": "ok", "agentName": "Kimi Code CLI", "agentVersion": "0.34.0", "probedAt": "…" } }
 }
@@ -134,6 +136,11 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
 - 缺文件时自动写默认三件套；`probes` 是探测结果缓存（启动时后台探一次，也可 `POST /api/runtimes/probe` 手动刷新）。
 - 探测 = spawn 目标 + `initialize` + 立刻回收（超时 20s，dsh 冷启实测 ~13s）。
 - 加一个 runtime 只改这个 json，不改代码。
+- `permissionPolicy`（可选，`"allow"` / `"deny"`）：该 runtime 的 headless 权限策略，
+  覆盖服务默认的 `deny`。**验收需要目标真写文件（marker 类）时，给测试 runtime 配 `"allow"`**；
+  决策仍会写进事件流（`[permission] … → allow|deny`）。
+- `env`（可选）：显式注入目标进程的环境变量 —— 这是往目标传凭据的**唯一**推荐方式
+  （默认不透传调用方的 `MULTICA_*`，见 §4.5）。
 
 ## 8. `dispatch_task` 工具
 

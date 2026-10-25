@@ -30,6 +30,13 @@ export interface RuntimeEntry {
   args?: string[];
   /** 追加环境变量 */
   env?: Record<string, string>;
+  /**
+   * headless 派发时该 runtime 的权限策略（覆盖服务的默认 `deny`）。
+   *
+   * 验收/联调需要目标真的写文件时，在 `runtimes.json` 里给这个 runtime 单独配
+   * `"permissionPolicy": "allow"`；默认（不配）仍是拒绝并存事件。
+   */
+  permissionPolicy?: "allow" | "deny";
   /** 是否可被派发（关掉只影响新任务，不动历史） */
   enabled: boolean;
 }

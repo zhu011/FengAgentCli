@@ -524,11 +524,16 @@ export class AgentTaskService {
           this.emit(id, { type: "chunk", text: chunk });
         },
         onPermission: (request) => {
-          const decision = this.permissionPolicy({
-            taskId: id,
-            runtime: task.runtime,
-            request,
-          });
+          // 优先级：注册表里给该 runtime 单独配的策略 > 服务默认策略（缺省 deny）。
+          // 验收需要目标真写文件时，在 runtimes.json 里给测试 runtime 配 "allow"。
+          const entryPolicy = this.registry.get(task.runtime)?.permissionPolicy;
+          const decision: "allow" | "deny" =
+            entryPolicy ??
+            this.permissionPolicy({
+              taskId: id,
+              runtime: task.runtime,
+              request,
+            });
           this.appendEvent(
             id,
             "task/stream-chunk",
