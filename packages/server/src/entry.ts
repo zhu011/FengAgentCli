@@ -62,6 +62,10 @@ async function main() {
     sessionStore: runtimeResult.sessionStore ?? undefined,
     // per-message LLM-judge（评测模块 judgeMessage）
     llmClient: runtimeResult.llmClient,
+    // Agents 面板 + dispatch_task（P1/P2）；初始化失败时为 undefined → 路由不挂载
+    ...(runtimeResult.agentTaskService
+      ? { agentTaskService: runtimeResult.agentTaskService }
+      : {}),
   });
 }
 

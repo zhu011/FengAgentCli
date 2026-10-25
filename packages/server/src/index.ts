@@ -62,6 +62,24 @@ export type {
   AcpLogFn,
 } from "./acp-stdio.ts";
 
+// Agents 外派能力（P1 运行时注册表 / P2 任务面）
+export { AgentRuntimeRegistry, DEFAULT_RUNTIME_ENTRIES } from "./agent-runtimes.ts";
+export type {
+  RuntimeEntry,
+  RuntimeInfo,
+  RuntimeProbeResult,
+  AgentRuntimeRegistryOptions,
+} from "./agent-runtimes.ts";
+export { AgentTaskService, toTaskDto, toEventDto } from "./agent-task-service.ts";
+export type {
+  AgentTaskDto,
+  AgentTaskEventDto,
+  AgentTaskStreamEvent,
+  AgentTaskServiceOptions,
+  CreateAgentTaskRequest,
+} from "./agent-task-service.ts";
+export { createRuntimeRoutes, createAgentTaskRoutes, mountAgentTaskRoutes } from "./routes/agent-tasks.ts";
+
 // 运行时 Agent 装配（CLI serve 与 server 入口共用同一装配）
 export {
   createRuntimeAgent,

@@ -42,6 +42,40 @@ export type {
   ReflectionStoreOptions,
 } from "./reflection-store.ts";
 
+// 外派任务仓（7 态 + seq 单调事件流，P1/P2）
+export {
+  AgentTaskStore,
+  replayAgentTaskStatus,
+  isTerminalTaskStatus,
+  TERMINAL_TASK_STATUSES,
+} from "./agent-task-store.ts";
+export type {
+  AgentTaskStatus,
+  AgentTaskEventType,
+  AgentTaskRecord,
+  AgentTaskEventRow,
+  CreateAgentTaskInput,
+  ListAgentTasksFilter,
+} from "./agent-task-store.ts";
+
+// ACP 客户端（把任务派给本机其他 agent 二进制）
+export {
+  AcpClient,
+  textOfUpdate,
+  AcpTimeoutError,
+  AcpUnavailableError,
+  AcpProtocolError,
+  ACP_CLIENT_PROTOCOL_VERSION,
+} from "./acp-client.ts";
+export type {
+  AcpClientOptions,
+  AcpHandshake,
+  AcpPromptResult,
+  AcpSessionUpdate,
+  AcpPermissionRequest,
+  AcpPermissionDecision,
+} from "./acp-client.ts";
+
 // 恢复核对（未决调用 orphan 检测）
 export {
   buildTaskRecoveryReport,

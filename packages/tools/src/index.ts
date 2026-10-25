@@ -58,6 +58,14 @@ export type {
 export { globTool } from "./builtin/glob.ts";
 export { grepTool } from "./builtin/grep.ts";
 export { taskTool } from "./builtin/task.ts";
+export { createDispatchTaskTool } from "./builtin/dispatch-task.ts";
+export type {
+  DispatchTaskInput,
+  DispatchTaskMetadata,
+  DispatchTaskOutcome,
+  DispatchTaskRequest,
+  DispatchTaskHandler,
+} from "./builtin/dispatch-task.ts";
 export { memorySave } from "./builtin/memory.ts";
 export { memorySearch } from "./builtin/memory.ts";
 export { memoryList } from "./builtin/memory.ts";

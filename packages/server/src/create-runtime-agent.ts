@@ -41,10 +41,12 @@ import {
   createPermissionChecker,
   createHookRegistry,
   registerMcpTools,
+  createDispatchTaskTool,
 } from "@fengagent/tools";
 import type { HookRegistry, McpRegistrationResult, ToolRegistry } from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
+import { AgentTaskService } from "./agent-task-service.ts";
 import {
   deepMerge,
   importMainData,
@@ -178,6 +180,11 @@ export interface CreateRuntimeAgentResult {
    * 自省卡仓（RSI P0）。`enableSessionStore=false` 时为 null（无持久化 → 无跨轮继承）。
    */
   reflectionStore: ReflectionStore | null;
+  /**
+   * 外派任务服务（P1/P2：dispatch_task + `/api/agent-tasks`）。
+   * `enableSessionStore=false` 或初始化失败时为 null。
+   */
+  agentTaskService: AgentTaskService | null;
   agentDefinitionLoader: ReturnType<typeof createAgentDefinitionLoader>;
   subagentRunner: SubagentRunner;
   hookRegistry: HookRegistry;
@@ -329,6 +336,44 @@ export async function createRuntimeAgent(
     // 任务状态仓 + 副作用台账（同一数据根；表名不重叠，老库开箱可用）
     taskStore = new TaskStore(`${dataDir}/tasks.db`);
   }
+
+  // 6.5 外派任务服务（P1/P2）：注册表 + ACP 客户端 + 7 态任务仓，幂等台账复用 AGE-29 的
+  //     operation_ledger（同一 attempt 只执行一次；未决的派发不静默重放）。
+  let agentTaskService: AgentTaskService | null = null;
+  if (enableStore) {
+    try {
+      agentTaskService = new AgentTaskService({
+        dataRoot: dataDir,
+        ...(taskStore ? { ledger: taskStore.ledger } : {}),
+        defaultCwd: join(dataDir, "dispatch-workspace"),
+      });
+      // dispatch_task 工具：LLM 在会话里就能把任务派给别的 runtime，结果回流到本会话
+      toolRegistry.register(
+        createDispatchTaskTool(
+          async (input, ctx) => {
+            const task = await agentTaskService!.dispatchAndWait({
+              runtime: input.runtime,
+              content: input.content,
+              fromSession: ctx.sessionId,
+              ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+            });
+            return {
+              id: task.id,
+              runtime: task.runtime,
+              status: task.status,
+              ...(task.result === undefined ? {} : { result: task.result }),
+              ...(task.error === undefined ? {} : { error: task.error }),
+            };
+          },
+          { runtimes: () => agentTaskService?.registry.entries().filter((e) => e.enabled).map((e) => e.name) ?? [] },
+        ),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Warn: 外派任务服务不可用（${dataDir}）：${message}\n`);
+      agentTaskService = null;
+    }
+  }
   const storageBackend: SessionStoreLike = sessionStore ?? createMemorySessionStore();
   // Phase 2 生产双写：事件日志为事实源，旧存储（SQLite/内存）降级为读模型 —
   // 同一会话事实双写（saveSession/saveMessage/saveMessages 走 DualWriteSessionStore），
@@ -461,6 +506,7 @@ export async function createRuntimeAgent(
     sessionStore,
     taskStore,
     reflectionStore,
+    agentTaskService,
     agentDefinitionLoader,
     subagentRunner,
     hookRegistry,

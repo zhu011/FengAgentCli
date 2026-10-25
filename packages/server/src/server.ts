@@ -25,6 +25,8 @@ import { createModelRoutes } from "./routes/models.ts";
 import { createHealthRoutes } from "./routes/health.ts";
 import { createObservabilityRoutes, extractLiveSession } from "./routes/observability.ts";
 import { createEvalRoutes } from "./routes/eval.ts";
+import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks.ts";
+import type { AgentTaskService } from "./agent-task-service.ts";
 
 /** Server 构造选项 */
 export interface ServerOptions {
@@ -43,6 +45,13 @@ export interface ServerOptions {
    * 测试用它隔离缓存，避免用例间互相命中。
    */
   judgeCacheRoot?: string;
+  /**
+   * 外派任务服务（Agents 页 / `dispatch_task`）。
+   *
+   * 缺省时不挂 `/api/runtimes` 与 `/api/agent-tasks`（WebUI 会回退演示数据），
+   * 生产入口 `entry.ts` 会传 `createRuntimeAgent().agentTaskService`。
+   */
+  agentTaskService?: AgentTaskService;
 }
 
 /**
@@ -84,6 +93,13 @@ export function createApp(options: ServerOptions): {
   app.route("/api/health", createHealthRoutes());
   app.route("/api/sessions", createSessionRoutes(sessionManager));
   app.route("/api/models", createModelRoutes(config));
+
+  // Agents 外派能力（P2 契约：runtime 卡片 + 任务列表/详情/取消/重试/SSE）
+  // 服务缺失时不挂路由 —— WebUI 探测 /api/runtimes 404 后自动回退演示数据。
+  if (options.agentTaskService) {
+    app.route("/api/runtimes", createRuntimeRoutes(options.agentTaskService));
+    app.route("/api/agent-tasks", createAgentTaskRoutes(options.agentTaskService));
+  }
 
   // 可观测性（AgentLoop 观测面板） + 评测模块（WebUI）
   // 调用链中的工具返回结果优先从实时会话消息回填；
