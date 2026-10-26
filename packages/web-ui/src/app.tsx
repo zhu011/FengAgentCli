@@ -42,7 +42,7 @@ function App() {
     if (stored === "light" || stored === "cyber" || stored === "dark") {
       return stored;
     }
-    return "dark";
+    return "light";
   });
 
   // 应用 data-theme 属性 + dark class 按需切换

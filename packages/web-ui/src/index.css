@@ -63,48 +63,48 @@
    Light 主题变量
    ────────────────────────────────────────────── */
 [data-theme="light"] {
-  --bg-primary: #f8f9fa;
+  --bg-primary: #fafbfc;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f3f5;
-  --bg-hover: #e9ecef;
-  --bg-active: #e3f2fd;
-  --bg-code: #f1f3f5;
-  --bg-code-block: #f8f9fa;
+  --bg-tertiary: #f4f5f7;
+  --bg-hover: #f0f2f5;
+  --bg-active: #eef0f4;
+  --bg-code: #f6f7f9;
+  --bg-code-block: #f6f7f9;
   --bg-sidebar: #ffffff;
   --bg-input: #ffffff;
-  --bg-bubble-user: #e3f2fd;
+  --bg-bubble-user: #eef2ff;
   --bg-bubble-assistant: #ffffff;
-  --bg-bubble-system: #fff8e1;
-  --bg-error: #ffeef0;
-  --bg-success: #e8f5e9;
-  --bg-warning: #fff8e1;
+  --bg-bubble-system: #fffbeb;
+  --bg-error: #fef2f2;
+  --bg-success: #ecfdf5;
+  --bg-warning: #fffbeb;
 
-  --text-primary: #1a1a2e;
-  --text-secondary: #4a5568;
-  --text-tertiary: #718096;
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-tertiary: #8b8f98;
   --text-inverse: #ffffff;
-  --text-code: #6366f1;
-  --text-code-block: #24292e;
+  --text-code: #4f46e5;
+  --text-code-block: #27272a;
 
-  --border-color: #e2e8f0;
-  --border-strong: #cbd5e0;
-  --border-focus: #3b82f6;
+  --border-color: #eceef2;
+  --border-strong: #d8dce3;
+  --border-focus: #4f46e5;
 
-  --accent: #3b82f6;
-  --accent-2: #8b5cf6;
-  --accent-hover: #2563eb;
-  --accent-light: rgba(59, 130, 246, 0.1);
-  --accent-gradient: linear-gradient(135deg, #3b82f6, #8b5cf6);
-  --success: #16a34a;
-  --success-light: rgba(22, 163, 74, 0.1);
+  --accent: #4f46e5;
+  --accent-2: #7c3aed;
+  --accent-hover: #4338ca;
+  --accent-light: rgba(79, 70, 229, 0.08);
+  --accent-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
+  --success: #059669;
+  --success-light: rgba(5, 150, 105, 0.1);
   --danger: #dc2626;
-  --danger-light: rgba(220, 38, 38, 0.1);
+  --danger-light: rgba(220, 38, 38, 0.08);
   --warning: #d97706;
   --warning-light: rgba(217, 119, 6, 0.1);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 2px 8px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.12);
 }
 
 /* ──────────────────────────────────────────────
@@ -3045,8 +3045,8 @@ body {
 
 .app-nav__tab--active {
   background: var(--accent-light);
-  color: var(--text-primary);
-  border-color: var(--border-strong);
+  color: var(--accent);
+  border-color: transparent;
   font-weight: 600;
 }
 
@@ -4656,7 +4656,7 @@ body {
    ══════════════════════════════════════════════ */
 
 .ag-page {
-  padding: 20px 24px 32px;
+  padding: 24px 28px 40px;
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
@@ -4668,15 +4668,16 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .ag-page__title {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
   margin: 0;
 }
@@ -4758,11 +4759,12 @@ body {
 .ag-section__title {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 7px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary);
-  margin: 0 0 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin: 0 0 14px;
 }
 
 /* ── 运行时卡片 ── */
@@ -4776,11 +4778,19 @@ body {
 .ag-runtime-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 14px;
+  border-radius: 12px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+}
+
+.ag-runtime-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
 }
 
 .ag-runtime-card__head {
@@ -4914,10 +4924,12 @@ body {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--text-inverse);
+  box-shadow: 0 1px 2px var(--accent-light);
 }
 
 .ag-btn--primary:hover {
   background: var(--accent-hover);
+  border-color: var(--accent-hover);
   color: var(--text-inverse);
 }
 
@@ -4966,11 +4978,13 @@ body {
   padding: 8px 10px;
   font-family: inherit;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .ag-form__select:focus,
 .ag-form__textarea:focus {
   border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-light);
 }
 
 .ag-form__textarea {
@@ -4994,19 +5008,20 @@ body {
 .ag-page__table-wrap {
   overflow-x: auto;
   border: 1px solid var(--border-color);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--bg-secondary);
+  box-shadow: var(--shadow-sm);
 }
 
 .ag-page__table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .ag-page__table th,
 .ag-page__table td {
-  padding: 9px 12px;
+  padding: 10px 12px;
   text-align: left;
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
@@ -5016,9 +5031,11 @@ body {
   color: var(--text-tertiary);
   font-weight: 600;
   font-size: 11px;
+  letter-spacing: 0.03em;
   position: sticky;
   top: 0;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
+  z-index: 1;
 }
 
 .ag-page__table td {
@@ -5060,10 +5077,11 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 3px 8px;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 3px 9px;
   border-radius: 999px;
+  letter-spacing: 0.01em;
 }
 
 .ag-badge--ok {
