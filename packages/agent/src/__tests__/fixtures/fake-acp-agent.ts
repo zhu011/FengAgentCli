@@ -85,15 +85,24 @@ async function runPrompt(text: string, respond: (result: unknown) => void): Prom
   if (slow) await sleep(40);
 
   // 一次权限请求：宿主拒绝/放行都要能跑完（不能静默挂起）
+  // `PERM_KIMI` 用 kimi 真实的选项拼法（approve_once / approve_always / reject），
+  // 用来验证客户端不再硬编码 dsh 系的 `allow-once`。
+  const permissionOptions = text.includes("PERM_KIMI")
+    ? [
+        { optionId: "approve_once", kind: "allow_once", label: "允许一次" },
+        { optionId: "approve_always", kind: "allow_always", label: "总是允许" },
+        { optionId: "reject", kind: "reject_once", label: "拒绝" },
+      ]
+    : [
+        { optionId: "allow-once", kind: "allow_once", label: "允许一次" },
+        { optionId: "reject-once", kind: "reject_once", label: "拒绝" },
+      ];
   const permission = await request("session/request_permission", {
     sessionId: SESSION_ID,
     toolCallId: "call-1",
     title: "bash",
     rawInput: { command: "echo hi" },
-    options: [
-      { optionId: "allow-once", kind: "allow_once", label: "允许一次" },
-      { optionId: "reject-once", kind: "reject_once", label: "拒绝" },
-    ],
+    options: permissionOptions,
   });
   const outcome = (permission.result as { outcome?: { optionId?: string } } | undefined)?.outcome;
   chunk(`[perm:${outcome?.optionId ?? "none"}]`);

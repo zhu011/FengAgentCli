@@ -455,6 +455,19 @@ export class AgentTaskStore {
   }
 
   /**
+   * 补记目标会话 id（不改状态、不写事件）。
+   *
+   * claude 这类「跑完才知道 `session_id`」的协议用：结果落库时把 id 记上，
+   * 下一次 retry 才能 `--resume` 续聊。
+   *
+   * @param id - 任务 id
+   * @param sessionId - 目标侧会话 id
+   */
+  setAcpSessionId(id: string, sessionId: string): void {
+    this.db.query("UPDATE agent_tasks SET acp_session_id = ? WHERE id = ?").run(sessionId, id);
+  }
+
+  /**
    * 重试：终态（failed / cancelled / expired）→ 新 attempt（同一 taskId）。
    *
    * 7 态表把这三个状态标为终态，因此这里**显式**打断终态：先写 `task/retried`

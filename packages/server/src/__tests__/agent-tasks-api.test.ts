@@ -51,7 +51,14 @@ function safeRm(dir: string): void {
 }
 
 /** 造一个只注册 fake runtime 的服务（真 spawn fixture） */
-function makeService(options: { ledger?: boolean; permissionPolicy?: "allow" | "deny" } = {}): {
+function makeService(
+  options: {
+    ledger?: boolean;
+    permissionPolicy?: "allow" | "deny";
+    protocol?: "acp" | "claude-stream-json";
+    args?: string[];
+  } = {},
+): {
   service: AgentTaskService;
   taskStore: TaskStore | null;
   dir: string;
@@ -63,11 +70,12 @@ function makeService(options: { ledger?: boolean; permissionPolicy?: "allow" | "
       {
         name: "fake",
         command: process.execPath,
-        args: [FIXTURE],
+        args: options.args ?? [FIXTURE],
         enabled: true,
         ...(options.permissionPolicy === undefined
           ? {}
           : { permissionPolicy: options.permissionPolicy }),
+        ...(options.protocol === undefined ? {} : { protocol: options.protocol }),
       },
     ],
   });
@@ -412,6 +420,43 @@ describe("AgentTaskService — 幂等台账（不重复执行）", () => {
     const after = service.store.get(task.id)!;
     expect(after.status).toBe("failed");
     expect(after.error).toContain("副作用未决");
+  });
+});
+
+describe("claude runtime（P4）— 经任务仓派发", () => {
+  const CLAUDE_FIXTURE = join(
+    import.meta.dir,
+    "..",
+    "..",
+    "..",
+    "agent",
+    "src",
+    "__tests__",
+    "fixtures",
+    "fake-claude-stream-json.ts",
+  );
+
+  test("protocol=claude-stream-json：派发 → replied，事件流与会话 id 都落库", async () => {
+    const made = makeService({
+      protocol: "claude-stream-json",
+      args: [CLAUDE_FIXTURE, "-p", "--output-format", "stream-json", "--verbose"],
+    });
+    try {
+      const created = await made.service.submit({ runtime: "fake", content: "打个招呼" });
+      const done = await made.service.waitForTerminal(created.id, 20_000);
+      expect(done.status).toBe("replied");
+      expect(done.result).toContain("你好");
+
+      const events = made.service.listEvents(created.id);
+      const accepted = events.find((e) => e.type === "task/accepted");
+      expect(accepted?.detail).toContain("Claude Code");
+      expect(events[events.length - 1]!.type).toBe("task/replied");
+      // 一轮跑完才知道 session_id → 服务补记到任务上，供下次 retry 续聊
+      expect(made.service.store.get(created.id)!.acpSessionId).toBe("fake-claude-session-1");
+    } finally {
+      await made.service.close();
+      safeRm(made.dir);
+    }
   });
 });
 

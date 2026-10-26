@@ -12,7 +12,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { AcpClient, AcpProtocolError, buildAcpChildEnv } from "../acp-client.ts";
+import {
+  AcpClient,
+  AcpProtocolError,
+  buildAcpChildEnv,
+  resolvePermissionOptionId,
+} from "../acp-client.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "fake-acp-agent.ts");
 
@@ -170,6 +175,48 @@ describe("buildAcpChildEnv — 子进程环境白名单", () => {
       else process.env.MULTICA_TOKEN = previousToken;
       if (previousAgentId === undefined) delete process.env.MULTICA_AGENT_ID;
       else process.env.MULTICA_AGENT_ID = previousAgentId;
+    }
+  });
+});
+
+describe("resolvePermissionOptionId — 按目标实际提供的选项选择", () => {
+  test("dsh 系（allow-once / reject-once）：保持原样", () => {
+    const options = [
+      { optionId: "allow-once", kind: "allow_once" },
+      { optionId: "reject-once", kind: "reject_once" },
+    ];
+    expect(resolvePermissionOptionId("allow", options)).toBe("allow-once");
+    expect(resolvePermissionOptionId("deny", options)).toBe("reject-once");
+  });
+
+  test("kimi（approve_once / approve_always / reject）：选 approve_once / reject", () => {
+    const options = [
+      { optionId: "approve_once", kind: "allow_once" },
+      { optionId: "approve_always", kind: "allow_always" },
+      { optionId: "reject", kind: "reject_once" },
+    ];
+    expect(resolvePermissionOptionId("allow", options)).toBe("approve_once");
+    expect(resolvePermissionOptionId("deny", options)).toBe("reject");
+  });
+
+  test("只给 id 不给 kind 时按字面量兜底；没有 options 时回退历史值", () => {
+    expect(resolvePermissionOptionId("allow", [{ optionId: "approve_once" }])).toBe("approve_once");
+    expect(resolvePermissionOptionId("deny", [{ optionId: "reject" }])).toBe("reject");
+    expect(resolvePermissionOptionId("allow", [])).toBe("allow-once");
+    expect(resolvePermissionOptionId("deny", undefined)).toBe("reject-once");
+  });
+
+  test("端到端：kimi 风格选项 + allow → 目标收到 approve_once（不再硬编码 allow-once）", async () => {
+    const client = makeClient();
+    try {
+      await client.initialize();
+      const sessionId = await client.newSession(import.meta.dir);
+      const result = await client.prompt(sessionId, "PERM_KIMI 写个文件", {
+        onPermission: () => "allow",
+      });
+      expect(result.text).toContain("[perm:approve_once]");
+    } finally {
+      await client.close();
     }
   });
 });

@@ -76,6 +76,21 @@ export type {
   AcpPermissionDecision,
 } from "./acp-client.ts";
 
+// 协议无关的运行时驱动（ACP + claude stream-json 两种协议并存）
+export { ClientRuntimeDriver, createRuntimeDriver } from "./runtime-driver.ts";
+export type {
+  RuntimeProtocol,
+  RuntimeDriver,
+  RuntimeHandshakeInfo,
+  RuntimeSessionHandle,
+  RuntimePromptOptions,
+  RuntimePromptResult,
+  CreateRuntimeDriverOptions,
+  AcpClientLike,
+} from "./runtime-driver.ts";
+export { ClaudeStreamJsonClient } from "./claude-client.ts";
+export type { ClaudeStreamJsonClientOptions, ClaudeClientLog } from "./claude-client.ts";
+
 // 恢复核对（未决调用 orphan 检测）
 export {
   buildTaskRecoveryReport,

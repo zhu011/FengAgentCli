@@ -64,6 +64,9 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
 - **headless 权限**：目标 agent 发 `session/request_permission` 时，策略默认 **deny**，决策写进
   事件流（`task/stream-chunk` + `[permission] <tool> → allow|deny`）。冻结的事件枚举没有独立类型，
   这里复用 `detail` 承载，UI 时间线可见，绝不静默挂起。
+  回给目标的 `optionId` **按目标实际提供的选项挑**（`kind` 优先：`allow_once` / `approve_once` /
+  `accept_once`…；再按 id 字面量兜底；没有 options 才回退 `allow-once`）—— kimi 用
+  `approve_once/approve_always/reject`，dsh 系用 `allow-once/reject-once`，硬编码会让 kimi 的 allow 失效。
 
 ## 4. SSE（`GET /api/agent-tasks/:id/stream`）
 
@@ -164,6 +167,33 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
    并复用 `operation_ledger` 做防重复执行 —— 机制相同，语义不混。
 2. **权限决策复用 `task/stream-chunk` 事件承载**（`[permission]` 前缀）：冻结的事件枚举里没有
    独立类型，为了不破坏 P3 的类型契约，用 `detail` 表达，UI 时间线可见。
+
+## 9. 协议适配（P4 首块：claude `stream-json`）
+
+外派执行面按注册表的 `protocol` 选择驱动，任务仓 / 7 态 / 事件流 / 台账**完全复用**：
+
+| protocol | 客户端 | 进程模型 | 会话 | 权限 |
+|---|---|---|---|---|
+| `acp`（默认） | `AcpClient` | 长驻，`session/new` + `session/prompt` | `session/new` / `session/resume`（全参） | 逐次 `session/request_permission` |
+| `claude-stream-json` | `ClaudeStreamJsonClient` | **进程-per-prompt**（`claude -p`） | `--session-id <uuid>` 新建 / `--resume <id>` 续聊 | 每次运行合成一次审批 → `allow` 加 `--dangerously-skip-permissions` |
+
+- 门面：`RuntimeDriver`（`packages/agent/src/runtime-driver.ts`）。两种客户端保持同构表面
+  （`initialize` / `newSession` / `resumeSession` / `prompt` / `cancel` / `close`），
+  `ClientRuntimeDriver` 把「能 resume 就 resume、失败回退 new」与「文本增量提取」收在一处；
+  服务层只跟 `RuntimeDriver` 打交道，加一种协议 = 加一个同构客户端。
+- claude 的差异都在客户端里消化：`--version` 短命探测当握手（不产生模型调用）、
+  prompt 走 stdin（避免 Windows 命令行长度限制）、事件 `assistant` 文本块 → `onUpdate`、
+  `result` 事件即终局（`is_error` → 抛错）、`session_id` 跑完才出现 →
+  服务在 replied 前用 `setAcpSessionId()` 补记，供下次 retry 续聊。
+- 注册表加一条即可用（默认已内置）：
+
+```json
+{ "name": "claude", "command": "claude", "protocol": "claude-stream-json",
+  "enabled": true, "permissionPolicy": "allow" }
+```
+
+- v1 限制：claude 只有**块级**文本增量（`assistant` 消息块，不是逐 token）；没有交互式审批
+  （headless 一次性决策）；同一客户端实例一次只能跑一轮（服务本来就是「一任务一驱动」）。
 
 ## 10. 自测覆盖（`bun test`）
 

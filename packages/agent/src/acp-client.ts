@@ -608,7 +608,7 @@ export class AcpClient {
       result: {
         outcome: {
           outcome: "selected",
-          optionId: decision === "allow" ? "allow-once" : "reject-once",
+          optionId: resolvePermissionOptionId(decision, request.options),
         },
       },
     });
@@ -648,4 +648,68 @@ export function textOfUpdate(update: AcpSessionUpdate): string | null {
   const content = update.content;
   if (!content || typeof content !== "object") return null;
   return typeof content.text === "string" ? content.text : null;
+}
+
+/** 表示「放行」的 option kind（不同实现的拼法） */
+const ALLOW_OPTION_KINDS = [
+  "allow_once",
+  "allow_always",
+  "approve_once",
+  "approve_always",
+  "accept",
+  "accept_once",
+  "accept_always",
+] as const;
+
+/** 表示「拒绝」的 option kind */
+const DENY_OPTION_KINDS = ["reject_once", "reject_always", "reject", "deny", "cancel"] as const;
+
+/** 放行类 optionId 兜底（对端没给 kind 时按 id 猜） */
+const ALLOW_OPTION_IDS = [
+  "allow-once",
+  "allow_once",
+  "approve_once",
+  "approve-once",
+  "approve_always",
+  "accept",
+  "accept_once",
+] as const;
+
+/** 拒绝类 optionId 兜底 */
+const DENY_OPTION_IDS = ["reject-once", "reject_once", "reject", "deny", "cancel"] as const;
+
+/**
+ * 按目标**实际提供**的 options 选一个 optionId。
+ *
+ * 各实现的可选项拼法不统一（实测：dsh 系 `allow-once` / `reject-once`；kimi
+ * `approve_once` / `approve_always` / `reject`），早期硬编码 `allow-once` 会让
+ * kimi 的 allow 策略失效（它认不出这个 id，工具还是不执行）。选择顺序：
+ *
+ * 1. `kind` 命中放行/拒绝集合（语义最可靠）；
+ * 2. `optionId` 字面量命中同一集合（对端没填 kind 时的兜底）；
+ * 3. 对端没给 options 时回退历史值（`allow-once` / `reject-once`）。
+ *
+ * @param decision - 我们的决策（allow / deny）
+ * @param options - 目标在 `session/request_permission` 里给的选项
+ * @returns 要回给目标的 optionId
+ */
+export function resolvePermissionOptionId(
+  decision: AcpPermissionDecision,
+  options?: AcpPermissionRequest["options"],
+): string {
+  const kinds: readonly string[] = decision === "allow" ? ALLOW_OPTION_KINDS : DENY_OPTION_KINDS;
+  const ids: readonly string[] = decision === "allow" ? ALLOW_OPTION_IDS : DENY_OPTION_IDS;
+  const list = options ?? [];
+
+  for (const option of list) {
+    const kind = (option.kind ?? "").toLowerCase();
+    if (kind !== "" && kinds.includes(kind) && typeof option.optionId === "string") {
+      return option.optionId;
+    }
+  }
+  for (const option of list) {
+    const id = (option.optionId ?? "").toLowerCase();
+    if (ids.includes(id)) return option.optionId!;
+  }
+  return decision === "allow" ? "allow-once" : "reject-once";
 }

@@ -14,8 +14,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { AcpClient } from "@fengagent/agent";
-import type { AcpHandshake } from "@fengagent/agent";
+import { createRuntimeDriver } from "@fengagent/agent";
 import { createLogger } from "@fengagent/shared";
 
 const log = createLogger("agent-runtimes");
@@ -26,8 +25,15 @@ export interface RuntimeEntry {
   name: string;
   /** 可执行文件 */
   command: string;
-  /** 参数（默认 `["acp"]`） */
+  /** 参数（ACP 默认 `["acp"]`；claude 由驱动自己拼，留空即可） */
   args?: string[];
+  /**
+   * 启动协议（默认 `acp`）。
+   *
+   * - `acp`：NDJSON JSON-RPC，长驻进程（dsh / kimi / fengagent）；
+   * - `claude-stream-json`：`claude -p --output-format stream-json`，一次性进程（claude）。
+   */
+  protocol?: "acp" | "claude-stream-json";
   /** 追加环境变量 */
   env?: Record<string, string>;
   /**
@@ -68,6 +74,8 @@ export const DEFAULT_RUNTIME_ENTRIES: readonly RuntimeEntry[] = [
   { name: "fengagent", command: "fengagent", args: ["acp"], enabled: true },
   { name: "dsh", command: "dsh-acp", args: ["acp"], enabled: true },
   { name: "kimi", command: "kimi", args: ["acp"], enabled: true },
+  // claude 不是 ACP：走 `claude -p --output-format stream-json`（见 claude-client.ts）
+  { name: "claude", command: "claude", protocol: "claude-stream-json", enabled: true },
 ];
 
 /** 注册表选项 */
@@ -110,6 +118,7 @@ interface PersistedProbe {
  */
 export class AgentRuntimeRegistry {
   private readonly configPath: string;
+  private readonly dataRoot: string;
   private readonly entriesByName = new Map<string, RuntimeEntry>();
   private readonly probes = new Map<string, PersistedProbe>();
   private readonly probeImpl: (entry: RuntimeEntry) => Promise<RuntimeProbeResult>;
@@ -118,6 +127,7 @@ export class AgentRuntimeRegistry {
 
   constructor(options: AgentRuntimeRegistryOptions) {
     this.configPath = join(options.dataRoot, "runtimes.json");
+    this.dataRoot = options.dataRoot;
     this.probeTimeoutMs = options.probeTimeoutMs ?? 20_000;
     this.now = options.now ?? Date.now;
     this.probeImpl = options.probe ?? ((entry) => this.spawnProbe(entry));
@@ -125,7 +135,11 @@ export class AgentRuntimeRegistry {
     const persisted = options.entries === undefined ? this.loadPersisted() : null;
     const entries = options.entries ?? persisted?.runtimes ?? [...DEFAULT_RUNTIME_ENTRIES];
     for (const entry of entries) {
-      this.entriesByName.set(entry.name, { ...entry, args: entry.args ?? ["acp"] });
+      // ACP 缺省参数是 ["acp"]；claude 这类一次性协议自己拼参数，别塞 "acp"
+      this.entriesByName.set(entry.name, {
+        ...entry,
+        ...(entry.protocol === "claude-stream-json" ? {} : { args: entry.args ?? ["acp"] }),
+      });
     }
     if (options.entries === undefined) {
       if (persisted === null) this.save();
@@ -220,23 +234,24 @@ export class AgentRuntimeRegistry {
 
   /** 用一个短命子进程真跑一次 initialize（默认探测实现） */
   private async spawnProbe(entry: RuntimeEntry): Promise<RuntimeProbeResult> {
-    const client = new AcpClient({
-      command: entry.command,
-      args: entry.args ?? ["acp"],
-      env: entry.env ?? {},
+    const driver = createRuntimeDriver(entry, {
+      cwd: this.dataRoot,
       requestTimeoutMs: this.probeTimeoutMs,
+      promptTimeoutMs: this.probeTimeoutMs,
+      ...(entry.env ? { env: entry.env } : {}),
+      ...(entry.args ? { extraArgs: entry.args } : {}),
       onLog: (level, message) => log[level]("probe", `${entry.name}: ${message}`),
     });
     try {
-      const handshake: AcpHandshake = await client.initialize();
+      const handshake = await driver.initialize();
       return {
-        agentName: handshake.agentInfo.name,
-        agentVersion: handshake.agentInfo.version,
+        agentName: handshake.agentName,
+        agentVersion: handshake.agentVersion,
         capabilities: handshake.capabilities,
         probedAt: new Date(this.now()).toISOString(),
       };
     } finally {
-      await client.close(1500).catch(() => undefined);
+      await driver.close(1500).catch(() => undefined);
     }
   }
 

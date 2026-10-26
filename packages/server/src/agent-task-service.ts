@@ -31,14 +31,17 @@
 
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { AcpClient, AgentTaskStore, isTerminalTaskStatus } from "@fengagent/agent";
+import {
+  AgentTaskStore,
+  createRuntimeDriver,
+  isTerminalTaskStatus,
+} from "@fengagent/agent";
 import type {
   AgentTaskEventRow,
   AgentTaskRecord,
   AgentTaskStatus,
-  AcpHandshake,
   AcpPermissionRequest,
-  AcpSessionUpdate,
+  RuntimeDriver,
 } from "@fengagent/agent";
 import type { OperationLedger } from "@fengagent/core";
 import { createHash } from "node:crypto";
@@ -135,9 +138,8 @@ export interface AgentTaskServiceOptions {
 
 /** 单次任务的在飞句柄 */
 interface ActiveRun {
-  client: AcpClient;
-  sessionId?: string;
-  /** 用户是否已取消（用关闭客户端打断 prompt） */
+  driver: RuntimeDriver;
+  /** 用户是否已取消（用关闭驱动打断 prompt） */
   cancelled: boolean;
 }
 
@@ -309,9 +311,9 @@ export class AgentTaskService {
     const active = this.active.get(id);
     if (active) {
       active.cancelled = true;
-      if (active.sessionId) active.client.cancel(active.sessionId);
-      // 关闭打断在飞的 prompt 请求（否则要等目标侧回 stopReason）
-      void active.client.close(300).catch(() => undefined);
+      active.driver.cancel();
+      // 关闭驱动打断在飞的 prompt 请求（否则要等目标侧回 stopReason）
+      void active.driver.close(300).catch(() => undefined);
     }
     const next = this.transit(id, "cancelled", { detail: "用户取消" });
     this.notifyTerminal(id);
@@ -410,7 +412,7 @@ export class AgentTaskService {
   async close(): Promise<void> {
     for (const [id, run] of this.active) {
       log.warn("close", `回收任务 ${id} 的子进程`);
-      await run.client.close(300).catch(() => undefined);
+      await run.driver.close(300).catch(() => undefined);
     }
     // 等在飞派发把 catch/finally 跑完，否则它们会在关库之后再写一次
     await Promise.all([...this.inflight.values()]);
@@ -484,56 +486,50 @@ export class AgentTaskService {
 
     // ② 派发（可用性由这一次真 spawn 验证，不额外探测 —— dsh 冷启 13s，翻倍不划算）
     this.transit(id, "dispatched", {
-      detail: `command=${entry.command} ${(entry.args ?? []).join(" ")}`,
+      detail: `command=${entry.command} ${(entry.args ?? []).join(" ")} protocol=${entry.protocol ?? "acp"}`,
     });
 
-    const client = new AcpClient({
-      command: entry.command,
-      args: entry.args ?? ["acp"],
+    const driver = createRuntimeDriver(entry, {
       cwd: task.cwd,
-      env: entry.env ?? {},
       requestTimeoutMs: this.requestTimeoutMs,
       promptTimeoutMs: this.promptTimeoutMs,
+      ...(entry.env ? { env: entry.env } : {}),
+      ...(entry.args ? { extraArgs: entry.args } : {}),
       onLog: (level, message) => log[level]("dispatch", `${task.id}: ${message}`),
     });
-    const run: ActiveRun = { client, cancelled: false };
+    const run: ActiveRun = { driver, cancelled: false };
     this.active.set(id, run);
 
     let text = "";
     try {
-      const handshake = await client.initialize();
+      const handshake = await driver.initialize();
       // 建会话：上一 attempt 留下 acpSessionId 且目标声明了 resume 能力 → 续聊同一个
-      // 目标会话（ACP 要求带全参 sessionId + cwd + mcpServers）；否则新建。
-      const opened = await openTargetSession(client, task.cwd, task.acpSessionId, handshake);
-      const sessionId = opened.sessionId;
-      run.sessionId = sessionId;
+      // 目标会话（ACP 带全参；claude 带 --resume）；否则新建。
+      const opened = await driver.openSession(task.acpSessionId);
       this.appendEvent(
         id,
         "task/accepted",
-        `握手成功 agent=${handshake.agentInfo.name || "?"} v${handshake.agentInfo.version || "?"}` +
-          ` resume=${handshake.capabilities.resume}；会话 ${opened.mode}=${sessionId}` +
+        `握手成功 agent=${handshake.agentName || "?"} v${handshake.agentVersion || "?"}` +
+          ` resume=${handshake.capabilities.resume}；会话 ${opened.mode}=${opened.sessionId || "(pending)"}` +
           (opened.fallbackReason === undefined ? "" : `（resume 回退：${opened.fallbackReason}）`),
       );
-      this.transit(id, "running", { acpSessionId: sessionId });
+      this.transit(id, "running", {
+        ...(opened.sessionId === "" ? {} : { acpSessionId: opened.sessionId }),
+      });
 
-      const result = await client.prompt(sessionId, task.content, {
-        onUpdate: (update) => {
-          const chunk = chunkOf(update);
-          if (chunk === null) return;
+      // 权限：ACP 按每次请求回调；claude 在 prompt 开始时合成一次「本运行内全部工具」
+      // 的审批（同一 onPermission 通道）—— 两条路的决策口径因此完全一致。
+      const entryPolicy = entry.permissionPolicy;
+
+      const result = await driver.prompt(task.content, {
+        onChunk: (chunk) => {
           text += chunk;
           this.emit(id, { type: "chunk", text: chunk });
         },
         onPermission: (request) => {
-          // 优先级：注册表里给该 runtime 单独配的策略 > 服务默认策略（缺省 deny）。
-          // 验收需要目标真写文件时，在 runtimes.json 里给测试 runtime 配 "allow"。
-          const entryPolicy = this.registry.get(task.runtime)?.permissionPolicy;
           const decision: "allow" | "deny" =
             entryPolicy ??
-            this.permissionPolicy({
-              taskId: id,
-              runtime: task.runtime,
-              request,
-            });
+            this.permissionPolicy({ taskId: id, runtime: task.runtime, request });
           this.appendEvent(
             id,
             "task/stream-chunk",
@@ -542,6 +538,12 @@ export class AgentTaskService {
           return decision;
         },
       });
+
+      // claude 这类「跑完才知道 session_id」的协议：补记到任务上，供下次 retry 续聊
+      const finalSessionId = driver.lastSessionId;
+      if (finalSessionId !== undefined && finalSessionId !== task.acpSessionId) {
+        this.store.setAcpSessionId(id, finalSessionId);
+      }
 
       text = result.text.length > 0 ? result.text : text;
       if (run.cancelled || result.stopReason === "cancelled") {
@@ -562,16 +564,16 @@ export class AgentTaskService {
       const current = this.store.get(id);
       if (current && !isTerminalTaskStatus(current.status)) {
         if (run.cancelled) {
-          this.finish(id, "cancelled", { detail: "用户取消（客户端已关闭）" });
+          this.finish(id, "cancelled", { detail: "用户取消（驱动已关闭）" });
         } else {
-          const tail = client.stderrTail();
+          const tail = driver.stderrTail();
           this.fail(id, tail === "" ? message : `${message}；stderr: ${tail}`);
         }
       }
     } finally {
       // 只清自己这一条：retry 会在同一个 taskId 上起新 run，别把新的删掉
       if (this.active.get(id) === run) this.active.delete(id);
-      await client.close(1000).catch(() => undefined);
+      await driver.close(1000).catch(() => undefined);
     }
   }
 
@@ -686,53 +688,4 @@ export function toEventDto(row: AgentTaskEventRow): AgentTaskEventDto {
     type: row.type,
     ...(row.detail === undefined ? {} : { detail: row.detail }),
   };
-}
-
-/**
- * 打开目标会话：能 resume 就续聊同一个目标会话，否则新建。
- *
- * ACP 的 `session/resume` 必须带**全参** `{sessionId, cwd, mcpServers}`（缺 cwd 会被
- * kimi / 原版 dsh 直接拒），因此这里把 cwd 一起传下去。resume 失败（目标不支持、
- * 会话已被回收）不阻塞派发 —— 回退 `session/new` 并把原因写进 `task/accepted` 的 detail。
- *
- * @param client - 已握手的客户端
- * @param cwd - 目标工作目录（绝对路径）
- * @param previousSessionId - 上一 attempt 留下的目标会话 id（可空）
- * @param handshake - 握手结果（据此判断 resume 能力）
- */
-async function openTargetSession(
-  client: AcpClient,
-  cwd: string,
-  previousSessionId: string | undefined,
-  handshake: AcpHandshake,
-): Promise<{ sessionId: string; mode: "resume" | "new"; fallbackReason?: string }> {
-  const canResume =
-    previousSessionId !== undefined &&
-    previousSessionId !== "" &&
-    handshake.capabilities.resume;
-  if (canResume) {
-    try {
-      const sessionId = await client.resumeSession(previousSessionId, cwd);
-      return { sessionId, mode: "resume" };
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      const sessionId = await client.newSession(cwd);
-      return { sessionId, mode: "new", fallbackReason: reason.slice(0, 200) };
-    }
-  }
-  return { sessionId: await client.newSession(cwd), mode: "new" };
-}
-
-/** 从 `session/update` 取文本增量（兼容 snake/camel 两套命名） */
-function chunkOf(update: AcpSessionUpdate): string | null {  const kind = update.sessionUpdate;
-  if (
-    kind !== "agent_message_chunk" &&
-    kind !== "agentMessageChunk" &&
-    kind !== "assistant_message_chunk"
-  ) {
-    return null;
-  }
-  const content = update.content;
-  if (!content || typeof content !== "object") return null;
-  return typeof content.text === "string" ? content.text : null;
 }
