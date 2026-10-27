@@ -42,11 +42,13 @@ import {
   createHookRegistry,
   registerMcpTools,
   createDispatchTaskTool,
+  createGroupTools,
 } from "@fengagent/tools";
 import type { HookRegistry, McpRegistrationResult, ToolRegistry } from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
+import { AgentGroupService } from "./agent-group-service.ts";
 import {
   deepMerge,
   importMainData,
@@ -185,6 +187,11 @@ export interface CreateRuntimeAgentResult {
    * `enableSessionStore=false` 或初始化失败时为 null。
    */
   agentTaskService: AgentTaskService | null;
+  /**
+   * 群聊服务（G1：`/api/groups` + 群工具）。
+   * `enableSessionStore=false` 或初始化失败时为 null。
+   */
+  agentGroupService: AgentGroupService | null;
   agentDefinitionLoader: ReturnType<typeof createAgentDefinitionLoader>;
   subagentRunner: SubagentRunner;
   hookRegistry: HookRegistry;
@@ -375,6 +382,74 @@ export async function createRuntimeAgent(
       agentTaskService = null;
     }
   }
+
+  // 6.6 群聊（G1）：群聚合根 + 消息通道；群工具只注入本仓库的 fengagent 侧
+  //     （v1「协调者中转」：外部 runtime 没有群工具，它们的产出由服务端代写进群）。
+  let agentGroupService: AgentGroupService | null = null;
+  if (enableStore) {
+    try {
+      agentGroupService = new AgentGroupService({
+        dataRoot: dataDir,
+        // 列表接口的成员选择器复用 runtime 卡片（与 Agents 页同一份数据）
+        runtimes: () => agentTaskService?.listRuntimes() ?? [],
+      });
+      const selfName = process.env.FENG_GROUP_SELF_NAME?.trim() || "fengagent";
+      const groupTools = createGroupTools(
+        {
+          create: async (input) => {
+            const group = agentGroupService!.createGroup({
+              name: input.name,
+              ...(input.description === undefined
+                ? {}
+                : { description: input.description }),
+              members: input.members ?? [],
+              ...(input.coordinator === undefined ? {} : { coordinator: input.coordinator }),
+            });
+            return { id: group.id, name: group.name, members: group.members };
+          },
+          send: async (input) => {
+            const message = agentGroupService!.postMessage(input.groupId, {
+              content: input.content,
+              fromKind: "coordinator",
+              fromName: input.from,
+            });
+            return { id: message.id, seq: message.seq };
+          },
+          history: async (input) => {
+            const group = agentGroupService!.getGroup(input.groupId);
+            if (!group) throw new Error(`群不存在: ${input.groupId}`);
+            const messages = agentGroupService!.listRecentMessages(
+              input.groupId,
+              input.limit ?? 30,
+            );
+            return {
+              groupId: group.id,
+              name: group.name,
+              lines: messages.map((m) => `#${m.seq} [${m.fromName}] ${m.content}`),
+            };
+          },
+          list: async (input) => {
+            const groups = agentGroupService!.listGroups({
+              ...(input.status === undefined ? {} : { status: input.status }),
+            });
+            return groups.map((group) => ({
+              id: group.id,
+              name: group.name,
+              status: group.status,
+              members: group.members,
+              messageCount: group.messageCount,
+            }));
+          },
+        },
+        { selfName: () => selfName },
+      );
+      for (const tool of groupTools) toolRegistry.register(tool);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Warn: 群聊服务不可用（${dataDir}）：${message}\n`);
+      agentGroupService = null;
+    }
+  }
   const storageBackend: SessionStoreLike = sessionStore ?? createMemorySessionStore();
   // Phase 2 生产双写：事件日志为事实源，旧存储（SQLite/内存）降级为读模型 —
   // 同一会话事实双写（saveSession/saveMessage/saveMessages 走 DualWriteSessionStore），
@@ -508,6 +583,7 @@ export async function createRuntimeAgent(
     taskStore,
     reflectionStore,
     agentTaskService,
+    agentGroupService,
     agentDefinitionLoader,
     subagentRunner,
     hookRegistry,

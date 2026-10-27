@@ -26,7 +26,9 @@ import { createHealthRoutes } from "./routes/health.ts";
 import { createObservabilityRoutes, extractLiveSession } from "./routes/observability.ts";
 import { createEvalRoutes } from "./routes/eval.ts";
 import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks.ts";
+import { createGroupRoutes } from "./routes/groups.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
+import type { AgentGroupService } from "./agent-group-service.ts";
 
 /** Server 构造选项 */
 export interface ServerOptions {
@@ -52,6 +54,12 @@ export interface ServerOptions {
    * 生产入口 `entry.ts` 会传 `createRuntimeAgent().agentTaskService`。
    */
   agentTaskService?: AgentTaskService;
+  /**
+   * 群聊服务（群聊页 `/api/groups` + 群工具）。
+   *
+   * 缺省时不挂 `/api/groups`（前端群聊页会提示后端未就绪）。
+   */
+  agentGroupService?: AgentGroupService;
 }
 
 /**
@@ -99,6 +107,11 @@ export function createApp(options: ServerOptions): {
   if (options.agentTaskService) {
     app.route("/api/runtimes", createRuntimeRoutes(options.agentTaskService));
     app.route("/api/agent-tasks", createAgentTaskRoutes(options.agentTaskService));
+  }
+
+  // 群聊（G1：群 CRUD + 消息 + 群 SSE）；缺服务时不挂，前端群聊页据此提示未就绪。
+  if (options.agentGroupService) {
+    app.route("/api/groups", createGroupRoutes(options.agentGroupService));
   }
 
   // 可观测性（AgentLoop 观测面板） + 评测模块（WebUI）

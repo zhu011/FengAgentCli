@@ -58,6 +58,22 @@ export type {
   ListAgentTasksFilter,
 } from "./agent-task-store.ts";
 
+// 群聊聚合根（G1：`agent_groups` + `group_messages`）
+export { AgentGroupStore } from "./agent-group-store.ts";
+export type {
+  AgentGroupRecord,
+  AgentGroupStatus,
+  GroupMember,
+  GroupMessageFromKind,
+  GroupMessageKind,
+  GroupMessageRecord,
+  CreateAgentGroupInput,
+  UpdateAgentGroupInput,
+  AppendGroupMessageInput,
+  ListAgentGroupsFilter,
+  ListGroupMessagesOptions,
+} from "./agent-group-store.ts";
+
 // ACP 客户端（把任务派给本机其他 agent 二进制）
 export {
   AcpClient,
