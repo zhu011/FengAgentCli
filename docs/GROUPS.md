@@ -82,15 +82,26 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
 工具由 server 装配注入（`createRuntimeAgent` → `createGroupTools(handler)`），tools 包不
 反向依赖 server。`group_conclude` / `group_dispatch` 属于 G3 / G2，本轮不放。
 
-## 6. 与 G2/G3 的衔接点（已预留）
+## 6. G2（已实现）：群内派发 + 结果回群
 
-- **G2 群内派发**：任务加 `groupId`；`AgentTaskService` 在 replied/failed 时调
-  `postRuntimeMessage(groupId, {runtime, content, agentTaskId})`（方法已就绪）；
-  消息 `kind="task_card"`，卡片深链 `/agents?task=<id>`。
-- **G3 编排收敛**：`maxRounds` / `idleTimeoutMs` 落库；`concludeGroup()` 已实现幂等
-  `open → concluded`；`group_conclude` 工具、静默超时自动收口、`decision` 消息在其上加一层。
+- **任务带群**：`POST /api/agent-tasks` 与 `dispatch_task` 都接受 `groupId`；任务记录新增
+  `group_id`（老库自动 `ALTER TABLE` 补列 + 索引），任务 DTO 回显 `groupId`；
+  `GET /api/agent-tasks?groupId=` 只列该群任务。
+- **结果回群（服务端代写）**：任务终态时 `AgentTaskService` 通过下沉口 `groupSink`
+  调 `postRuntimeMessage(groupId, {runtime, content, agentTaskId, kind:"task_card"})`：
+  - `replied` → 「任务 xxx（runtime）已完成：<结果>」（超 2000 字截断）；
+  - `failed` → 「任务 xxx（runtime）失败：<错误>」（超 1500 字截断）；
+  - `cancelled` → 「任务 xxx（runtime）已取消」。
+  消息 `fromKind="runtime"`、`fromName=<runtime>`、`kind="task_card"`、带 `agentTaskId`，
+  前端卡片据此跳 `/agents?task=<id>`。群侧写失败只 warn，不影响任务已收尾的事实。
+- **不带 `groupId` 的任务不回群**（回归用例覆盖）。
 
-## 7. 自测覆盖
+## 7. G3 衔接点（已预留）
+
+- `maxRounds` / `idleTimeoutMs` 已落库；`concludeGroup()` 已实现幂等 `open → concluded`；
+- `group_conclude` 工具、静默超时自动收口、`decision` 消息（人类拍板）在其上加一层即可。
+
+## 8. 自测覆盖
 
 - `packages/agent/src/__tests__/agent-group-store.test.ts`（7）：建群/默认值/成员去重、
   列表与状态过滤、seq 单调、`after` 增量、尾部最近消息、关群禁言、未知群拒写。
@@ -99,3 +110,6 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
   `agent-messages`（协调者/成员/非成员 403）、`conclude` 幂等 + 关群 409 + 历史可读、
   SSE `snapshot`（含 `lastSeq`）与 `message`、错误体 `{error:{message,code}}`、
   三个群工具走通、外部 runtime 代写（`runtime` + 深链）。
+- `packages/server/src/__tests__/group-dispatch.test.ts`（6，G2）：replied/failed 都落
+  `task_card`（fromKind=runtime + agentTaskId + 内容/错误）、不带 groupId 不回群、
+  API 带 groupId 与群维度列表过滤、`dispatch_task` 透传 groupId、store 层 `group_id` 落库。

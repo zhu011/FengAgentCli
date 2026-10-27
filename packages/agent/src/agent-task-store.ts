@@ -87,6 +87,8 @@ export interface AgentTaskRecord {
   error?: string;
   /** 目标侧 ACP sessionId（诊断/续聊用） */
   acpSessionId?: string;
+  /** 所属群（G2 群内派发；结果回群靠它定位） */
+  groupId?: string;
   idempotencyKey?: string;
 }
 
@@ -104,6 +106,8 @@ export interface CreateAgentTaskInput {
   content: string;
   cwd: string;
   fromSession?: string;
+  /** 群内派发（G2）：结果回群时按它定位 */
+  groupId?: string;
   idempotencyKey?: string;
   at?: number;
 }
@@ -112,6 +116,8 @@ export interface CreateAgentTaskInput {
 export interface ListAgentTasksFilter {
   status?: AgentTaskStatus | AgentTaskStatus[];
   runtime?: string;
+  /** 只看某个群派出的任务（G2） */
+  groupId?: string;
   /** 默认 50，上限 200 */
   limit?: number;
   /** 上一页最后一条的 `id`（简单键集分页：按 created_at DESC, id DESC） */
@@ -133,6 +139,7 @@ interface TaskRow {
   result: string | null;
   error: string | null;
   acp_session_id: string | null;
+  group_id: string | null;
   idempotency_key: string | null;
 }
 
@@ -159,6 +166,7 @@ function rowToTask(row: TaskRow): AgentTaskRecord {
     ...(row.result === null ? {} : { result: row.result }),
     ...(row.error === null ? {} : { error: row.error }),
     ...(row.acp_session_id === null ? {} : { acpSessionId: row.acp_session_id }),
+    ...(row.group_id === null ? {} : { groupId: row.group_id }),
     ...(row.idempotency_key === null ? {} : { idempotencyKey: row.idempotency_key }),
   };
 }
@@ -222,6 +230,7 @@ export class AgentTaskStore {
         result TEXT,
         error TEXT,
         acp_session_id TEXT,
+        group_id TEXT,
         idempotency_key TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status, created_at DESC);
@@ -236,6 +245,16 @@ export class AgentTaskStore {
         PRIMARY KEY (task_id, seq)
       );
     `);
+    // 老库迁移（G2）：`group_id` 是后加的列，CREATE TABLE IF NOT EXISTS 不会补列。
+    const columns = this.db
+      .query("PRAGMA table_info(agent_tasks)")
+      .all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "group_id")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN group_id TEXT");
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_agent_tasks_group ON agent_tasks(group_id, created_at DESC)",
+    );
     try {
       this.db.exec(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tasks_idempotency ON agent_tasks(idempotency_key);",
@@ -264,8 +283,8 @@ export class AgentTaskStore {
     this.db
       .query(
         `INSERT INTO agent_tasks
-         (id, runtime, content, cwd, from_session, status, attempt, created_at, idempotency_key)
-         VALUES (?, ?, ?, ?, ?, 'created', 1, ?, ?)`,
+         (id, runtime, content, cwd, from_session, status, attempt, created_at, group_id, idempotency_key)
+         VALUES (?, ?, ?, ?, ?, 'created', 1, ?, ?, ?)`,
       )
       .run(
         id,
@@ -274,9 +293,15 @@ export class AgentTaskStore {
         input.cwd,
         input.fromSession ?? "dashboard",
         at,
+        input.groupId ?? null,
         input.idempotencyKey ?? null,
       );
-    this.appendEvent(id, "task/created", `runtime=${input.runtime}`, at);
+    this.appendEvent(
+      id,
+      "task/created",
+      `runtime=${input.runtime}${input.groupId === undefined ? "" : ` group=${input.groupId}`}`,
+      at,
+    );
     return { task: this.get(id)!, reused: false };
   }
 
@@ -318,6 +343,10 @@ export class AgentTaskStore {
     if (filter.runtime !== undefined && filter.runtime !== "") {
       where.push("runtime = ?");
       params.push(filter.runtime);
+    }
+    if (filter.groupId !== undefined && filter.groupId !== "") {
+      where.push("group_id = ?");
+      params.push(filter.groupId);
     }
     if (filter.cursor !== undefined && filter.cursor !== "") {
       const cursorTask = this.get(filter.cursor);

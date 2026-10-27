@@ -41,6 +41,7 @@ import type {
   AgentTaskRecord,
   AgentTaskStatus,
   AcpPermissionRequest,
+  GroupMessageKind,
   RuntimeDriver,
 } from "@fengagent/agent";
 import type { OperationLedger } from "@fengagent/core";
@@ -80,6 +81,8 @@ export interface AgentTaskDto {
   finishedAt?: string;
   durationMs?: number;
   acpSessionId?: string;
+  /** 群内派发（G2）：任务所属群 */
+  groupId?: string;
 }
 
 /** 与 WebUI `AgentTaskEvent` 契约一致的事件 DTO */
@@ -104,7 +107,24 @@ export interface CreateAgentTaskRequest {
   fromSession?: string;
   /** 覆盖目标工作目录（默认服务数据根下的 `dispatch-workspace`） */
   cwd?: string;
+  /** 群内派发（G2）：结果会自动以 `task_card` 写回这个群 */
+  groupId?: string;
   idempotencyKey?: string;
+}
+
+/**
+ * 结果回群的下沉口（由 `AgentGroupService` 实现，避免 agent-tasks 反向依赖群模块）。
+ */
+export interface TaskGroupSink {
+  postRuntimeMessage(
+    groupId: string,
+    input: {
+      runtime: string;
+      content: string;
+      agentTaskId?: string;
+      kind?: GroupMessageKind;
+    },
+  ): unknown;
 }
 
 /** 外派任务服务选项 */
@@ -117,6 +137,11 @@ export interface AgentTaskServiceOptions {
   registry?: AgentRuntimeRegistry;
   /** 副作用台账（传 `taskStore.ledger` 即复用 AGE-29 的防重复执行） */
   ledger?: OperationLedger;
+  /**
+   * 结果回群下沉口（G2）：任务终态时把结果以 `task_card` 写回 `task.groupId` 指向的群。
+   * 由 server 装配注入 `agentGroupService`；不传则只在任务侧收尾。
+   */
+  groupSink?: TaskGroupSink;
   /** 未指定 cwd 时的默认工作目录（默认 `<dataRoot>/dispatch-workspace`） */
   defaultCwd?: string;
   /** 握手/建会话超时（默认 120000） */
@@ -161,6 +186,7 @@ export class AgentTaskService {
   private readonly requestTimeoutMs: number;
   private readonly promptTimeoutMs: number;
   private readonly permissionPolicy: NonNullable<AgentTaskServiceOptions["permissionPolicy"]>;
+  private readonly groupSink: TaskGroupSink | undefined;
   private readonly now: () => number;
   private readonly active = new Map<string, ActiveRun>();
   private readonly subscribers = new Map<string, Set<(event: AgentTaskStreamEvent) => void>>();
@@ -175,6 +201,7 @@ export class AgentTaskService {
     this.defaultCwd = options.defaultCwd ?? neutralDispatchCwd(options.dataRoot);
     this.ledger = options.ledger;
     this.permissionPolicy = options.permissionPolicy ?? (() => "deny");
+    this.groupSink = options.groupSink;
     mkdirSync(this.defaultCwd, { recursive: true });
 
     this.store =
@@ -216,6 +243,8 @@ export class AgentTaskService {
     filter: {
       status?: AgentTaskStatus | AgentTaskStatus[];
       runtime?: string;
+      /** 只看某个群派出的任务（G2） */
+      groupId?: string;
       limit?: number;
       cursor?: string;
     } = {},
@@ -249,6 +278,7 @@ export class AgentTaskService {
       content: request.content,
       cwd: request.cwd ?? this.defaultCwd,
       ...(request.fromSession === undefined ? {} : { fromSession: request.fromSession }),
+      ...(request.groupId === undefined ? {} : { groupId: request.groupId }),
       ...(request.idempotencyKey === undefined
         ? {}
         : { idempotencyKey: request.idempotencyKey }),
@@ -577,7 +607,7 @@ export class AgentTaskService {
     }
   }
 
-  /** 收尾为 replied / cancelled（写结果 + 终态事件 + 终态状态 + 唤醒等待者） */
+  /** 收尾为 replied / cancelled（写结果 + 终态事件 + 终态状态 + 回群 + 唤醒等待者） */
   private finish(
     id: string,
     status: Extract<AgentTaskStatus, "replied" | "cancelled">,
@@ -587,6 +617,8 @@ export class AgentTaskService {
     if (!current || isTerminalTaskStatus(current.status)) return;
     this.transit(id, status, patch);
     this.notifyTerminal(id);
+    const finished = this.store.get(id);
+    if (finished) this.publishToGroup(finished);
   }
 
   /** 收尾为 failed */
@@ -596,6 +628,35 @@ export class AgentTaskService {
     log.warn("dispatch", `任务 ${id} 失败: ${error.slice(0, 300)}`);
     this.transit(id, "failed", { error, detail: error.slice(0, 200) });
     this.notifyTerminal(id);
+    const finished = this.store.get(id);
+    if (finished) this.publishToGroup(finished);
+  }
+
+  /**
+   * 结果回群（G2）：任务终态时把结果以 `task_card` 写回 `task.groupId` 指向的群。
+   *
+   * 由服务端代写（`fromKind=runtime` + `agentTaskId` 深链），不依赖目标 agent 自觉；
+   * 群侧失败只 warn，不影响任务本身已经收尾的事实。
+   *
+   * @param task - 已到终态的任务
+   */
+  private publishToGroup(task: AgentTaskRecord): void {
+    const groupId = task.groupId;
+    if (groupId === undefined || groupId === "" || this.groupSink === undefined) return;
+    const content = groupCardContent(task);
+    try {
+      this.groupSink.postRuntimeMessage(groupId, {
+        runtime: task.runtime,
+        content,
+        agentTaskId: task.id,
+        kind: "task_card",
+      });
+    } catch (err) {
+      log.warn(
+        "group",
+        `任务 ${task.id} 结果回群失败（group=${groupId}）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -677,7 +738,34 @@ export function toTaskDto(task: AgentTaskRecord): AgentTaskDto {
       : { finishedAt: new Date(task.finishedAt).toISOString() }),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(task.acpSessionId === undefined ? {} : { acpSessionId: task.acpSessionId }),
+    ...(task.groupId === undefined ? {} : { groupId: task.groupId }),
   };
+}
+
+/**
+ * 群卡片正文（G2）：任务终态时写进群的那条 `task_card` 消息。
+ *
+ * @param task - 已收尾的任务
+ */
+export function groupCardContent(task: AgentTaskRecord): string {
+  const head = `任务 ${task.id.slice(0, 8)}（${task.runtime}）`;
+  if (task.status === "replied") {
+    const result = (task.result ?? "").trim();
+    const body = result === "" ? "（空回复）" : result;
+    return `${head}已完成：\n${truncate(body, 2000)}`;
+  }
+  if (task.status === "failed") {
+    return `${head}失败：${truncate((task.error ?? "未知错误").trim(), 1500)}`;
+  }
+  if (task.status === "cancelled") {
+    return `${head}已取消`;
+  }
+  return `${head}${task.status}`;
+}
+
+/** 截断（保留尾部提示，避免长输出刷屏群聊） */
+function truncate(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit)}…（已截断 ${text.length - limit} 字）`;
 }
 
 /** 事件行 → API DTO */

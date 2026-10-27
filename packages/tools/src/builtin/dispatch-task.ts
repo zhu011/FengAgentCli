@@ -24,6 +24,8 @@ export interface DispatchTaskRequest {
   content: string;
   /** 覆盖目标工作目录（缺省用服务默认的隔离目录） */
   cwd?: string;
+  /** 群内派发（G2）：结果会自动以 `task_card` 写回该群 */
+  groupId?: string;
 }
 
 /** 派发结果（服务层 → 工具结果） */
@@ -56,6 +58,13 @@ const dispatchTaskSchema = z.object({
     .min(1)
     .optional()
     .describe("可选：目标 agent 的工作目录（缺省用隔离目录，避免污染本仓库）"),
+  groupId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "可选：群 id。带上它时，任务结果会自动以 task_card 写回该群（G2 群内派发）",
+    ),
 });
 
 /** 工具入参类型 */
@@ -105,6 +114,7 @@ export function createDispatchTaskTool(
             runtime: input.agent,
             content: input.task,
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+            ...(input.groupId === undefined ? {} : { groupId: input.groupId }),
           },
           { sessionId: context.sessionId, workdir: context.workdir },
         );

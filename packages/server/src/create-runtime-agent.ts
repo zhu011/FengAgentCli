@@ -346,16 +346,24 @@ export async function createRuntimeAgent(
 
   // 6.5 外派任务服务（P1/P2）：注册表 + ACP 客户端 + 7 态任务仓，幂等台账复用 AGE-29 的
   //     operation_ledger（同一 attempt 只执行一次；未决的派发不静默重放）。
+  //     群服务在下一步才创建，这里用惰性下沉口（G2 结果回群）先接上。
+  let agentGroupService: AgentGroupService | null = null;
   let agentTaskService: AgentTaskService | null = null;
   if (enableStore) {
     try {
       agentTaskService = new AgentTaskService({
         dataRoot: dataDir,
         ...(taskStore ? { ledger: taskStore.ledger } : {}),
+        // 群服务稍后才建：用惰性下沉口，任务终态时把结果以 task_card 写回群（G2）
+        groupSink: {
+          postRuntimeMessage: (groupId, input) =>
+            agentGroupService?.postRuntimeMessage(groupId, input),
+        },
         // 不传 defaultCwd：服务默认用「仓库外中立目录」（~/.fengagent/dispatch-workspace/…），
         // 否则目标 agent 会在 cwd 里读到本仓库的 AGENTS.md/CLAUDE.md 并自报成别的身份。
       });
       // dispatch_task 工具：LLM 在会话里就能把任务派给别的 runtime，结果回流到本会话
+      // （G2：带 groupId 时结果还会以 task_card 自动写回群）
       toolRegistry.register(
         createDispatchTaskTool(
           async (input, ctx) => {
@@ -364,6 +372,7 @@ export async function createRuntimeAgent(
               content: input.content,
               fromSession: ctx.sessionId,
               ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+              ...(input.groupId === undefined ? {} : { groupId: input.groupId }),
             });
             return {
               id: task.id,
@@ -385,7 +394,6 @@ export async function createRuntimeAgent(
 
   // 6.6 群聊（G1）：群聚合根 + 消息通道；群工具只注入本仓库的 fengagent 侧
   //     （v1「协调者中转」：外部 runtime 没有群工具，它们的产出由服务端代写进群）。
-  let agentGroupService: AgentGroupService | null = null;
   if (enableStore) {
     try {
       agentGroupService = new AgentGroupService({

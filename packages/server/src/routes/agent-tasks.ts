@@ -122,11 +122,13 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
     const rawLimit = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
     const runtime = c.req.query("runtime");
+    const groupId = c.req.query("groupId");
     const cursor = c.req.query("cursor");
 
     const page = service.listTasks({
       ...(statuses === undefined || statuses.length === 0 ? {} : { status: statuses }),
       ...(runtime === undefined || runtime === "" ? {} : { runtime }),
+      ...(groupId === undefined || groupId === "" ? {} : { groupId }),
       ...(limit === undefined ? {} : { limit }),
       ...(cursor === undefined || cursor === "" ? {} : { cursor }),
     });
@@ -150,6 +152,8 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
         ? body.fromSession
         : undefined;
     const cwd = typeof body.cwd === "string" && body.cwd !== "" ? body.cwd : undefined;
+    const groupId =
+      typeof body.groupId === "string" && body.groupId !== "" ? body.groupId : undefined;
     const idempotencyKey =
       typeof body.idempotencyKey === "string" && body.idempotencyKey !== ""
         ? body.idempotencyKey
@@ -161,6 +165,7 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
         content,
         ...(fromSession === undefined ? {} : { fromSession }),
         ...(cwd === undefined ? {} : { cwd }),
+        ...(groupId === undefined ? {} : { groupId }),
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       });
       return c.json(task, 201);

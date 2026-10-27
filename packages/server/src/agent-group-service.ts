@@ -317,16 +317,22 @@ export class AgentGroupService {
    * 外部 runtime 的结果回群（G2 主路径，服务端代写，不暴露 REST）。
    *
    * @param id - 群 id
-   * @param input - runtime 名 + 内容 + 任务深链
+   * @param input - runtime 名 + 内容 + 任务深链 + 消息种类（G2 卡片用 `task_card`）
    */
   postRuntimeMessage(
     id: string,
-    input: { runtime: string; content: string; agentTaskId?: string },
+    input: {
+      runtime: string;
+      content: string;
+      agentTaskId?: string;
+      kind?: GroupMessageKind;
+    },
   ): GroupMessageDto {
     return this.appendAndEmit(id, {
       content: input.content,
       fromKind: "runtime",
       fromName: input.runtime,
+      ...(input.kind === undefined ? {} : { kind: input.kind }),
       ...(input.agentTaskId === undefined ? {} : { agentTaskId: input.agentTaskId }),
     });
   }
