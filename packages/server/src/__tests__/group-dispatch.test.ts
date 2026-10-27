@@ -16,7 +16,9 @@ import { createDispatchTaskTool } from "@fengagent/tools";
 import { AgentRuntimeRegistry } from "../agent-runtimes.ts";
 import { AgentGroupService } from "../agent-group-service.ts";
 import { AgentTaskService } from "../agent-task-service.ts";
+import { GroupOrchestrator } from "../group-orchestrator.ts";
 import { createAgentTaskRoutes } from "../routes/agent-tasks.ts";
+import { createGroupRoutes } from "../routes/groups.ts";
 import type { RuntimeInfo } from "../agent-runtimes.ts";
 
 const FIXTURE = join(
@@ -234,6 +236,56 @@ describe("G2 — 群内派发 + 结果回群", () => {
       expect(fx.tasks.store.get(second.id)?.groupId).toBeUndefined();
       expect(fx.tasks.store.list({ groupId: group.id }).map((t) => t.id)).toEqual([first.id]);
     } finally {
+      await fx.tasks.close();
+      fx.groups.close();
+      safeRm(fx.dir);
+    }
+  });
+
+  test("G3 关停：POST /:id/stop 取消该群在跑任务（真实任务服务，关群后无残留任务）", async () => {
+    const fx = makeFixture();
+    const orchestrator = new GroupOrchestrator({
+      groups: fx.groups,
+      sweepIntervalMs: 0,
+      cancelGroupTasks: (groupId) => {
+        const running = fx.tasks.listTasks({
+          groupId,
+          status: ["created", "dispatched", "running"],
+          limit: 50,
+        }).tasks;
+        const cancelled: string[] = [];
+        for (const task of running) {
+          try {
+            fx.tasks.cancel(task.id);
+            cancelled.push(task.id);
+          } catch {
+            // 竞态：已终态
+          }
+        }
+        return cancelled;
+      },
+    });
+    fx.groups.onMessage((groupId, message) => orchestrator.onMessage(groupId, message));
+    const groupApp = createGroupRoutes(fx.groups, orchestrator);
+    try {
+      const group = fx.groups.createGroup({ name: "关停面", members: ["fake"] });
+      const task = await fx.tasks.submit({
+        runtime: "fake",
+        content: "SLOW 慢任务",
+        groupId: group.id,
+      });
+      await Bun.sleep(150); // 让它进入 running
+
+      const res = await groupApp.request(`/${group.id}/stop`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { cancelledTasks: string[] };
+      expect(body.cancelledTasks).toContain(task.id);
+
+      await fx.tasks.waitForTerminal(task.id, 15_000);
+      expect(fx.tasks.getTask(task.id)!.status).toBe("cancelled");
+      expect(fx.groups.getGroup(group.id)!.status).toBe("concluded");
+    } finally {
+      orchestrator.dispose();
       await fx.tasks.close();
       fx.groups.close();
       safeRm(fx.dir);

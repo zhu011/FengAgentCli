@@ -26,6 +26,7 @@ import {
   type GroupMessageDto,
   type GroupStreamEvent,
 } from "../agent-group-service.ts";
+import type { GroupOrchestrator } from "../group-orchestrator.ts";
 
 const log = createLogger("group-routes");
 
@@ -87,8 +88,12 @@ function createFrameQueue() {
  * 群聊路由。
  *
  * @param service - 群服务
+ * @param orchestrator - 可选编排器（G3）：提供时 conclude/stop 走它（写收口说明 + 取消任务）
  */
-export function createGroupRoutes(service: AgentGroupService): Hono {
+export function createGroupRoutes(
+  service: AgentGroupService,
+  orchestrator?: GroupOrchestrator,
+): Hono {
   const app = new Hono();
 
   // GET / — 群列表 + runtime 卡片
@@ -215,11 +220,28 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
     }
   });
 
-  // POST /:id/conclude — 关群（幂等）
+  // POST /:id/conclude — 关群（幂等；有编排器时写收口说明 + 取消在跑任务）
   app.post("/:id/conclude", (c) => {
     const id = c.req.param("id");
     try {
+      if (orchestrator) return c.json(orchestrator.conclude(id, { by: "human" }).group);
       return c.json(service.concludeGroup(id));
+    } catch (err) {
+      const payload = toErrorPayload(err);
+      return fail(c, payload.message, payload.code);
+    }
+  });
+
+  // POST /:id/stop — 人类中途关停（收口 + 取消该群未终态任务）
+  app.post("/:id/stop", (c) => {
+    const id = c.req.param("id");
+    if (!service.getGroup(id)) return fail(c, `群不存在: ${id}`, "not_found");
+    try {
+      if (!orchestrator) {
+        return c.json({ group: service.concludeGroup(id), cancelledTasks: [] });
+      }
+      const result = orchestrator.stop(id);
+      return c.json({ group: result.group, cancelledTasks: result.cancelledTasks });
     } catch (err) {
       const payload = toErrorPayload(err);
       return fail(c, payload.message, payload.code);

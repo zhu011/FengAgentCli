@@ -45,6 +45,13 @@ export type {
   AgentGroupServiceOptions,
 } from "./agent-group-service.ts";
 export { createGroupRoutes, mountGroupRoutes } from "./routes/groups.ts";
+// 群编排器（G3：轮次上限 / 静默超时 / 人类拍板 / 关停）
+export { GroupOrchestrator } from "./group-orchestrator.ts";
+export type {
+  ConcludeBy,
+  ConcludeResult,
+  GroupOrchestratorOptions,
+} from "./group-orchestrator.ts";
 
 // 路由
 export { createSessionRoutes } from "./routes/sessions.ts";

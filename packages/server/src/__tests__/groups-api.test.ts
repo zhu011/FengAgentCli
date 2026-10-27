@@ -295,11 +295,25 @@ describe("群工具（fengagent 侧，G1 三个）— 与 API 共用同一 servi
               lines: messages.map((m) => `#${m.seq} [${m.fromName}] ${m.content}`),
             };
           },
+          conclude: async (input) => {
+            made.service.postAgentMessage(input.groupId, {
+              content: input.conclusion,
+              fromName: input.from,
+              kind: "decision",
+            });
+            const closed = made.service.concludeGroup(input.groupId);
+            return { status: closed.status, cancelledTasks: 0 };
+          },
         },
         { selfName: () => "fengagent" },
       );
       const byName = new Map(tools.map((tool) => [tool.name, tool]));
-      expect([...byName.keys()]).toEqual(["group_create", "group_send", "group_history"]);
+      expect([...byName.keys()]).toEqual([
+        "group_create",
+        "group_send",
+        "group_history",
+        "group_conclude",
+      ]);
 
       const ctx = { workdir: made.dir, sessionId: "s-1", messageId: "m-1" };
       const created = await byName.get("group_create")!.execute(

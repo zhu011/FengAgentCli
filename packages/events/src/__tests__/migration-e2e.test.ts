@@ -260,9 +260,11 @@ describe("跨数据根/跨机迁移端到端（Phase 3 ③）", () => {
     expect(reconcileSession(rootB.events, rootB.legacy, sessionA.id).ok).toBe(true);
   });
 
-  test("多会话全库迁移（含 rollback/fork 会话）：exportStore → importStore → rebuildAll → reconcileAll 绿", () => {
-    const rootA = trackRoot(makeRoot("e2e-store-a-"));
-    const graphA = new EventGraphStore({ events: rootA.events });
+  test(
+    "多会话全库迁移（含 rollback/fork 会话）：exportStore → importStore → rebuildAll → reconcileAll 绿",
+    () => {
+      const rootA = trackRoot(makeRoot("e2e-store-a-"));
+      const graphA = new EventGraphStore({ events: rootA.events });
 
     // 会话 1：普通两轮 + 标题变更
     const s1 = createSession("deepseek-chat", "普通会话");
@@ -333,7 +335,10 @@ describe("跨数据根/跨机迁移端到端（Phase 3 ③）", () => {
       expect(rootB.events.replay(sid)).toEqual(rootA.events.replay(sid));
       expect(verifyEventChain(rootB.events.replay(sid))).toEqual([]);
     }
-  });
+    },
+    // 全库迁移在整套并行跑时可能超过 bun 默认 5s（本用例要跑 3 个会话 + 两次重建）
+    20_000,
+  );
 
   test("迁移后新根可继续写：续跑一轮对话，事件链无缝续接（seq 连续），对账仍绿", () => {
     const rootA = trackRoot(makeRoot("e2e-cont-a-"));

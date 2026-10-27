@@ -1,18 +1,19 @@
 /**
- * @fengagent/tools — 群工具（G1：协调者侧，契约冻结 v1.0 的**三个**）
+ * @fengagent/tools — 群工具（协调者侧；G1 三个 + G3 的 `group_conclude`）
  *
- * v1「协调者中转」里，**只有本仓库的 fengagent 成员**拿得到这三个工具 —— 外部
+ * v1「协调者中转」里，**只有本仓库的 fengagent 成员**拿得到这些工具 —— 外部
  * runtime（kimi/dsh/claude）要拥有群工具必须往它们的进程注入 MCP（G4/v2）。
  * 因此它们和 `dispatch_task` 一样是**由 server 装配注入**的：
  * `createGroupTools(handler)`，tools 包不反向依赖 server。
  *
- * | 工具 | 作用 |
- * |---|---|
- * | `group_create` | 建群（成员 runtime 名单 + 描述），返回 GroupInfo |
- * | `group_send` | 以协调者身份往群里发言（`from_kind=coordinator`） |
- * | `group_history` | 读群聊记录（最近 N 条，旧→新，带发言人与 seq） |
+ * | 工具 | 阶段 | 作用 |
+ * |---|---|---|
+ * | `group_create` | G1 | 建群（成员 runtime 名单 + 描述），返回 GroupInfo |
+ * | `group_send` | G1 | 以协调者身份往群里发言（`from_kind=coordinator`） |
+ * | `group_history` | G1 | 读群聊记录（最近 N 条，旧→新，带发言人与 seq） |
+ * | `group_conclude` | G3 | 收口：结论作为 `decision` 消息落库 → 关群 → 取消在跑任务 |
  *
- * `group_conclude` / `group_dispatch` 属于 G3 / G2，这里不放。
+ * `group_dispatch` 属于 G2 的派发面（用 `dispatch_task({groupId})` 即可），无需单独工具。
  */
 
 import { z } from "zod";
@@ -38,6 +39,15 @@ export interface GroupToolHandler {
     groupId: string;
     limit?: number;
   }): Promise<{ groupId: string; name: string; lines: string[] }>;
+  /**
+   * 收口（G3）：把协调者的结论以 `decision` 消息落库，然后关群（幂等）。
+   * 返回被取消的在跑任务数（关群后无残留任务）。
+   */
+  conclude(input: {
+    groupId: string;
+    conclusion: string;
+    from: string;
+  }): Promise<{ status: string; cancelledTasks: number }>;
 }
 
 /** 群工具选项 */
@@ -63,6 +73,14 @@ const groupSendSchema = z.object({
 const groupHistorySchema = z.object({
   groupId: z.string().min(1).describe("群 id"),
   limit: z.number().int().positive().max(200).optional().describe("取最近多少条（默认 50）"),
+});
+
+const groupConcludeSchema = z.object({
+  groupId: z.string().min(1).describe("群 id"),
+  conclusion: z
+    .string()
+    .min(1)
+    .describe("收口结论（一段话：结论是什么、谁负责什么、还有什么遗留）——会作为 decision 消息留在群里"),
 });
 
 /**
@@ -140,5 +158,32 @@ export function createGroupTools(
     renderUse: (input) => `group_history(${input.groupId.slice(0, 8)})`,
   };
 
-  return [createTool, sendTool, historyTool];
+  const concludeTool: ToolDefinition<
+    z.infer<typeof groupConcludeSchema>,
+    { groupId: string; status: string }
+  > = {
+    name: "group_conclude",
+    description:
+      "收口（结束讨论）：把你的结论作为 decision 消息留在群里，然后把群置为 concluded，" +
+      "并取消该群所有在跑任务。结论要自包含（结论 / 分工 / 遗留），人类与成员都靠它对齐。",
+    inputSchema: groupConcludeSchema,
+    async execute(input): Promise<ToolResult<{ groupId: string; status: string }>> {
+      const result = await handler.conclude({
+        groupId: input.groupId,
+        conclusion: input.conclusion,
+        from: selfName(),
+      });
+      return {
+        content:
+          `群已收口（status=${result.status}）` +
+          (result.cancelledTasks > 0 ? `，取消在跑任务 ${result.cancelledTasks} 个` : ""),
+        metadata: { groupId: input.groupId, status: result.status },
+      };
+    },
+    sideEffect: () => "non-idempotent",
+    isConcurrencySafe: () => false,
+    renderUse: (input) => `group_conclude(${input.groupId.slice(0, 8)})`,
+  };
+
+  return [createTool, sendTool, historyTool, concludeTool];
 }

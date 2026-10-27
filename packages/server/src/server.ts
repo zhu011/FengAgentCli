@@ -29,6 +29,7 @@ import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks
 import { createGroupRoutes } from "./routes/groups.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "./agent-group-service.ts";
+import type { GroupOrchestrator } from "./group-orchestrator.ts";
 
 /** Server 构造选项 */
 export interface ServerOptions {
@@ -60,6 +61,10 @@ export interface ServerOptions {
    * 缺省时不挂 `/api/groups`（前端群聊页会提示后端未就绪）。
    */
   agentGroupService?: AgentGroupService;
+  /**
+   * 群编排器（G3）：提供时 `/api/groups/:id/conclude|stop` 走它（收口说明 + 取消在跑任务）。
+   */
+  agentGroupOrchestrator?: GroupOrchestrator;
 }
 
 /**
@@ -109,9 +114,13 @@ export function createApp(options: ServerOptions): {
     app.route("/api/agent-tasks", createAgentTaskRoutes(options.agentTaskService));
   }
 
-  // 群聊（G1：群 CRUD + 消息 + 群 SSE）；缺服务时不挂，前端群聊页据此提示未就绪。
+  // 群聊（G1：群 CRUD + 消息 + 群 SSE；G3：conclude/stop 走编排器）
+  // 缺服务时不挂，前端群聊页据此提示未就绪。
   if (options.agentGroupService) {
-    app.route("/api/groups", createGroupRoutes(options.agentGroupService));
+    app.route(
+      "/api/groups",
+      createGroupRoutes(options.agentGroupService, options.agentGroupOrchestrator),
+    );
   }
 
   // 可观测性（AgentLoop 观测面板） + 评测模块（WebUI）

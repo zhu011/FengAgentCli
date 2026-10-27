@@ -49,6 +49,7 @@ import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
 import { AgentGroupService } from "./agent-group-service.ts";
+import { GroupOrchestrator } from "./group-orchestrator.ts";
 import {
   deepMerge,
   importMainData,
@@ -192,6 +193,11 @@ export interface CreateRuntimeAgentResult {
    * `enableSessionStore=false` 或初始化失败时为 null。
    */
   agentGroupService: AgentGroupService | null;
+  /**
+   * 群编排器（G3：轮次上限 / 静默超时 / 人类拍板 / 关停）。
+   * `enableSessionStore=false` 或初始化失败时为 null。
+   */
+  agentGroupOrchestrator: GroupOrchestrator | null;
   agentDefinitionLoader: ReturnType<typeof createAgentDefinitionLoader>;
   subagentRunner: SubagentRunner;
   hookRegistry: HookRegistry;
@@ -348,6 +354,7 @@ export async function createRuntimeAgent(
   //     operation_ledger（同一 attempt 只执行一次；未决的派发不静默重放）。
   //     群服务在下一步才创建，这里用惰性下沉口（G2 结果回群）先接上。
   let agentGroupService: AgentGroupService | null = null;
+  let agentGroupOrchestrator: GroupOrchestrator | null = null;
   let agentTaskService: AgentTaskService | null = null;
   if (enableStore) {
     try {
@@ -401,6 +408,34 @@ export async function createRuntimeAgent(
         // 列表接口的成员选择器复用 runtime 卡片（与 Agents 页同一份数据）
         runtimes: () => agentTaskService?.listRuntimes() ?? [],
       });
+
+      // G3 编排器：轮次上限 / 静默超时 / 人类拍板都收敛到 conclude()（幂等 + 取消在跑任务）
+      agentGroupOrchestrator = new GroupOrchestrator({
+        groups: agentGroupService,
+        cancelGroupTasks: (groupId) => {
+          if (!agentTaskService) return [];
+          const running = agentTaskService.listTasks({
+            groupId,
+            status: ["created", "dispatched", "running"],
+            limit: 200,
+          }).tasks;
+          const cancelled: string[] = [];
+          for (const task of running) {
+            try {
+              agentTaskService.cancel(task.id);
+              cancelled.push(task.id);
+            } catch {
+              // 已终态/竞态：跳过
+            }
+          }
+          return cancelled;
+        },
+      });
+      agentGroupService.onMessage((groupId, message) =>
+        agentGroupOrchestrator!.onMessage(groupId, message),
+      );
+      agentGroupOrchestrator.start();
+
       const selfName = process.env.FENG_GROUP_SELF_NAME?.trim() || "fengagent";
       const groupTools = createGroupTools(
         {
@@ -435,6 +470,14 @@ export async function createRuntimeAgent(
               lines: messages.map((m) => `#${m.seq} [${m.fromName}] ${m.content}`),
             };
           },
+          conclude: async (input) => {
+            const result = agentGroupOrchestrator!.conclude(input.groupId, {
+              by: "coordinator",
+              reason: "协调者收口",
+              conclusion: input.conclusion,
+            });
+            return { status: result.group.status, cancelledTasks: result.cancelledTasks.length };
+          },
         },
         { selfName: () => selfName },
       );
@@ -442,7 +485,9 @@ export async function createRuntimeAgent(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Warn: 群聊服务不可用（${dataDir}）：${message}\n`);
+      agentGroupOrchestrator?.dispose();
       agentGroupService = null;
+      agentGroupOrchestrator = null;
     }
   }
   const storageBackend: SessionStoreLike = sessionStore ?? createMemorySessionStore();
@@ -579,6 +624,7 @@ export async function createRuntimeAgent(
     reflectionStore,
     agentTaskService,
     agentGroupService,
+    agentGroupOrchestrator,
     agentDefinitionLoader,
     subagentRunner,
     hookRegistry,

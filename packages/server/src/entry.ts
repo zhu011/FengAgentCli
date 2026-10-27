@@ -70,6 +70,10 @@ async function main() {
     ...(runtimeResult.agentGroupService
       ? { agentGroupService: runtimeResult.agentGroupService }
       : {}),
+    // 群编排器（G3）：conclude/stop 走收口策略
+    ...(runtimeResult.agentGroupOrchestrator
+      ? { agentGroupOrchestrator: runtimeResult.agentGroupOrchestrator }
+      : {}),
   });
 }
 

@@ -128,6 +128,7 @@ export interface AgentGroupServiceOptions {
 export class AgentGroupService {
   readonly store: AgentGroupStore;
   private readonly subscribers = new Map<string, Set<(event: GroupStreamEvent) => void>>();
+  private readonly messageHooks = new Set<(groupId: string, message: GroupMessageDto) => void>();
   private readonly runtimes: () => RuntimeInfo[];
   private readonly defaultCoordinator: string;
 
@@ -353,9 +354,24 @@ export class AgentGroupService {
     };
   }
 
+  /**
+   * 订阅「新消息」（G3 编排器用：计轮次 / 识别 human 拍板）。
+   *
+   * 与 SSE 的 `subscribe` 分开：这条是**服务端内部**观察点，不参与前端推送。
+   *
+   * @param hook - 消息落库后回调（异常只 warn，不影响写入）
+   */
+  onMessage(hook: (groupId: string, message: GroupMessageDto) => void): () => void {
+    this.messageHooks.add(hook);
+    return () => {
+      this.messageHooks.delete(hook);
+    };
+  }
+
   /** 关闭（SSE 订阅清空 + 关库） */
   close(): void {
     this.subscribers.clear();
+    this.messageHooks.clear();
     this.store.close();
   }
 
@@ -385,6 +401,13 @@ export class AgentGroupService {
     }
     const dto = toMessageDto(message);
     this.emit(id, { type: "message", message: dto });
+    for (const hook of this.messageHooks) {
+      try {
+        hook(id, dto);
+      } catch (err) {
+        log.warn("hook", `消息钩子失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     return dto;
   }
 

@@ -99,10 +99,26 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
   400（否则任务跑完才发现结果无处可回）。
 - **不带 `groupId` 的任务不回群**（回归用例覆盖）。
 
-## 7. G3 衔接点（已预留）
+## 7. G3（已实现）：编排收敛 + 人在环
 
-- `maxRounds` / `idleTimeoutMs` 已落库；`concludeGroup()` 已实现幂等 `open → concluded`；
-- `group_conclude` 工具、静默超时自动收口、`decision` 消息（人类拍板）在其上加一层即可。
+`GroupOrchestrator`（`packages/server/src/group-orchestrator.ts`）三条独立策略，共用一个
+**幂等 `conclude()`**：
+
+| 策略 | 触发 | 行为 |
+|---|---|---|
+| 轮次上限 `maxRounds` | 同群内「自上次人类发言以来」协调者发言数达到上限 | 自动收口（system 说明原因）；人类发言清零计数 |
+| 静默超时 `idleTimeoutMs` | 群 open 且最后一条消息距今 ≥ 阈值（生产 5s 扫一次；测试手动 `sweepIdle`） | 自动收口 |
+| 人类拍板 | human 发 `kind:"decision"` 的消息 | 该消息落库后立即收口 |
+
+- **收口顺序**：写 `【收口】原因` 的 system 消息 → 取消该群未终态任务（`cancelledTasks`，
+  有则再补一条「已取消 N 个在跑任务」）→ 群状态置 `concluded`。消息只能在 open 群写入，
+  所以顺序不能反。重复收口返回 `concluded:false`（幂等）。
+- **人类中途关停**：`POST /api/groups/:id/stop` → `{group, cancelledTasks}`（关群 + 取消任务，
+  对应验收口径「关群后无残留任务」）。
+- **`POST /:id/conclude`** 在有编排器时也走同一条路径（留收口说明）。
+- **`group_conclude` 工具**（第 4 个群工具）：协调者把结论以 `decision` 消息落库 → 关群 →
+  报告取消任务数；返回 `status` + `cancelledTasks`。
+- **`decision` 消息**：`kind="decision"`，人类拍板与协调者结论都用它，前端可单独渲染。
 
 ## 8. 自测覆盖
 
@@ -112,8 +128,12 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
   `{groups, runtimes}`、未注册成员 400、人发言（`fromName=human`）与全量详情、`after` 增量、
   `agent-messages`（协调者/成员/非成员 403）、`conclude` 幂等 + 关群 409 + 历史可读、
   SSE `snapshot`（含 `lastSeq`）与 `message`、错误体 `{error:{message,code}}`、
-  三个群工具走通、外部 runtime 代写（`runtime` + 深链）。
-- `packages/server/src/__tests__/group-dispatch.test.ts`（7，G2）：replied/failed 都落
+  群工具走通、外部 runtime 代写（`runtime` + 深链）。
+- `packages/server/src/__tests__/group-dispatch.test.ts`（8，G2 + 关停）：replied/failed 都落
   `task_card`（fromKind=runtime + agentTaskId + 内容/错误）、不带 groupId 不回群、
-  未知 groupId 提交即 400、
-  API 带 groupId 与群维度列表过滤、`dispatch_task` 透传 groupId、store 层 `group_id` 落库。
+  未知 groupId 提交即 400、API 带 groupId 与群维度列表过滤、`dispatch_task` 透传 groupId、
+  store 层 `group_id` 落库、**真实任务服务下 stop 取消在跑任务**。
+- `packages/server/src/__tests__/group-orchestrator.test.ts`（7，G3）：轮次上限收口 + 人类发言
+  重置计数、静默超时 sweep 与幂等、human decision 立即收口、`POST /:id/stop` 幂等 +
+  返回取消任务、`POST /:id/conclude` 留收口说明、`group_conclude` 工具（decision 落库 + 关群
+  + 取消任务数）。
