@@ -5264,3 +5264,115 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ══════════════════════════════════════════════
+   Light 主题收敛（AGE-35 改版第二块）
+   chat 页原为暗色「霓虹光晕」风格（渐变发丝线、辉光阴影、
+   borderFlow 焦点流光）；亮色下统一收敛为 anet 克制风——
+   分隔用中性色、阴影用 shadow-sm、焦点用三段 ring。
+   全部经 [data-theme="light"] 限定，暗色 / cyber 原样保留。
+   ══════════════════════════════════════════════ */
+
+/* 侧栏与头部的渐变发丝线 → 中性分隔线 */
+[data-theme="light"] .session-sidebar::after {
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--border-color),
+    transparent
+  );
+}
+
+[data-theme="light"] .chat-page__header::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--border-color),
+    transparent
+  );
+}
+
+/* 「新会话」按钮：辉光 → 克制阴影 */
+[data-theme="light"] .session-sidebar__new-btn {
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="light"] .session-sidebar__new-btn:hover {
+  box-shadow: var(--shadow-md);
+}
+
+/* 会话卡片的选中辉光 → 细描边 + 轻阴影 */
+[data-theme="light"] .session-card {
+  box-shadow: none;
+}
+
+[data-theme="light"] .session-card--active {
+  box-shadow: var(--shadow-sm);
+}
+
+/* 消息气泡：紫辉光 → 中性轻阴影；角色点的霓虹光 → 无 */
+[data-theme="light"] .message-bubble {
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="light"] .message-bubble__role-dot--user,
+[data-theme="light"] .message-bubble__role-dot--assistant {
+  box-shadow: none;
+}
+
+/* 输入框：borderFlow 流光 → 纯色描边 + 三段 ring（与 Agents 表单一致） */
+[data-theme="light"] .message-input__textarea:focus {
+  border-image: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+[data-theme="light"] .model-selector__select:focus {
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+[data-theme="light"] .session-card__rename-input:focus {
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+/* 发送/停止等渐变按钮：辉光 → 点色轻阴影 */
+[data-theme="light"] .message-input__btn,
+[data-theme="light"] .composer__btn,
+[data-theme="light"] .chat-page__create-btn {
+  box-shadow: 0 1px 2px var(--accent-light);
+}
+
+[data-theme="light"] .message-input__btn:hover,
+[data-theme="light"] .composer__btn:hover,
+[data-theme="light"] .chat-page__create-btn:hover {
+  box-shadow: 0 2px 8px var(--accent-light);
+}
+
+[data-theme="light"] .message-input__btn--stop,
+[data-theme="light"] .composer__btn--stop {
+  box-shadow: 0 1px 2px var(--danger-light);
+}
+
+[data-theme="light"] .message-input__btn--stop:hover,
+[data-theme="light"] .composer__btn--stop:hover {
+  box-shadow: 0 2px 8px var(--danger-light);
+}
+
+/* 行内代码 / 复制按钮 / 表格：紫色 tint → 中性 tint */
+[data-theme="light"] .markdown-code-inline {
+  background: var(--bg-tertiary);
+}
+
+[data-theme="light"] .markdown-code-block-copy {
+  background: var(--bg-hover);
+}
+
+[data-theme="light"] .markdown-table {
+  box-shadow: var(--shadow-sm);
+}
+
+/* 观测页图表卡片与评测 judge 卡：亮色下用统一轻阴影 */
+[data-theme="light"] .obs-page__chart-card,
+[data-theme="light"] .eval-judge {
+  box-shadow: var(--shadow-sm);
+}
