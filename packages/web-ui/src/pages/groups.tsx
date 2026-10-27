@@ -26,9 +26,12 @@ import type {
   GroupMessage,
   GroupStreamEvent,
 } from "../api/types.ts";
+import type { AppView, DeepLinkTarget } from "../app.tsx";
 
 interface GroupsPageProps {
   client: ApiClient;
+  /** 视图导航（群任务卡深链跳 Agents 页详情） */
+  onNavigate?: (view: AppView, target?: DeepLinkTarget) => void;
 }
 
 /** 页面数据源最小接口（client 与 mock 共同满足） */
@@ -121,7 +124,7 @@ function useGroupSource(client: ApiClient, forceMock: boolean) {
   return { source, mockMode, probeError, probe, probed };
 }
 
-export function GroupsPage({ client }: GroupsPageProps) {
+export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
   const forceMock = useMemo(() => {
     return new URLSearchParams(window.location.search).get("mock") === "1";
   }, []);
@@ -399,6 +402,21 @@ export function GroupsPage({ client }: GroupsPageProps) {
                   <div key={m.id} className={`gr-msg ${m.kind === "system" ? "gr-msg--system" : ""}`}>
                     {m.kind === "system" ? (
                       <div className="gr-msg__sysline">{m.content}</div>
+                    ) : m.kind === "task_card" && m.agentTaskId ? (
+                      <button
+                        type="button"
+                        className="gr-taskcard"
+                        title={`跳转任务详情：${m.agentTaskId}`}
+                        onClick={() => {
+                          onNavigate?.("agents", { taskId: m.agentTaskId });
+                        }}
+                      >
+                        <span className={`gr-taskcard__badge ${m.content.includes("已完成") ? "gr-taskcard__badge--ok" : m.content.includes("失败") ? "gr-taskcard__badge--error" : ""}`}>
+                          {m.content.includes("已完成") ? "已完成" : m.content.includes("失败") ? "失败" : m.content.includes("已取消") ? "已取消" : "任务"}
+                        </span>
+                        <span className="gr-taskcard__content">{m.content}</span>
+                        <span className="gr-taskcard__link">查看详情 →</span>
+                      </button>
                     ) : (
                       <>
                         <div className={`gr-msg__avatar ${speakerClass(m)}`}>{initials(m.fromName)}</div>

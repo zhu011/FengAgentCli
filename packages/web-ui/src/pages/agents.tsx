@@ -33,10 +33,13 @@ import type {
   AgentTaskStreamEvent,
   RuntimeInfo,
 } from "../api/types.ts";
+import type { DeepLinkTarget } from "../app.tsx";
 import { formatDuration } from "../lib/format.ts";
 
 interface AgentsPageProps {
   client: ApiClient;
+  /** deep-link 目标（群任务卡跳入：?view=agents&task=<id> 打开即进该任务详情） */
+  deepLink?: DeepLinkTarget;
 }
 
 type StatusFilter = "all" | AgentTaskStatus;
@@ -129,7 +132,7 @@ function useAgentTaskSource(client: ApiClient, forceMock: boolean) {
   return { source, mockMode, probeError, probe, probed };
 }
 
-export function AgentsPage({ client }: AgentsPageProps) {
+export function AgentsPage({ client, deepLink }: AgentsPageProps) {
   const forceMock = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get("mock") === "1";
@@ -141,7 +144,7 @@ export function AgentsPage({ client }: AgentsPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(deepLink?.taskId ?? null);
 
   // 发任务表单
   const [formOpen, setFormOpen] = useState(false);

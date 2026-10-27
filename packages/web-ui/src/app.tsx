@@ -28,10 +28,12 @@ import "./index.css";
 /** 应用视图 */
 export type AppView = "chat" | "observability" | "eval" | "agents" | "groups";
 
-/** deep-link 目标（会话 + 可选消息） */
+/** deep-link 目标（会话 + 可选消息；群聊深链也可带任务） */
 export interface DeepLinkTarget {
   sessionId?: string;
   messageId?: string;
+  /** 群任务卡深链：打开 Agents 页并直接进入该任务详情（?view=agents&task=<id>） */
+  taskId?: string;
 }
 
 function App() {
@@ -75,6 +77,7 @@ function App() {
       setDeepLink({
         sessionId: params.get("sessionId") ?? undefined,
         messageId: params.get("messageId") ?? undefined,
+        taskId: params.get("task") ?? undefined,
       });
     }
   }, []);
@@ -87,6 +90,7 @@ function App() {
     if (nextView !== "chat") params.set("view", nextView);
     if (target?.sessionId) params.set("sessionId", target.sessionId);
     if (target?.messageId) params.set("messageId", target.messageId);
+    if (target?.taskId) params.set("task", target.taskId);
     const qs = params.toString();
     window.history.pushState(null, "", qs ? `?${qs}` : window.location.pathname);
   }, []);
@@ -196,11 +200,11 @@ function App() {
           </div>
         ) : view === "agents" ? (
           <div className="app-shell__main">
-            <AgentsPage client={client} />
+            <AgentsPage client={client} deepLink={deepLink} />
           </div>
         ) : view === "groups" ? (
           <div className="app-shell__main">
-            <GroupsPage client={client} />
+            <GroupsPage client={client} onNavigate={navigate} />
           </div>
         ) : (
           <div className="app-shell__main">
