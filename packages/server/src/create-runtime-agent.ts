@@ -403,14 +403,13 @@ export async function createRuntimeAgent(
                 ? {}
                 : { description: input.description }),
               members: input.members ?? [],
-              ...(input.coordinator === undefined ? {} : { coordinator: input.coordinator }),
+              coordinator: input.coordinator ?? selfName,
             });
             return { id: group.id, name: group.name, members: group.members };
           },
           send: async (input) => {
-            const message = agentGroupService!.postMessage(input.groupId, {
+            const message = agentGroupService!.postAgentMessage(input.groupId, {
               content: input.content,
-              fromKind: "coordinator",
               fromName: input.from,
             });
             return { id: message.id, seq: message.seq };
@@ -420,25 +419,13 @@ export async function createRuntimeAgent(
             if (!group) throw new Error(`群不存在: ${input.groupId}`);
             const messages = agentGroupService!.listRecentMessages(
               input.groupId,
-              input.limit ?? 30,
+              input.limit ?? 50,
             );
             return {
               groupId: group.id,
               name: group.name,
               lines: messages.map((m) => `#${m.seq} [${m.fromName}] ${m.content}`),
             };
-          },
-          list: async (input) => {
-            const groups = agentGroupService!.listGroups({
-              ...(input.status === undefined ? {} : { status: input.status }),
-            });
-            return groups.map((group) => ({
-              id: group.id,
-              name: group.name,
-              status: group.status,
-              members: group.members,
-              messageCount: group.messageCount,
-            }));
           },
         },
         { selfName: () => selfName },

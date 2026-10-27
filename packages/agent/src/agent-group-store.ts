@@ -257,7 +257,7 @@ export class AgentGroupStore {
     if (name === "") throw new Error("群名不能为空");
     const members = normalizeMembers(input.members ?? []);
     const at = input.at ?? this.now();
-    const id = generateId();
+    const id = `grp_${generateId()}`;
     this.db
       .query(
         `INSERT INTO agent_groups
@@ -376,7 +376,7 @@ export class AgentGroupStore {
       .query("SELECT COALESCE(MAX(seq), 0) AS max_seq FROM group_messages WHERE group_id = ?")
       .get(group.id) as { max_seq: number };
     const seq = max.max_seq + 1;
-    const id = generateId();
+    const id = `msg_${generateId()}`;
     const fromKind = input.fromKind ?? "human";
     const kind = input.kind ?? (fromKind === "system" ? "system" : "chat");
     this.db
@@ -390,7 +390,7 @@ export class AgentGroupStore {
         group.id,
         seq,
         fromKind,
-        input.fromName ?? "user",
+        input.fromName ?? "human",
         content,
         kind,
         input.agentTaskId ?? null,
@@ -403,7 +403,7 @@ export class AgentGroupStore {
       groupId: group.id,
       seq,
       fromKind,
-      fromName: input.fromName ?? "user",
+      fromName: input.fromName ?? "human",
       content,
       kind,
       ...(input.agentTaskId === undefined ? {} : { agentTaskId: input.agentTaskId }),
@@ -426,6 +426,18 @@ export class AgentGroupStore {
          ORDER BY seq ASC LIMIT ?`,
       )
       .all(groupId, after, limit) as MessageRow[];
+    return rows.map(rowToMessage);
+  }
+
+  /**
+   * 全量消息（G1 详情接口按契约「全量返回」；群消息量小，不做分页）。
+   *
+   * @param groupId - 群 id
+   */
+  allMessages(groupId: string): GroupMessageRecord[] {
+    const rows = this.db
+      .query("SELECT * FROM group_messages WHERE group_id = ? ORDER BY seq ASC")
+      .all(groupId) as MessageRow[];
     return rows.map(rowToMessage);
   }
 

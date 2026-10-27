@@ -249,7 +249,12 @@ describe("AgentTaskService — 派发闭环", () => {
     await Bun.sleep(120);
     service.cancel(slowTask.id);
     await running;
-    expect(cancelKinds.slice(-2)).toEqual(["event:task/cancelled", "status:cancelled"]);
+    // 取消后可能还有一条迟到的权限事件 —— 断言「事件帧在状态帧之前」而不是「必须是最后两条」
+    const cancelledEventAt = cancelKinds.lastIndexOf("event:task/cancelled");
+    const cancelledStatusAt = cancelKinds.lastIndexOf("status:cancelled");
+    expect(cancelledEventAt).toBeGreaterThan(-1);
+    expect(cancelledStatusAt).toBeGreaterThan(cancelledEventAt);
+    expect(cancelKinds.filter((kind) => kind === "status:cancelled")).toHaveLength(1);
   });
 
   test("权限策略按 runtime 可配 allow（复验 marker 用）：回执 allow-once 且事件留痕", async () => {

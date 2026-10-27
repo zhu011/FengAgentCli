@@ -32,14 +32,16 @@ export {
 export type { SSEFrame } from "./sse.ts";
 
 // 群聊（G1）：群聚合根 + 消息通道 + 群 SSE
-export { AgentGroupService, toMessageDto } from "./agent-group-service.ts";
+export { AgentGroupService, toMessageDto, GroupError } from "./agent-group-service.ts";
 export type {
   GroupInfoDto,
   GroupMessageDto,
   GroupStreamEvent,
   CreateGroupRequest,
   UpdateGroupRequest,
-  PostGroupMessageRequest,
+  PostHumanMessageRequest,
+  PostAgentMessageRequest,
+  GroupErrorCode,
   AgentGroupServiceOptions,
 } from "./agent-group-service.ts";
 export { createGroupRoutes, mountGroupRoutes } from "./routes/groups.ts";

@@ -1,19 +1,18 @@
 /**
- * @fengagent/tools — 群工具（G1：协调者侧）
+ * @fengagent/tools — 群工具（G1：协调者侧，契约冻结 v1.0 的**三个**）
  *
- * v1「协调者中转」里，**只有本仓库的 fengagent 成员**拿得到这四个工具 —— 外部
+ * v1「协调者中转」里，**只有本仓库的 fengagent 成员**拿得到这三个工具 —— 外部
  * runtime（kimi/dsh/claude）要拥有群工具必须往它们的进程注入 MCP（G4/v2）。
  * 因此它们和 `dispatch_task` 一样是**由 server 装配注入**的：
  * `createGroupTools(handler)`，tools 包不反向依赖 server。
  *
  * | 工具 | 作用 |
  * |---|---|
- * | `group_create` | 建群（可指定成员 runtime 名单与主题） |
- * | `group_send` | 以协调者身份往群里发言 |
- * | `group_history` | 读群聊记录（最近 N 条，带发言人与 seq） |
- * | `group_list` | 列群（按状态过滤），用于「我们有哪些群」 |
+ * | `group_create` | 建群（成员 runtime 名单 + 描述），返回 GroupInfo |
+ * | `group_send` | 以协调者身份往群里发言（`from_kind=coordinator`） |
+ * | `group_history` | 读群聊记录（最近 N 条，旧→新，带发言人与 seq） |
  *
- * `group_conclude` / `group_dispatch` 属于 G2/G3（编排收敛与群内派发），这里不放。
+ * `group_conclude` / `group_dispatch` 属于 G3 / G2，这里不放。
  */
 
 import { z } from "zod";
@@ -29,16 +28,16 @@ export interface GroupToolHandler {
     coordinator?: string;
   }): Promise<{ id: string; name: string; members: string[] }>;
   /** 以协调者身份发言 */
-  send(input: { groupId: string; content: string; from: string }): Promise<{ id: string; seq: number }>;
-  /** 读群聊记录 */
+  send(input: {
+    groupId: string;
+    content: string;
+    from: string;
+  }): Promise<{ id: string; seq: number }>;
+  /** 读群聊记录（旧 → 新） */
   history(input: {
     groupId: string;
     limit?: number;
   }): Promise<{ groupId: string; name: string; lines: string[] }>;
-  /** 列群 */
-  list(input: {
-    status?: "open" | "concluded";
-  }): Promise<Array<{ id: string; name: string; status: string; members: string[]; messageCount: number }>>;
 }
 
 /** 群工具选项 */
@@ -54,7 +53,6 @@ const groupCreateSchema = z.object({
     .array(z.string().min(1))
     .optional()
     .describe("成员 runtime 名（kimi / dsh / claude …）；人类成员默认已在群里"),
-  coordinator: z.string().optional().describe("协调者名（缺省用你自己的名字）"),
 });
 
 const groupSendSchema = z.object({
@@ -64,18 +62,11 @@ const groupSendSchema = z.object({
 
 const groupHistorySchema = z.object({
   groupId: z.string().min(1).describe("群 id"),
-  limit: z.number().int().positive().max(200).optional().describe("取最近多少条（默认 30）"),
-});
-
-const groupListSchema = z.object({
-  status: z
-    .enum(["open", "concluded"])
-    .optional()
-    .describe("按状态过滤（缺省全部）"),
+  limit: z.number().int().positive().max(200).optional().describe("取最近多少条（默认 50）"),
 });
 
 /**
- * 创建群工具组。
+ * 创建群工具组（三个）。
  *
  * @param handler - 服务层实现
  * @param options - 协调者署名
@@ -97,7 +88,7 @@ export function createGroupTools(
         name: input.name,
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(input.members === undefined ? {} : { members: input.members }),
-        coordinator: input.coordinator ?? selfName(),
+        coordinator: selfName(),
       });
       return {
         content:
@@ -122,10 +113,7 @@ export function createGroupTools(
         content: input.content,
         from: selfName(),
       });
-      return {
-        content: `已发送（seq=${sent.seq}）`,
-        metadata: { groupId: input.groupId },
-      };
+      return { content: `已发送（seq=${sent.seq}）`, metadata: { groupId: input.groupId } };
     },
     sideEffect: () => "idempotent",
     isConcurrencySafe: () => true,
@@ -134,15 +122,14 @@ export function createGroupTools(
 
   const historyTool: ToolDefinition<z.infer<typeof groupHistorySchema>, { groupId: string }> = {
     name: "group_history",
-    description: "读群聊记录（最近 N 条，含发言人与 seq）。开会讨论前先用它对齐上下文。",
+    description: "读群聊记录（最近 N 条，旧→新，含发言人与 seq）。开会讨论前先用它对齐上下文。",
     inputSchema: groupHistorySchema,
     async execute(input): Promise<ToolResult<{ groupId: string }>> {
       const history = await handler.history({
         groupId: input.groupId,
         ...(input.limit === undefined ? {} : { limit: input.limit }),
       });
-      const body =
-        history.lines.length === 0 ? "（暂无消息）" : history.lines.join("\n");
+      const body = history.lines.length === 0 ? "（暂无消息）" : history.lines.join("\n");
       return {
         content: `群「${history.name}」最近消息：\n${body}`,
         metadata: { groupId: history.groupId },
@@ -153,29 +140,5 @@ export function createGroupTools(
     renderUse: (input) => `group_history(${input.groupId.slice(0, 8)})`,
   };
 
-  const listTool: ToolDefinition<z.infer<typeof groupListSchema>, { count: number }> = {
-    name: "group_list",
-    description: "列出已有的群（可按状态过滤），用于确认「我们有哪些群、各聊到哪了」。",
-    inputSchema: groupListSchema,
-    async execute(input): Promise<ToolResult<{ count: number }>> {
-      const groups = await handler.list({
-        ...(input.status === undefined ? {} : { status: input.status }),
-      });
-      const body =
-        groups.length === 0
-          ? "（暂无群）"
-          : groups
-              .map(
-                (g) =>
-                  `- ${g.name}（${g.id.slice(0, 8)}，${g.status}，${g.members.length} 人，${g.messageCount} 条消息）`,
-              )
-              .join("\n");
-      return { content: `共 ${groups.length} 个群：\n${body}`, metadata: { count: groups.length } };
-    },
-    isReadOnly: () => true,
-    isConcurrencySafe: () => true,
-    renderUse: () => "group_list()",
-  };
-
-  return [createTool, sendTool, historyTool, listTool];
+  return [createTool, sendTool, historyTool];
 }

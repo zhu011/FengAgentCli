@@ -1,34 +1,62 @@
 /**
- * @fengagent/server — 群聊路由（G1 契约 v1.0）
+ * @fengagent/server — 群聊路由（G1 契约冻结 v1.0）
  *
  * | 方法 | 路径 | 作用 |
  * |---|---|---|
- * | GET | `/api/groups` | `{groups, runtimes}`（`status` / `limit`；runtimes 供成员选择器） |
- * | POST | `/api/groups` | 建群 → 201 GroupInfo |
- * | GET | `/api/groups/:id` | `{group, messages}`（最近 50 条，seq 升序） |
- * | PATCH | `/api/groups/:id` | 改群名/描述/成员/轮数/状态（`concluded` = 关群） |
- * | GET | `/api/groups/:id/messages` | `{messages, nextSeq}`（`after` / `limit`） |
- * | POST | `/api/groups/:id/messages` | 人发言 → 201 GroupMessage（关群后 409） |
- * | GET | `/api/groups/:id/stream` | 群 SSE：`snapshot` → `after` 之后的消息回放 → 实时 `message` / `group` |
+ * | GET | `/api/groups` | `{groups, runtimes}`（runtimes 供成员选择器） |
+ * | POST | `/api/groups` | 建群 → GroupInfo（成员未注册/未启用 → 400） |
+ * | GET | `/api/groups/:id` | `{group, messages}`（**全量**消息，G1 量小不分页） |
+ * | PATCH | `/api/groups/:id` | 改名/描述/成员/轮数（附加：契约外用，方便前端改名） |
+ * | POST | `/api/groups/:id/messages` | 人发言 → GroupMessage（关群 409） |
+ * | POST | `/api/groups/:id/agent-messages` | runtime/协调者发言（非成员 403，关群 409） |
+ * | POST | `/api/groups/:id/conclude` | 关群 → GroupInfo（幂等） |
+ * | GET | `/api/groups/:id/messages` | 增量读取 `{messages, nextSeq}`（`after`/`limit`，附加） |
+ * | GET | `/api/groups/:id/stream` | SSE：snapshot → 实时 message/group/heartbeat |
  *
- * 404/400/409 口径与 `/api/agent-tasks` 一致：不存在 404、参数不合法 400、
- * 状态不允许（群已关闭）409。
+ * 错误体统一 `{ error: { message, code } }`，`code ∈ bad_request | not_found | forbidden | conflict`。
  */
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createLogger } from "@fengagent/shared";
 import type { AgentGroupStatus } from "@fengagent/agent";
-import type {
-  AgentGroupService,
-  GroupInfoDto,
-  GroupStreamEvent,
+import {
+  GroupError,
+  type AgentGroupService,
+  type GroupMessageDto,
+  type GroupStreamEvent,
 } from "../agent-group-service.ts";
 
 const log = createLogger("group-routes");
 
 /** 合法群状态（契约 v1.0） */
 const STATUSES: readonly AgentGroupStatus[] = ["open", "concluded"];
+
+/** 错误体（契约：`{error:{message,code}}`） */
+type ErrorCode = "bad_request" | "not_found" | "forbidden" | "conflict";
+
+/** 状态码映射 */
+const STATUS_BY_CODE: Record<ErrorCode, 400 | 403 | 404 | 409> = {
+  bad_request: 400,
+  forbidden: 403,
+  not_found: 404,
+  conflict: 409,
+};
+
+/** 统一错误响应 */
+function fail(
+  c: { json: (body: unknown, status: 400 | 403 | 404 | 409) => Response },
+  message: string,
+  code: ErrorCode,
+): Response {
+  return c.json({ error: { message, code } }, STATUS_BY_CODE[code]);
+}
+
+/** 从异常取 (message, code) —— GroupError 带码，其余按 bad_request */
+function toErrorPayload(err: unknown): { message: string; code: ErrorCode } {
+  if (err instanceof GroupError) return { message: err.message, code: err.code };
+  return { message: err instanceof Error ? err.message : String(err), code: "bad_request" };
+}
 
 /** SSE 帧队列（与 agent-tasks 同款：订阅回调只入队 + 唤醒） */
 function createFrameQueue() {
@@ -63,7 +91,7 @@ function createFrameQueue() {
 export function createGroupRoutes(service: AgentGroupService): Hono {
   const app = new Hono();
 
-  // GET / — 群列表 + runtime 卡片（成员选择器）
+  // GET / — 群列表 + runtime 卡片
   app.get("/", (c) => {
     const rawStatus = c.req.query("status");
     const statuses =
@@ -88,7 +116,7 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
   app.post("/", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (name === "") return c.json({ error: "name 必填" }, 400);
+    if (name === "") return fail(c, "name 必填", "bad_request");
     const members = Array.isArray(body.members)
       ? body.members.filter((m): m is string => typeof m === "string" && m.trim() !== "")
       : [];
@@ -103,22 +131,23 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
       });
       return c.json(group, 201);
     } catch (err) {
-      return c.json({ error: errorMessage(err) }, 400);
+      const payload = toErrorPayload(err);
+      return fail(c, payload.message, payload.code);
     }
   });
 
-  // GET /:id — 群详情 + 最近消息
+  // GET /:id — 群详情 + 全量消息
   app.get("/:id", (c) => {
     const id = c.req.param("id");
     const group = service.getGroup(id);
-    if (!group) return c.json({ error: `群不存在: ${id}` }, 404);
-    return c.json({ group, messages: service.listRecentMessages(id, 50) });
+    if (!group) return fail(c, `群不存在: ${id}`, "not_found");
+    return c.json({ group, messages: service.listMessages(id) });
   });
 
-  // PATCH /:id — 改群（含关群 status=concluded）
+  // PATCH /:id — 改名/描述/成员/轮数（契约外的附加便利接口）
   app.patch("/:id", async (c) => {
     const id = c.req.param("id");
-    if (!service.getGroup(id)) return c.json({ error: `群不存在: ${id}` }, 404);
+    if (!service.getGroup(id)) return fail(c, `群不存在: ${id}`, "not_found");
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     try {
       return c.json(
@@ -140,17 +169,70 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
         }),
       );
     } catch (err) {
-      return c.json({ error: errorMessage(err) }, 400);
+      const payload = toErrorPayload(err);
+      return fail(c, payload.message, payload.code);
     }
   });
 
-  // GET /:id/messages — 增量读取（after / limit）
+  // POST /:id/messages — 人发言
+  app.post("/:id/messages", async (c) => {
+    const id = c.req.param("id");
+    if (!service.getGroup(id)) return fail(c, `群不存在: ${id}`, "not_found");
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const content = typeof body.content === "string" ? body.content : "";
+    if (content.trim() === "") return fail(c, "content 必填", "bad_request");
+    try {
+      const message = service.postHumanMessage(id, {
+        content,
+        ...(body.kind === "chat" ? { kind: "chat" as const } : {}),
+      });
+      return c.json(message, 201);
+    } catch (err) {
+      const payload = toErrorPayload(err);
+      return fail(c, payload.message, payload.code);
+    }
+  });
+
+  // POST /:id/agent-messages — runtime/协调者发言（服务端装配调用，不对外开放鉴权）
+  app.post("/:id/agent-messages", async (c) => {
+    const id = c.req.param("id");
+    if (!service.getGroup(id)) return fail(c, `群不存在: ${id}`, "not_found");
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const content = typeof body.content === "string" ? body.content : "";
+    const fromName = typeof body.fromName === "string" ? body.fromName.trim() : "";
+    if (content.trim() === "") return fail(c, "content 必填", "bad_request");
+    if (fromName === "") return fail(c, "fromName 必填", "bad_request");
+    try {
+      const message = service.postAgentMessage(id, {
+        content,
+        fromName,
+        ...(typeof body.kind === "string" ? { kind: body.kind as never } : {}),
+      });
+      return c.json(message, 201);
+    } catch (err) {
+      const payload = toErrorPayload(err);
+      return fail(c, payload.message, payload.code);
+    }
+  });
+
+  // POST /:id/conclude — 关群（幂等）
+  app.post("/:id/conclude", (c) => {
+    const id = c.req.param("id");
+    try {
+      return c.json(service.concludeGroup(id));
+    } catch (err) {
+      const payload = toErrorPayload(err);
+      return fail(c, payload.message, payload.code);
+    }
+  });
+
+  // GET /:id/messages — 增量读取（after / limit；SSE 重连同款语义）
   app.get("/:id/messages", (c) => {
     const id = c.req.param("id");
-    if (!service.getGroup(id)) return c.json({ error: `群不存在: ${id}` }, 404);
+    if (!service.getGroup(id)) return fail(c, `群不存在: ${id}`, "not_found");
     const rawAfter = Number.parseInt(c.req.query("after") ?? "", 10);
     const rawLimit = Number.parseInt(c.req.query("limit") ?? "", 10);
-    const messages = service.listMessages(id, {
+    const messages = service.listMessagesAfter(id, {
       ...(Number.isFinite(rawAfter) && rawAfter > 0 ? { after: rawAfter } : {}),
       ...(Number.isFinite(rawLimit) && rawLimit > 0 ? { limit: rawLimit } : {}),
     });
@@ -159,33 +241,11 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
     return c.json({ messages, nextSeq });
   });
 
-  // POST /:id/messages — 人发言
-  app.post("/:id/messages", async (c) => {
-    const id = c.req.param("id");
-    if (!service.getGroup(id)) return c.json({ error: `群不存在: ${id}` }, 404);
-    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const content = typeof body.content === "string" ? body.content : "";
-    if (content.trim() === "") return c.json({ error: "content 必填" }, 400);
-    try {
-      const message = service.postMessage(id, {
-        content,
-        ...(typeof body.fromName === "string" ? { fromName: body.fromName } : {}),
-        ...(typeof body.kind === "string" ? { kind: body.kind as never } : {}),
-        ...(typeof body.agentTaskId === "string" ? { agentTaskId: body.agentTaskId } : {}),
-      });
-      return c.json(message, 201);
-    } catch (err) {
-      const message = errorMessage(err);
-      const status = message.includes("已关闭") ? 409 : 400;
-      return c.json({ error: message }, status);
-    }
-  });
-
-  // GET /:id/stream — 群 SSE（snapshot → 回放 → 实时）
+  // GET /:id/stream — 群 SSE
   app.get("/:id/stream", (c) => {
     const id = c.req.param("id");
     const snapshot = service.getGroup(id);
-    if (!snapshot) return c.json({ error: `群不存在: ${id}` }, 404);
+    if (!snapshot) return fail(c, `群不存在: ${id}`, "not_found");
 
     const rawAfter = c.req.query("after") ?? c.req.header("Last-Event-ID") ?? "0";
     const parsedAfter = Number.parseInt(rawAfter, 10);
@@ -205,22 +265,13 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
         );
       };
 
-      // ① 快照（契约：group + 最近消息 + lastSeq，一次给全）
-      const recent = service.listRecentMessages(id, 50);
-      await write({
-        type: "snapshot",
-        group: snapshot,
-        messages: recent,
-        lastSeq: recent.length > 0 ? recent[recent.length - 1]!.seq : 0,
-      });
-      // ② 回放 `after` 之后、且不在快照里的消息（重连补齐）
-      const snapshotFloor = recent.length > 0 ? recent[0]!.seq : 0;
-      const replayAfter = Math.max(after, snapshotFloor - 1);
-      for (const message of service.listMessages(id, { after: replayAfter })) {
-        await write({ type: "message", message });
-      }
+      // ① 快照：契约要求「含 after 之后的消息回放」+ lastSeq
+      const backlog: GroupMessageDto[] = service.listMessagesAfter(id, { after });
+      const lastSeq =
+        backlog.length > 0 ? backlog[backlog.length - 1]!.seq : service.store.lastSeq(id);
+      await write({ type: "snapshot", group: snapshot, messages: backlog, lastSeq });
 
-      // ③ 实时
+      // ② 实时
       const unsubscribe = service.subscribe(id, (frame) => queue.push(frame));
       stream.onAbort(() => {
         closed = true;
@@ -228,7 +279,7 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
         queue.wake();
       });
       const heartbeat = setInterval(() => {
-        void stream.write(": heartbeat\n\n").catch(() => undefined);
+        queue.push({ type: "heartbeat" });
       }, 15_000);
 
       try {
@@ -238,7 +289,7 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
           await write(frame);
         }
       } catch (err) {
-        log.debug("stream", `SSE 写出中断: ${errorMessage(err)}`);
+        log.debug("stream", `SSE 写出中断: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         clearInterval(heartbeat);
         unsubscribe();
@@ -249,15 +300,7 @@ export function createGroupRoutes(service: AgentGroupService): Hono {
   return app;
 }
 
-/** 错误信息提取 */
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 /** 供 server.ts 挂载（导出便于测试） */
 export function mountGroupRoutes(app: Hono, service: AgentGroupService): void {
   app.route("/api/groups", createGroupRoutes(service));
 }
-
-/** 群 DTO 的唯一形状（测试断言用） */
-export type { GroupInfoDto };
