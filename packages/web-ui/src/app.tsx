@@ -19,13 +19,14 @@ import { ChatPage } from "./pages/chat.tsx";
 import { ObservabilityPage } from "./pages/observability.tsx";
 import { EvalPage } from "./pages/eval.tsx";
 import { AgentsPage } from "./pages/agents.tsx";
+import { GroupsPage } from "./pages/groups.tsx";
 import { SessionSidebar } from "./components/session-sidebar.tsx";
 import { useSession } from "./hooks/use-session.ts";
 import { type Theme } from "./lib/theme.ts";
 import "./index.css";
 
 /** 应用视图 */
-export type AppView = "chat" | "observability" | "eval" | "agents";
+export type AppView = "chat" | "observability" | "eval" | "agents" | "groups";
 
 /** deep-link 目标（会话 + 可选消息） */
 export interface DeepLinkTarget {
@@ -69,7 +70,7 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const v = params.get("view");
-    if (v === "observability" || v === "eval" || v === "agents") {
+    if (v === "observability" || v === "eval" || v === "agents" || v === "groups") {
       setView(v);
       setDeepLink({
         sessionId: params.get("sessionId") ?? undefined,
@@ -150,6 +151,15 @@ function App() {
           >
             <span aria-hidden="true">🤖</span> Agents
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "groups"}
+            className={`app-nav__tab ${view === "groups" ? "app-nav__tab--active" : ""}`}
+            onClick={() => setView("groups")}
+          >
+            <span aria-hidden="true">👥</span> 群聊
+          </button>
         </div>
       </nav>
 
@@ -187,6 +197,10 @@ function App() {
         ) : view === "agents" ? (
           <div className="app-shell__main">
             <AgentsPage client={client} />
+          </div>
+        ) : view === "groups" ? (
+          <div className="app-shell__main">
+            <GroupsPage client={client} />
           </div>
         ) : (
           <div className="app-shell__main">

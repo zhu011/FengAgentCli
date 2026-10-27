@@ -18,6 +18,13 @@ import type {
   CallChainResponse,
   EvalOverview,
   GraphData,
+  GroupCreateRequest,
+  GroupDetailResponse,
+  GroupInfo,
+  GroupListResponse,
+  GroupMessage,
+  GroupMessageRequest,
+  GroupStreamEvent,
   MarkdownReport,
   MessageEvalResponse,
   MessageTracesResponse,
@@ -308,6 +315,95 @@ export class ApiClient {
         if (dataLines.length === 0) continue;
         try {
           yield JSON.parse(dataLines.join("\n")) as AgentTaskStreamEvent;
+        } catch {
+          // 忽略无法解析的帧
+        }
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────
+  // 群聊（G1 契约 v1.0；后端未落地时页面自动回退 mock）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/groups — 群列表 + 可选成员（runtime 卡片） */
+  async listGroups(): Promise<GroupListResponse> {
+    const res = await fetch(`${this.baseUrl}/api/groups`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list groups");
+    return (await res.json()) as GroupListResponse;
+  }
+
+  /** POST /api/groups — 建群 */
+  async createGroup(req: GroupCreateRequest): Promise<GroupInfo> {
+    const res = await fetch(`${this.baseUrl}/api/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to create group");
+    return (await res.json()) as GroupInfo;
+  }
+
+  /** GET /api/groups/:id — 群详情 + 全量消息 */
+  async getGroup(groupId: string): Promise<GroupDetailResponse> {
+    const res = await fetch(`${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get group");
+    return (await res.json()) as GroupDetailResponse;
+  }
+
+  /** POST /api/groups/:id/messages — human 发言（fromKind 固定 human） */
+  async sendGroupMessage(groupId: string, req: GroupMessageRequest): Promise<GroupMessage> {
+    const res = await fetch(`${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to send group message");
+    return (await res.json()) as GroupMessage;
+  }
+
+  /** POST /api/groups/:id/conclude — 结束讨论（幂等） */
+  async concludeGroup(groupId: string): Promise<GroupInfo> {
+    const res = await fetch(`${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}/conclude`, {
+      method: "POST",
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to conclude group");
+    return (await res.json()) as GroupInfo;
+  }
+
+  /**
+   * GET /api/groups/:id/stream?after=<seq> — 群 SSE（快照 → 回放 → 实时）。
+   * 与 streamAgentTask 同一套 fetch + ReadableStream 解析。
+   */
+  async *streamGroup(
+    groupId: string,
+    after = 0,
+    signal?: AbortSignal,
+  ): AsyncGenerator<GroupStreamEvent> {
+    const res = await fetch(
+      `${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}/stream?after=${after}`,
+      { signal },
+    );
+    if (!res.ok) throw await this.toApiError(res, "Failed to stream group");
+    if (!res.body) throw new Error("Response has no body");
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += value;
+      while (true) {
+        const idx = buffer.indexOf("\n\n");
+        if (idx === -1) break;
+        const rawEvent = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const dataLines = rawEvent
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim());
+        if (dataLines.length === 0) continue;
+        try {
+          yield JSON.parse(dataLines.join("\n")) as GroupStreamEvent;
         } catch {
           // 忽略无法解析的帧
         }

@@ -573,3 +573,70 @@ export interface AgentTaskStreamRequest {
   taskId: string;
   signal?: AbortSignal;
 }
+
+// ──────────────────────────────────────────────
+// 群聊（G1 契约 v1.0 — AGE-35）
+// ──────────────────────────────────────────────
+
+/** 群状态（G1 只有两种；后续阶段扩展） */
+export type GroupStatus = "open" | "concluded";
+
+/** 群信息（与后端 agent_groups 对外驼峰形状一致） */
+export interface GroupInfo {
+  id: string;
+  name: string;
+  description?: string;
+  /** 成员 runtime 注册名（人隐含在场） */
+  members: string[];
+  status: GroupStatus;
+  /** 编排轮上限（G3 消费） */
+  maxRounds: number;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt?: string;
+}
+
+/** 群消息 */
+export interface GroupMessage {
+  id: string;
+  groupId: string;
+  /** 群内单调递增（SSE ?after= 依据） */
+  seq: number;
+  fromKind: "human" | "runtime" | "coordinator" | "system";
+  fromName: string;
+  content: string;
+  kind: "chat" | "task_card" | "decision" | "system";
+  /** 任务卡深链（G2 填） */
+  agentTaskId?: string;
+  createdAt: string;
+}
+
+export interface GroupListResponse {
+  groups: GroupInfo[];
+  /** 成员选择器用（复用 agent-runtimes 卡片形状） */
+  runtimes: RuntimeInfo[];
+}
+
+export interface GroupDetailResponse {
+  group: GroupInfo;
+  messages: GroupMessage[];
+}
+
+export interface GroupCreateRequest {
+  name: string;
+  description?: string;
+  members: string[];
+  maxRounds?: number;
+}
+
+export interface GroupMessageRequest {
+  content: string;
+  kind?: "chat";
+}
+
+/** 群 SSE 事件（/api/groups/:id/stream?after=<seq>） */
+export type GroupStreamEvent =
+  | { type: "snapshot"; group: GroupInfo; messages: GroupMessage[]; lastSeq: number }
+  | { type: "message"; message: GroupMessage }
+  | { type: "group"; group: GroupInfo }
+  | { type: "heartbeat" };
