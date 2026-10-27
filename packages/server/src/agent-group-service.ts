@@ -224,6 +224,11 @@ export class AgentGroupService {
     return dto;
   }
 
+  /** 群是否存在（任务服务在写结果前/提交前用它兜底） */
+  hasGroup(id: string): boolean {
+    return this.store.get(id) !== null;
+  }
+
   /**
    * 关群（`POST /api/groups/:id/conclude`）：幂等，已 concluded 再调返回原样。
    *

@@ -125,6 +125,11 @@ export interface TaskGroupSink {
       kind?: GroupMessageKind;
     },
   ): unknown;
+  /**
+   * 群是否存在（可选）：`submit()` 带 `groupId` 时先校验，避免任务结果无处可回。
+   * 不实现则跳过校验（保持旧行为）。
+   */
+  hasGroup?(groupId: string): boolean;
 }
 
 /** 外派任务服务选项 */
@@ -273,6 +278,15 @@ export class AgentTaskService {
    * @returns 已进入 `dispatched`（或失败/复用）的任务
    */
   async submit(request: CreateAgentTaskRequest): Promise<AgentTaskDto> {
+    // 群内派发先验群存在：否则任务跑完才发现结果无处可回（只 warn 一遍更难查）
+    if (
+      request.groupId !== undefined &&
+      request.groupId !== "" &&
+      this.groupSink?.hasGroup !== undefined &&
+      !this.groupSink.hasGroup(request.groupId)
+    ) {
+      throw new Error(`群不存在: ${request.groupId}`);
+    }
     const { task, reused } = this.store.create({
       runtime: request.runtime,
       content: request.content,

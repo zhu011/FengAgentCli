@@ -178,6 +178,35 @@ describe("G2 — 群内派发 + 结果回群", () => {
     }
   });
 
+  test("未知 groupId → POST 400（先验群存在，避免结果无处可回）", async () => {
+    const fx = makeFixture();
+    try {
+      const res = await fx.app.request("/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runtime: "fake", content: "没有这个群", groupId: "grp_missing" }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain("群不存在");
+      // 没有落任何任务
+      expect(fx.tasks.listTasks().tasks).toHaveLength(0);
+
+      // 服务层直调同样拒绝
+      let caught: unknown = null;
+      try {
+        await fx.tasks.submit({ runtime: "fake", content: "x", groupId: "grp_missing" });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(Error);
+    } finally {
+      await fx.tasks.close();
+      fx.groups.close();
+      safeRm(fx.dir);
+    }
+  });
+
   test("dispatch_task 工具把 groupId 透传给服务层", async () => {
     const seen: Array<{ runtime: string; content: string; groupId?: string }> = [];
     const tool = createDispatchTaskTool(async (input) => {

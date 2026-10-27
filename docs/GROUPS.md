@@ -92,8 +92,11 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
   - `replied` → 「任务 xxx（runtime）已完成：<结果>」（超 2000 字截断）；
   - `failed` → 「任务 xxx（runtime）失败：<错误>」（超 1500 字截断）；
   - `cancelled` → 「任务 xxx（runtime）已取消」。
-  消息 `fromKind="runtime"`、`fromName=<runtime>`、`kind="task_card"`、带 `agentTaskId`，
-  前端卡片据此跳 `/agents?task=<id>`。群侧写失败只 warn，不影响任务已收尾的事实。
+  消息 `fromKind="runtime"`、`fromName=<runtime>`、`kind="task_card"`、带 `agentTaskId`。
+  后端只保证 `agentTaskId` 这个锚点，**跳转路由由前端决定**（`/agents?task=<id>` 或
+  `?view=agents&task=<id>` 都行）。群侧写失败只 warn，不影响任务已收尾的事实。
+- **提交即验群**：`submit()` 带 `groupId` 时先用 `groupSink.hasGroup()` 校验，未知群直接
+  400（否则任务跑完才发现结果无处可回）。
 - **不带 `groupId` 的任务不回群**（回归用例覆盖）。
 
 ## 7. G3 衔接点（已预留）
@@ -110,6 +113,7 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
   `agent-messages`（协调者/成员/非成员 403）、`conclude` 幂等 + 关群 409 + 历史可读、
   SSE `snapshot`（含 `lastSeq`）与 `message`、错误体 `{error:{message,code}}`、
   三个群工具走通、外部 runtime 代写（`runtime` + 深链）。
-- `packages/server/src/__tests__/group-dispatch.test.ts`（6，G2）：replied/failed 都落
+- `packages/server/src/__tests__/group-dispatch.test.ts`（7，G2）：replied/failed 都落
   `task_card`（fromKind=runtime + agentTaskId + 内容/错误）、不带 groupId 不回群、
+  未知 groupId 提交即 400、
   API 带 groupId 与群维度列表过滤、`dispatch_task` 透传 groupId、store 层 `group_id` 落库。
