@@ -119,6 +119,11 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
 - **`group_conclude` 工具**（第 4 个群工具）：协调者把结论以 `decision` 消息落库 → 关群 →
   报告取消任务数；返回 `status` + `cancelledTasks`。
 - **`decision` 消息**：`kind="decision"`，人类拍板与协调者结论都用它，前端可单独渲染。
+- **HTTP 入口（G3 补）**：
+  - 人类拍板：`POST /api/groups/:id/messages {content, kind:"decision"}` → 201 并立即收口
+    （`kind` 白名单 `chat | decision`，其它值 400；`task_card` 只由服务端代写）。
+  - 静默超时可配：`POST /api/groups` 与 `PATCH /api/groups/:id` 接受 `idleTimeoutMs`
+    （默认 600000），`GroupInfo` 回显该字段供前端展示。
 
 ## 8. 自测覆盖
 

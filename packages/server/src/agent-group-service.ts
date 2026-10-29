@@ -49,6 +49,8 @@ export interface GroupInfoDto {
   members: string[];
   status: AgentGroupStatus;
   maxRounds: number;
+  /** 静默超时（毫秒，G3）：超过即自动收口；前端可据此展示/提示 */
+  idleTimeoutMs: number;
   createdAt: string;
   updatedAt: string;
   lastMessageAt?: string;
@@ -81,6 +83,8 @@ export interface CreateGroupRequest {
   /** 成员 runtime 注册名（未注册/未启用 → 400） */
   members?: string[];
   maxRounds?: number;
+  /** 静默超时（毫秒，G3）；缺省 10 分钟 */
+  idleTimeoutMs?: number;
   /** 协调者名（缺省 `fengagent`；会作为成员出现在 `members` 里） */
   coordinator?: string;
   createdBy?: string;
@@ -93,6 +97,7 @@ export interface UpdateGroupRequest {
   status?: AgentGroupStatus;
   members?: string[];
   maxRounds?: number;
+  idleTimeoutMs?: number;
 }
 
 /** 人发言请求（= 前端 `GroupMessageRequest`） */
@@ -163,6 +168,9 @@ export class AgentGroupService {
       })),
       coordinator,
       ...(request.maxRounds === undefined ? {} : { maxRounds: request.maxRounds }),
+      ...(request.idleTimeoutMs === undefined
+        ? {}
+        : { idleTimeoutMs: request.idleTimeoutMs }),
       ...(request.createdBy === undefined ? {} : { createdBy: request.createdBy }),
     });
     // 契约：建群落一条 system 消息「群已创建」
@@ -219,6 +227,9 @@ export class AgentGroupService {
             })),
           }),
       ...(patch.maxRounds === undefined ? {} : { maxRounds: patch.maxRounds }),
+      ...(patch.idleTimeoutMs === undefined
+        ? {}
+        : { idleTimeoutMs: patch.idleTimeoutMs }),
     });
     const dto = this.toGroupDto(group);
     this.emit(id, { type: "group", group: dto });
@@ -444,6 +455,7 @@ export class AgentGroupService {
         .map((member) => member.runtime ?? member.name),
       status: group.status,
       maxRounds: group.maxRounds,
+      idleTimeoutMs: group.idleTimeoutMs,
       createdAt: new Date(group.createdAt).toISOString(),
       updatedAt: new Date(group.updatedAt).toISOString(),
       ...(last === null ? {} : { lastMessageAt: new Date(last.createdAt).toISOString() }),

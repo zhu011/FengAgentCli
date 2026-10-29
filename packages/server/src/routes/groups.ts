@@ -33,6 +33,16 @@ const log = createLogger("group-routes");
 /** 合法群状态（契约 v1.0） */
 const STATUSES: readonly AgentGroupStatus[] = ["open", "concluded"];
 
+/** 人/agent 可发起的消息种类（`decision` = 拍板，G3；`task_card` 由服务端代写） */
+const MESSAGE_KINDS = ["chat", "decision"] as const;
+
+/** 解析消息种类（不在白名单返回 undefined） */
+function parseMessageKind(raw: unknown): "chat" | "decision" | undefined {
+  return (MESSAGE_KINDS as readonly string[]).includes(raw as string)
+    ? (raw as "chat" | "decision")
+    : undefined;
+}
+
 /** 错误体（契约：`{error:{message,code}}`） */
 type ErrorCode = "bad_request" | "not_found" | "forbidden" | "conflict";
 
@@ -131,6 +141,9 @@ export function createGroupRoutes(
         members,
         ...(typeof body.description === "string" ? { description: body.description } : {}),
         ...(typeof body.maxRounds === "number" ? { maxRounds: body.maxRounds } : {}),
+        ...(typeof body.idleTimeoutMs === "number"
+          ? { idleTimeoutMs: body.idleTimeoutMs }
+          : {}),
         ...(typeof body.coordinator === "string" ? { coordinator: body.coordinator } : {}),
         ...(typeof body.createdBy === "string" ? { createdBy: body.createdBy } : {}),
       });
@@ -171,6 +184,9 @@ export function createGroupRoutes(
               }
             : {}),
           ...(typeof body.maxRounds === "number" ? { maxRounds: body.maxRounds } : {}),
+          ...(typeof body.idleTimeoutMs === "number"
+            ? { idleTimeoutMs: body.idleTimeoutMs }
+            : {}),
         }),
       );
     } catch (err) {
@@ -179,17 +195,21 @@ export function createGroupRoutes(
     }
   });
 
-  // POST /:id/messages — 人发言
+  // POST /:id/messages — 人发言（`kind:"decision"` 即拍板，编排器会据此收口）
   app.post("/:id/messages", async (c) => {
     const id = c.req.param("id");
     if (!service.getGroup(id)) return fail(c, `群不存在: ${id}`, "not_found");
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const content = typeof body.content === "string" ? body.content : "";
     if (content.trim() === "") return fail(c, "content 必填", "bad_request");
+    const kind = parseMessageKind(body.kind);
+    if (body.kind !== undefined && kind === undefined) {
+      return fail(c, `不支持的 kind: ${String(body.kind)}（chat / decision）`, "bad_request");
+    }
     try {
       const message = service.postHumanMessage(id, {
         content,
-        ...(body.kind === "chat" ? { kind: "chat" as const } : {}),
+        ...(kind === undefined ? {} : { kind }),
       });
       return c.json(message, 201);
     } catch (err) {
@@ -207,11 +227,15 @@ export function createGroupRoutes(
     const fromName = typeof body.fromName === "string" ? body.fromName.trim() : "";
     if (content.trim() === "") return fail(c, "content 必填", "bad_request");
     if (fromName === "") return fail(c, "fromName 必填", "bad_request");
+    const kind = parseMessageKind(body.kind);
+    if (body.kind !== undefined && kind === undefined) {
+      return fail(c, `不支持的 kind: ${String(body.kind)}（chat / decision）`, "bad_request");
+    }
     try {
       const message = service.postAgentMessage(id, {
         content,
         fromName,
-        ...(typeof body.kind === "string" ? { kind: body.kind as never } : {}),
+        ...(kind === undefined ? {} : { kind }),
       });
       return c.json(message, 201);
     } catch (err) {

@@ -154,6 +154,51 @@ describe("G3 — 人在环", () => {
     }
   });
 
+  test("POST /:id/messages 带 kind=decision → 201 且立即收口（human 拍板走 HTTP 可达）", async () => {
+    const fx = makeFixture();
+    try {
+      const group = fx.groups.createGroup({ name: "拍板接口", members: ["kimi"] });
+      const res = await fx.app.request(`/${group.id}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "就按 B 方案", kind: "decision" }),
+      });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { kind: string }).kind).toBe("decision");
+      expect(fx.groups.getGroup(group.id)!.status).toBe("concluded");
+    } finally {
+      fx.close();
+    }
+  });
+
+  test("非法 kind → 400；建群可指定 idleTimeoutMs 且回显", async () => {
+    const fx = makeFixture();
+    try {
+      const created = await fx.app.request("/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "短超时",
+          members: ["kimi"],
+          maxRounds: 5,
+          idleTimeoutMs: 60_000,
+        }),
+      });
+      expect(created.status).toBe(201);
+      const group = (await created.json()) as { id: string; idleTimeoutMs: number };
+      expect(group.idleTimeoutMs).toBe(60_000);
+
+      const bad = await fx.app.request(`/${group.id}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "试试", kind: "task_card" }),
+      });
+      expect(bad.status).toBe(400);
+    } finally {
+      fx.close();
+    }
+  });
+
   test("POST /:id/stop → 收口 + 返回被取消任务；再次 stop 幂等", async () => {
     const fx = makeFixture({ cancelTasks: ["task-1", "task-2"] });
     try {
