@@ -24,6 +24,7 @@ import type {
   GroupListResponse,
   GroupMessage,
   GroupMessageRequest,
+  GroupStopResponse,
   GroupStreamEvent,
   MarkdownReport,
   MessageEvalResponse,
@@ -369,6 +370,15 @@ export class ApiClient {
     });
     if (!res.ok) throw await this.toApiError(res, "Failed to conclude group");
     return (await res.json()) as GroupInfo;
+  }
+
+  /** POST /api/groups/:id/stop — 人类中途关停（收口 + 取消该群未终态任务，G3） */
+  async stopGroup(groupId: string): Promise<GroupStopResponse> {
+    const res = await fetch(`${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}/stop`, {
+      method: "POST",
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to stop group");
+    return (await res.json()) as GroupStopResponse;
   }
 
   /**

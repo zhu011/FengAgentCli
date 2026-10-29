@@ -591,6 +591,8 @@ export interface GroupInfo {
   status: GroupStatus;
   /** 编排轮上限（G3 消费） */
   maxRounds: number;
+  /** 静默超时（毫秒，G3）：超过即自动收口 */
+  idleTimeoutMs: number;
   createdAt: string;
   updatedAt: string;
   lastMessageAt?: string;
@@ -627,11 +629,20 @@ export interface GroupCreateRequest {
   description?: string;
   members: string[];
   maxRounds?: number;
+  /** 静默超时毫秒（默认 600000） */
+  idleTimeoutMs?: number;
 }
 
 export interface GroupMessageRequest {
   content: string;
-  kind?: "chat";
+  /** `decision` = 拍板（群立即收口）；缺省 chat */
+  kind?: "chat" | "decision";
+}
+
+/** 关停响应（G3）：群 + 被取消的任务 id 列表 */
+export interface GroupStopResponse {
+  group: GroupInfo;
+  cancelledTasks: string[];
 }
 
 /** 群 SSE 事件（/api/groups/:id/stream?after=<seq>） */

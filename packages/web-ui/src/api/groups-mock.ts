@@ -8,10 +8,8 @@
  */
 
 import type {
-  GroupCreateRequest,
   GroupInfo,
   GroupMessage,
-  GroupMessageRequest,
   GroupStreamEvent,
 } from "./types.ts";
 
@@ -75,6 +73,7 @@ export class GroupsMock {
       members,
       status,
       maxRounds,
+      idleTimeoutMs: 600_000,
       createdAt,
       updatedAt: createdAt,
       lastMessageAt: createdAt,
@@ -106,7 +105,13 @@ export class GroupsMock {
     });
   }
 
-  createGroup(req: GroupCreateRequest): Promise<GroupInfo> {
+  createGroup(req: {
+    name: string;
+    description?: string;
+    members: string[];
+    maxRounds?: number;
+    idleTimeoutMs?: number;
+  }): Promise<GroupInfo> {
     const id = `grp_mock_${this.groups.size + 1}`;
     const createdAt = nowIso();
     const group: GroupInfo = {
@@ -116,6 +121,7 @@ export class GroupsMock {
       members: req.members,
       status: "open",
       maxRounds: req.maxRounds ?? 3,
+      idleTimeoutMs: req.idleTimeoutMs ?? 600_000,
       createdAt,
       updatedAt: createdAt,
       lastMessageAt: createdAt,
@@ -137,7 +143,10 @@ export class GroupsMock {
     });
   }
 
-  sendGroupMessage(groupId: string, req: GroupMessageRequest): Promise<GroupMessage> {
+  sendGroupMessage(
+    groupId: string,
+    req: { content: string; kind?: "chat" | "decision" },
+  ): Promise<GroupMessage> {
     const group = this.groups.get(groupId);
     if (!group) return Promise.reject(new Error(`group not found: ${groupId}`));
     if (group.status === "concluded") {
@@ -150,6 +159,16 @@ export class GroupsMock {
     group.lastMessageAt = msg.createdAt;
     group.updatedAt = msg.createdAt;
     this.emit(groupId, { type: "message", message: { ...msg } });
+
+    // decision（拍板）：立即收口，不再回函
+    if ((req.kind ?? "chat") === "decision") {
+      group.status = "concluded";
+      const sysMsg = makeMessage(groupId, "system", "system", "【收口】人类拍板", "system");
+      list.push(sysMsg);
+      this.emit(groupId, { type: "group", group: { ...group } });
+      this.emit(groupId, { type: "message", message: { ...sysMsg } });
+      return Promise.resolve({ ...msg });
+    }
 
     // 假协调者回复（1.5s）
     const reply = makeMessage(
@@ -173,11 +192,31 @@ export class GroupsMock {
     if (!group) return Promise.reject(new Error(`group not found: ${groupId}`));
     group.status = "concluded";
     group.updatedAt = nowIso();
-    const msg = makeMessage(groupId, "system", "system", "讨论已结束（人工收口）", "system");
+    const msg = makeMessage(groupId, "system", "system", "【收口】讨论已结束（人工收口）", "system");
     (this.messages.get(groupId) ?? []).push(msg);
     this.emit(groupId, { type: "group", group: { ...group } });
     this.emit(groupId, { type: "message", message: { ...msg } });
     return Promise.resolve({ ...group });
+  }
+
+  /** 关停（G3 mock）：收口 + 取消「在途」任务（演示：返回假 id 列表） */
+  stopGroup(groupId: string): Promise<{ group: GroupInfo; cancelledTasks: string[] }> {
+    const group = this.groups.get(groupId);
+    if (!group) return Promise.reject(new Error(`group not found: ${groupId}`));
+    group.status = "concluded";
+    group.updatedAt = nowIso();
+    const cancelled = ["t_mock_stop1", "t_mock_stop2"].slice(0, (this.messages.get(groupId) ?? []).length > 3 ? 2 : 1);
+    const msg = makeMessage(
+      groupId,
+      "system",
+      "system",
+      `【收口】人类中途关停（取消 ${cancelled.length} 个在途任务）`,
+      "system",
+    );
+    (this.messages.get(groupId) ?? []).push(msg);
+    this.emit(groupId, { type: "group", group: { ...group } });
+    this.emit(groupId, { type: "message", message: { ...msg } });
+    return Promise.resolve({ group: { ...group }, cancelledTasks: cancelled });
   }
 
   /** 订阅群流（快照 + 后续增量）；演示实现直接轮询内部状态变化 */

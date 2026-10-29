@@ -13,8 +13,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
+  Gavel,
   Loader2,
   MessageSquarePlus,
+  OctagonX,
   RefreshCw,
   Send,
   Users,
@@ -40,10 +42,17 @@ interface GroupSource {
     groups: GroupInfo[];
     runtimes: Array<{ name: string; enabled: boolean; agentName: string }>;
   }>;
-  createGroup(req: { name: string; description?: string; members: string[]; maxRounds?: number }): Promise<GroupInfo>;
+  createGroup(req: {
+    name: string;
+    description?: string;
+    members: string[];
+    maxRounds?: number;
+    idleTimeoutMs?: number;
+  }): Promise<GroupInfo>;
   getGroup(groupId: string): Promise<{ group: GroupInfo; messages: GroupMessage[] }>;
-  sendGroupMessage(groupId: string, req: { content: string; kind?: "chat" }): Promise<GroupMessage>;
+  sendGroupMessage(groupId: string, req: { content: string; kind?: "chat" | "decision" }): Promise<GroupMessage>;
   concludeGroup(groupId: string): Promise<GroupInfo>;
+  stopGroup(groupId: string): Promise<{ group: GroupInfo; cancelledTasks: string[] }>;
   streamGroup(groupId: string, after?: number, signal?: AbortSignal): AsyncGenerator<GroupStreamEvent>;
 }
 
@@ -97,9 +106,9 @@ function useGroupSource(client: ApiClient, forceMock: boolean) {
   const source = useMemo<GroupSource>(() => {
     if (mockMode) {
       mockRef.current ??= new GroupsMock();
-      return mockRef.current;
+      return mockRef.current satisfies GroupSource;
     }
-    return client;
+    return client as GroupSource;
   }, [mockMode, client]);
 
   const probe = useCallback(async () => {
@@ -149,8 +158,12 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
   const [formDesc, setFormDesc] = useState("");
   const [formMembers, setFormMembers] = useState<string[]>([]);
   const [formRounds, setFormRounds] = useState(3);
+  const [formIdleMinutes, setFormIdleMinutes] = useState(10);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // 关停结果提示
+  const [stopNotice, setStopNotice] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -261,6 +274,7 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
         description: formDesc.trim() || undefined,
         members: formMembers,
         maxRounds: formRounds,
+        idleTimeoutMs: Math.max(1, formIdleMinutes) * 60_000,
       });
       mergeGroupIntoList(created);
       setCreateOpen(false);
@@ -268,13 +282,14 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
       setFormDesc("");
       setFormMembers([]);
       setFormRounds(3);
+      setFormIdleMinutes(10);
       setSelectedGroupId(created.id);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreating(false);
     }
-  }, [source, formName, formDesc, formMembers, formRounds, mergeGroupIntoList]);
+  }, [source, formName, formDesc, formMembers, formRounds, formIdleMinutes, mergeGroupIntoList]);
 
   const send = useCallback(async () => {
     if (!selectedGroupId || !input.trim() || sending) return;
@@ -289,6 +304,23 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
     }
   }, [source, selectedGroupId, input, sending]);
 
+  /** 拍板（G3）：以 decision 消息发言并立即收口 */
+  const decide = useCallback(async () => {
+    if (!selectedGroupId || !input.trim() || sending) return;
+    setSending(true);
+    try {
+      await source.sendGroupMessage(selectedGroupId, { content: input.trim(), kind: "decision" });
+      setInput("");
+      const updated = await source.getGroup(selectedGroupId);
+      setGroup(updated.group);
+      mergeGroupIntoList(updated.group);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSending(false);
+    }
+  }, [source, selectedGroupId, input, sending, mergeGroupIntoList]);
+
   const conclude = useCallback(async () => {
     if (!selectedGroupId) return;
     try {
@@ -299,6 +331,36 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [source, selectedGroupId, mergeGroupIntoList]);
+
+  /** 关停（G3）：收口 + 取消该群未终态任务，显示取消数 */
+  const stop = useCallback(async () => {
+    if (!selectedGroupId) return;
+    setStopNotice(null);
+    try {
+      const result = await source.stopGroup(selectedGroupId);
+      setGroup(result.group);
+      mergeGroupIntoList(result.group);
+      setStopNotice(
+        result.cancelledTasks.length > 0
+          ? `已关停：取消 ${result.cancelledTasks.length} 个在途任务（${result.cancelledTasks.map((t) => t.slice(0, 8)).join("、")}）`
+          : "已关停：无在途任务需要取消",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [source, selectedGroupId, mergeGroupIntoList]);
+
+  /** 收口原因（G3）：最后一条带【收口】前缀的 system 消息 */
+  const concludeReason = useMemo(() => {
+    if (group?.status !== "concluded") return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m !== undefined && m.kind === "system" && m.content.startsWith("【收口】")) {
+        return m.content.slice("【收口】".length);
+      }
+    }
+    return "讨论已收口";
+  }, [group?.status, messages]);
 
   return (
     <section className="gr-page">
@@ -384,18 +446,29 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
                 <div className="gr-chat__title">
                   <span className="gr-chat__name">{group.name}</span>
                   <span className="gr-chat__meta">
-                    {group.members.join(" · ")} · 上限 {group.maxRounds} 轮
-                    {group.status === "concluded" ? " · 已结束" : ""}
+                    {group.members.join(" · ")} · 上限 {group.maxRounds} 轮 · 静默 {Math.round(group.idleTimeoutMs / 60_000)} 分钟
                   </span>
                 </div>
                 <div className="gr-chat__actions">
                   {group.status === "open" ? (
-                    <button type="button" className="ag-btn" onClick={() => void conclude()}>
-                      <CheckCircle2 size={14} aria-hidden="true" /> 结束讨论
-                    </button>
+                    <>
+                      <button type="button" className="ag-btn" onClick={() => void conclude()}>
+                        <CheckCircle2 size={14} aria-hidden="true" /> 结束讨论
+                      </button>
+                      <button type="button" className="ag-btn ag-btn--danger" onClick={() => void stop()}>
+                        <OctagonX size={14} aria-hidden="true" /> 关停
+                      </button>
+                    </>
                   ) : null}
                 </div>
               </header>
+
+              {group.status === "concluded" ? (
+                <div className="gr-concluded-bar">
+                  <CheckCircle2 size={13} aria-hidden="true" /> 已收口 — {concludeReason ?? "讨论已收口"}
+                </div>
+              ) : null}
+              {stopNotice ? <div className="gr-concluded-bar gr-concluded-bar--stop">{stopNotice}</div> : null}
 
               <div className="gr-msgs">
                 {messages.map((m) => (
@@ -423,6 +496,11 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
                         <div className="gr-msg__body">
                           <div className="gr-msg__head">
                             <span className="gr-msg__speaker">{speakerLabel(m)}</span>
+                            {m.kind === "decision" ? (
+                              <span className="gr-msg__decision-tag">
+                                <Gavel size={9} aria-hidden="true" /> 拍板
+                              </span>
+                            ) : null}
                             <span className="gr-msg__time">{formatTime(m.createdAt)}</span>
                           </div>
                           <div className={`gr-msg__content ${m.kind === "decision" ? "gr-msg__content--decision" : ""}`}>
@@ -451,19 +529,32 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
                     }
                   }}
                 />
-                <button
-                  type="button"
-                  className="ag-btn ag-btn--primary"
-                  disabled={group.status === "concluded" || sending || input.trim() === ""}
-                  onClick={() => void send()}
-                >
-                  {sending ? (
-                    <Loader2 className="ag-page__spin" size={14} aria-hidden="true" />
-                  ) : (
-                    <Send size={14} aria-hidden="true" />
-                  )}
-                  发送
-                </button>
+                <div className="gr-composer__btns">
+                  {group.status === "open" ? (
+                    <button
+                      type="button"
+                      className="ag-btn"
+                      disabled={sending || input.trim() === ""}
+                      title="以此内容拍板并收口讨论"
+                      onClick={() => void decide()}
+                    >
+                      <Gavel size={14} aria-hidden="true" /> 拍板
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="ag-btn ag-btn--primary"
+                    disabled={group.status === "concluded" || sending || input.trim() === ""}
+                    onClick={() => void send()}
+                  >
+                    {sending ? (
+                      <Loader2 className="ag-page__spin" size={14} aria-hidden="true" />
+                    ) : (
+                      <Send size={14} aria-hidden="true" />
+                    )}
+                    发送
+                  </button>
+                </div>
               </footer>
             </>
           )}
@@ -526,6 +617,18 @@ export function GroupsPage({ client, onNavigate }: GroupsPageProps) {
                 max={10}
                 value={formRounds}
                 onChange={(e) => setFormRounds(Number(e.target.value) || 3)}
+              />
+            </div>
+            <div className="ag-form__row">
+              <label className="ag-form__label" htmlFor="gr-form-idle">静默超时（分钟，超过自动收口）</label>
+              <input
+                id="gr-form-idle"
+                className="ag-form__select"
+                type="number"
+                min={1}
+                max={120}
+                value={formIdleMinutes}
+                onChange={(e) => setFormIdleMinutes(Number(e.target.value) || 10)}
               />
             </div>
             {formError ? <div className="ag-form__error">{formError}</div> : null}

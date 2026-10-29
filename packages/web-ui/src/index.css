@@ -5841,3 +5841,69 @@ body {
   font-weight: 500;
   color: var(--accent);
 }
+
+/* ── G3：拍板 / 关停 / 收口状态条 ── */
+
+.gr-msg__decision-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--success);
+  background: var(--success-light);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.gr-msg__content--decision {
+  background: var(--success-light);
+  border-left: 3px solid var(--success);
+  font-weight: 500;
+}
+
+.gr-concluded-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px 18px;
+}
+
+.gr-concluded-bar svg {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.gr-concluded-bar--stop {
+  color: var(--danger);
+  background: var(--bg-error);
+}
+
+.gr-concluded-bar--stop svg {
+  color: var(--danger);
+}
+
+.gr-composer__btns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ag-btn--danger {
+  color: var(--danger);
+  border-color: var(--danger-light);
+}
+
+.ag-btn--danger:hover {
+  background: var(--bg-error);
+  border-color: var(--danger);
+  color: var(--danger);
+}
