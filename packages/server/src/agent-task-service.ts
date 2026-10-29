@@ -361,6 +361,9 @@ export class AgentTaskService {
     }
     const next = this.transit(id, "cancelled", { detail: "用户取消" });
     this.notifyTerminal(id);
+    // 与 replied/failed 一致：取消也要回群一张卡（否则群里只看到任务派过、看不到被停）
+    const finished = this.store.get(id);
+    if (finished) this.publishToGroup(finished);
     return toTaskDto(next);
   }
 

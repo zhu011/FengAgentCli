@@ -135,6 +135,32 @@ describe("G2 — 群内派发 + 结果回群", () => {
     }
   });
 
+  test("cancelled → 群里同样落 task_card（「已取消」，与 replied/failed 一致）", async () => {
+    const fx = makeFixture();
+    try {
+      const group = fx.groups.createGroup({ name: "取消面", members: ["fake"] });
+      const task = await fx.tasks.submit({
+        runtime: "fake",
+        content: "SLOW 慢任务",
+        groupId: group.id,
+      });
+      await Bun.sleep(150); // 让它进入 running
+      fx.tasks.cancel(task.id);
+      await fx.tasks.waitForTerminal(task.id, 15_000);
+
+      const messages = fx.groups.listMessages(group.id);
+      const card = messages[messages.length - 1]!;
+      expect(card.kind).toBe("task_card");
+      expect(card.fromKind).toBe("runtime");
+      expect(card.agentTaskId).toBe(task.id);
+      expect(card.content).toContain("已取消");
+    } finally {
+      await fx.tasks.close();
+      fx.groups.close();
+      safeRm(fx.dir);
+    }
+  });
+
   test("不带 groupId 的任务不回群", async () => {
     const fx = makeFixture();
     try {
