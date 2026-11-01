@@ -280,6 +280,8 @@ export function TaskLibraryView({
       mergeTask(task);
       setFormContent("");
       setFormOpen(false);
+      // 与团队内派单一致：派出即打开详情（流式输出可见）
+      onSelectTask(task.id);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -324,9 +326,18 @@ export function TaskLibraryView({
   // ── 列表视图 ──────────────────────────────────────────────
   return (
     <div className="ag-section">
-      <h2 className="ag-section__title">
-        <Terminal size={14} aria-hidden="true" /> 任务列表
-      </h2>
+      <div className="tm-libhead">
+        <h2 className="ag-section__title">
+          <Terminal size={14} aria-hidden="true" /> 任务列表
+        </h2>
+        <button
+          type="button"
+          className="ag-btn ag-btn--primary"
+          onClick={() => setFormOpen((v) => !v)}
+        >
+          <Send size={14} aria-hidden="true" /> 发任务
+        </button>
+      </div>
       <div className="ag-filter" role="tablist">
         <button
           type="button"

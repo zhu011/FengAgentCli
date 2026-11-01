@@ -65,7 +65,8 @@
     "eval": "bun run packages/eval/src/index.ts",
     "events:migrate": "bun run scripts/events-migrate.ts",
     "prepublishOnly": "bun run typecheck",
-    "publish": "bun run scripts/publish.ts"
+    "publish": "bun run scripts/publish.ts",
+    "smoke:teams": "node packages/web-ui/e2e/teams-smoke.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-fs": "0.1.0-rc.6",

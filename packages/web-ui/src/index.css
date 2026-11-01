@@ -5951,3 +5951,25 @@ body {
 .tm-dispatch {
   margin-bottom: 8px;
 }
+
+/* 任务库头部（标题 + 发任务入口） */
+.tm-libhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 任务卡就地展开时事件日志列更窄（720px 面板 × 2/5）：允许换行避免标签裁切 */
+.tm-taskcard-detail .ag-timeline__item {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.tm-taskcard-detail .ag-timeline__detail {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  min-width: 0;
+  flex: 1 1 100%;
+}

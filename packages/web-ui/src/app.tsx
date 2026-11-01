@@ -77,7 +77,7 @@ function App() {
     setTheme(t);
   }, []);
 
-  // 视图切换（对话 / 观测 / 评测 / 团队）
+  // 视图切换（会话 / 观测 / 评测 / 团队）
   const [view, setView] = useState<AppView>("chat");
   // deep-link 目标（会话/消息/团队定位）
   const [deepLink, setDeepLink] = useState<DeepLinkTarget>({});
@@ -163,7 +163,7 @@ function App() {
             className={`app-nav__tab ${view === "chat" ? "app-nav__tab--active" : ""}`}
             onClick={() => setView("chat")}
           >
-            <span aria-hidden="true">💬</span> 对话
+            <span aria-hidden="true">💬</span> 会话
           </button>
           <button
             type="button"
