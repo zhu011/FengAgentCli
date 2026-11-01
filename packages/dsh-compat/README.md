@@ -1,7 +1,8 @@
-# @fengagent/dsh-compat（P1/M1）
+# @fengagent/dsh-compat（P1/M1 + P2/M2）
 
-dsh 插件兼容层：让 **tools-only dsh 插件**直接装进 FengAgentCli 运行时。
-双向插件互通方案的方向 A 第一步（见 AGE-35 讨论）。
+dsh 插件兼容层：让 **tools-only dsh 插件**直接装进 FengAgentCli 运行时，
+并把 dsh 的 `sessions` / `agents` / `agentDefaultModel` 服务面映射到现有能力。
+双向插件互通方案的方向 A（见 AGE-35 讨论）。
 
 ## 原理
 
@@ -27,8 +28,11 @@ runtime 插件配置（顺序：`feng.tools` → 本包 → dsh 插件）：
 const runtime = createRuntime({
   workdir: ".",
   plugins: [
+    { id: "feng.storage", config: { dbPath } },  // 需要服务面时必需
     { id: "feng.tools" },
     { id: "@fengagent/dsh-compat" },          // 或相对 cordis/src 的模块路径
+    { id: "../../dsh-compat/src/services-plugin.ts" }, // P2 服务面（可选；见下节）；
+                                                // 发布后为 @fengagent/dsh-compat/services
     { id: "some-dsh-plugin", config: { ... } } // 包名（根 node_modules 可解析）或路径
   ],
 });
@@ -41,12 +45,25 @@ import { loadDshPlugin, defineTool } from "@fengagent/dsh-compat";
 await loadDshPlugin(ctx, "some-dsh-plugin", { ...config });
 ```
 
-## M1 范围与限制（后续阶段收敛）
+## P2/M2 范围与限制
 
-- `register` 返回的 disposer：ToolService 面暂无 `unregister`，先记警告 no-op
-  （服务面补上后自动生效）；
-- `restrict`、`sessions` / `agents` / `agentDefaultModel` 等更高阶 dsh 服务面不在 M1
-  ——inject 这些服务的插件装载时会因服务缺失而明确报错；
+服务面插件 `dsh-services` 提供 `ctx.sessions` / `ctx.agents` / `ctx.agentDefaultModel`
+（装配顺序：`feng.storage` → `dsh-services` → dsh 插件）。逐成员保真度分级
+（direct / adapt / unsupported）与已知偏差见 **`docs/DSH-CONTRACT-MAP.md`**，
+运行时可读 `DSH_SERVICE_CAPABILITIES` 做 preflight。
+
+要点：
+- **读**可用：`sessions.get/list`、`session.events`（消息的有损投影）、
+  `agents` 的 live registry 与 initiator 归因；
+- **写**受限：`session.append`、`session.surface`、`sessions.prepare/enter/announce`
+  以及未注册 factory 时的 `agents.create/resume` 一律抛
+  `DshContractUnsupportedError`（带 `contract` 路径），不静默降级；
+- 事件溯源型 dsh 插件（session-persistence / session-query / llm-retry 等）
+  仍**不能**真正工作——等 P3（llm/scope）与 P4（事件桥）。
+
+## M1 范围与限制
+
+- `register` 返回的 disposer 已生效（P2 补上 `ToolService.unregister`）；
 - dsh 插件包需可从仓库根 `node_modules` 解析（`bun add` 安装到根，或本地路径）。
 
 ## 版本策略

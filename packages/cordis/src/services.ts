@@ -230,6 +230,10 @@ export class ToolServiceImpl extends Service implements ToolService {
     this.registry.register(tool);
   }
 
+  unregister(name: string): boolean {
+    return this.registry.unregister(name);
+  }
+
   get(name: string): ToolDefinition | undefined {
     return this.registry.get(name);
   }
@@ -445,7 +449,7 @@ export class LoopServiceImpl extends Service implements LoopService {
       get: (name) => tools.get(name),
       list: () => tools.materialize(),
       materialize: () => tools.materialize(),
-      unregister: () => false,
+      unregister: (name) => tools.unregister(name),
     };
     // 真实 executor 存在时工具执行走 executor（入参校验 / 权限审批 / hooks 生效，
     // 与 main 分支 plain-Agent 路径一致，human-in-the-loop 改参依赖此路径）；

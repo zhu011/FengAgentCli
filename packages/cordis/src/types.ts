@@ -88,6 +88,13 @@ export interface ModelPluginConfig {
 export interface ToolService {
   /** 注册工具 */
   register(tool: ToolDefinition): void;
+  /**
+   * 按名注销工具（插件卸载/disposer 用）。
+   *
+   * @param name - 工具名
+   * @returns 是否真的移除了一个已注册工具
+   */
+  unregister(name: string): boolean;
   /** 查询工具 */
   get(name: string): ToolDefinition | undefined;
   /** 物化工具列表（给 LLM 用） */
