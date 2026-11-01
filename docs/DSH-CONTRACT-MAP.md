@@ -1,7 +1,8 @@
 # dsh ↔ FengAgentCli 服务契约映射（P2）
 
 > 适用版本：`@deepseek-ai/dsh-*@0.1.0-rc.6`（与本机 dsh CLI 同版）。
-> 实现：`packages/dsh-compat/src/{projection,sessions,agents,agent-default-model,services-plugin}.ts`。
+> 实现：`packages/dsh-compat/src/{projection,sessions,agents,agent-default-model,services-plugin}.ts`；
+> 工具面：`{adapter,exec-context,events,plugin}.ts`。
 > 本文与 `DSH_SERVICE_CAPABILITIES`（`src/services-plugin.ts`）必须同步修改——
 > 表里的每一行都能在代码里找到同名 `path`，反之亦然。
 
@@ -101,6 +102,9 @@ system 消息                            → 跳过（dsh 走 request/header）
 | `dsh-session-title` | `sessions` | ⚠️ 只读部分可用 | `get()` 能读投影；`rename/refresh` 走 `session.append('session/title')`，必抛 |
 | `dsh-session-persistence-jsonl` | `sessions` | ❌ 不可用 | 监听 `session/event` / `session/flush` 并写事件日志——事实源冲突 |
 | `dsh-session-query*` / `-telemetry-otel` | `sessions` | ❌ 不可用 | 读 `session.events` 的稳定 seq 与 surface |
+| `dsh-plugin-writing-guard` | `tools` | ✅ 工具 + 审计都可用 | 工具走 P1；`tools/pre-execute`/`post-execute` 审计经 §5.5 事件桥触发（宿主需把 `HookRegistry` 传给插件 `hooks`） |
+| `dsh-tool-todo-plus` | `tools` + `sessionProjections` | ❌ 仍不可用 | ① `sessionProjections` 不在 rc.6 契约（该插件面向 dsh 0.2.x）；② 工具写会话走 `exec.agent.session.append`，仍是 unsupported——但现在报 `dsh_contract_unsupported`，不再是 `TypeError` |
+| `dsh-better-edit` | `tools` + `systemPrompt` + `fs` | ❌ 仍不可用 | npm 包漏声明 `@deepseek-ai/dsh-fs` peer；`systemPrompt`/`fs` 服务面属 P3 |
 | tools-only 插件（P1） | `tools` | ✅ 可用 | 见 `packages/dsh-compat/README.md` |
 
 结论：**P2 让「服务面能解析、能读、能显式失败」成立，但还不能让事件溯源型 dsh
@@ -114,20 +118,71 @@ dsh、群能力抽插件），届时事件桥才可能把 `session.append` 落�
 | `currentSelection()` | direct | 读 `ctx.model.provider/model`；无模型服务时用构造期 fallback |
 | `saveSelection(next)` | adapt | 调 `ctx.model.switchProvider(provider, {model})` 热切换；dsh 还会写 settings 层，FengAgentCli 由配置文件/调用方负责；`reasoningEffort` 接受但忽略 |
 
+## 5.5 工具执行上下文与 dsh 事件桥（P2 第二批）
+
+市场插件实测暴露的两个缺口在**工具面**补齐，不改服务面契约。
+
+### 5.5.1 `exec` 上下文（`src/exec-context.ts`）
+
+dsh 工具体签名是 `execute(args, exec)`；P1 只传了 `{ signal }`，于是读 `exec.agent`
+的工具（todo-plus 一类）在 execute 阶段直接 `TypeError`。现在每次调用构造一份完整 `exec`：
+
+| 成员 | 来源 | 偏差 |
+|---|---|---|
+| `callId` / `rootCallId` | `feng:<messageId>:<tool>:<seq>` | 进程内唯一；没有 dsh 的 transport 嵌套，故两者相等 |
+| `token` | 每次调用一个新 symbol | 不透明调用身份，**不是**鉴权 token |
+| `name` / `arguments` | 工具名 / 深冻结入参快照 | 与 dsh 的冻结语义对齐 |
+| `signal` | `timeoutMs` 驱动的 AbortController | 与 P1 一致 |
+| `agent` | `ctx.agents.get(sessionId)` → 回落 `ctx.sessions.get(sessionId)` 的只读投影 | 没有 agent 时**不伪造**，保持 `undefined`（dsh 允许） |
+| `deferContext()` / `concludeTurn()` | 记录在 `exec.deferredContexts` / `exec.concludedTurn` | FengAgentCli 的 `ToolResult` 没有 `additionalContexts` 通道、loop 没有「本回合结束」标记 → 仅记录 + 可选回调，**不会自动生效** |
+
+### 5.5.2 事件桥（`src/events.ts`）
+
+| dsh 事件 / 决策 | FengAgentCli 侧 | 偏差 |
+|---|---|---|
+| `tools/pre-execute` → `allow` | 继续执行 | — |
+| `tools/pre-execute` → `deny` | `{allowed:false, reason}`（阻止执行） | — |
+| `tools/pre-execute` → `ask` | **转 deny** | hook 阶段没有审批服务；放行会绕过审批 → fail-closed |
+| 监听器不调 `next()` | 视为 `deny` | 与 dsh waterfall 语义一致 |
+| 监听器抛错 | 记警告 + 按 `allow` 继续 | 审计插件不能把工具执行带崩 |
+| `tools/post-execute` → `accept` / `accept+content` | 保留结果 / 替换展示文本 | 只换文本，不动 canonical value |
+| `tools/post-execute` → `block` | 结果转 `isError` + feedback 文本 | 与 dsh「纠错反馈转错误结果」一致 |
+| `tools/execute`（包裹执行） | 不实现 | 超时已由适配器 `timeoutMs` 覆盖；重试/指标类插件需要 P3 |
+| `tools/result` / `tools/change` | 不发 | 只读观察面，等 P3 |
+
+双向接线：
+
+- **dsh 工具**：适配器自己发 `pre → 工具体 → post`，三段共享**同一份 exec**
+  （token/agent 一致），不经钩子路径；
+- **原生工具**：宿主把 `HookRegistry` 传给 `dshCompatPlugin` 的 `hooks`（或注册成
+  `hooks` 服务），桥注册一对 pre/post 钩子，把原生工具的执行也翻译成 dsh 事件，
+  并把 dsh 侧决策映射回 `{allowed, reason}` / 错误结果；
+- 适配器接管的工具名在钩子路径上被跳过（`markDshTool`），**同一次调用不会发两遍**；
+- 原生工具的 `exec.signal` 是永不 abort 的信号（feng 执行器不把取消面暴露给 hook）。
+
 ## 6. 装配与 preflight
 
 ```ts
+import { createHookRegistry } from "@fengagent/tools";
+import { dshCompatPlugin, applyDshServices } from "@fengagent/dsh-compat";
+
+const hooks = createHookRegistry(); // 与 createToolExecutor 用同一个实例
+
 createRuntime({
   workdir: ".",
   plugins: [
     { id: "feng.storage", config: { dbPath } },
-    { id: "@fengagent/dsh-compat" },        // P1：ctx.tools 接口面
-    { id: "../../dsh-compat/src/services-plugin.ts" }, // P2：sessions/agents/agentDefaultModel
-                                            // （发布后为 @fengagent/dsh-compat/services）
+    // P1 + P2 工具面：exec 上下文 + 事件桥（hooks 给了就双向接）
+    { id: dshCompatPlugin, config: { hooks } },
+    { id: applyDshServices },               // P2：sessions/agents/agentDefaultModel
     { id: "some-dsh-plugin" },
   ],
 });
 ```
+
+> `hooks` 也可不传：此时只有 dsh 工具自己发 `tools/*` 事件，原生工具的执行
+> 不会出现在 dsh 事件里（审计插件只能看见 dsh 工具）。装配处顺手
+> `ctx.reflect.provide("hooks", hooks)` 也能被自动发现。
 
 preflight（宿主可放在插件加载器里）：
 
@@ -144,4 +199,5 @@ const blocked = DSH_SERVICE_CAPABILITIES.filter((c) => c.tier === "unsupported")
 2. `dsh-agent` 的 `AgentRegistry` 方法集合是否变化（§3 表）；
 3. `SessionEventMap` 的 surface 事件类型是否仍是 `user/message | assistant/message | tool/result`（§4）；
 4. `dsh-agent-default-model` 的 `ModelSelection` 是否新增必填字段（§5）；
-5. 跑 `bun test packages/dsh-compat`，再跑全量 `bun test`。
+5. `dsh-tools` 的 `ToolRunContext` / `PreToolDecision` / `PostToolDecision` 是否变化（§5.5）；
+6. 跑 `bun test packages/dsh-compat`，再跑全量 `bun test`。
