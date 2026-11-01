@@ -1,0 +1,8 @@
+# fengagent-groups bundle patch: mounts the FengAgentCli group bridge on any
+# DSH profile. Point it at a running FengAgentCli server with FENG_SERVER_URL
+# (default http://127.0.0.1:3000); optional patch-file config lives in
+# src/config.mjs (serverUrl / timeoutMs).
+- insert:
+    - id: fengagent-groups
+      name: 'fengagent-groups'
+      inject: [tools]
