@@ -27,6 +27,7 @@ import { createObservabilityRoutes, extractLiveSession } from "./routes/observab
 import { createEvalRoutes } from "./routes/eval.ts";
 import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks.ts";
 import { createGroupRoutes } from "./routes/groups.ts";
+import { createGroupMcpRoutes } from "./mcp-groups.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
 import type { GroupOrchestrator } from "@fengagent/groups";
@@ -61,6 +62,8 @@ export interface ServerOptions {
    * 缺省时不挂 `/api/groups`（前端群聊页会提示后端未就绪）。
    */
   agentGroupService?: AgentGroupService;
+  /** 数据根（v2：群 MCP token 持久化） */
+  dataRoot?: string;
   /**
    * 群编排器（G3）：提供时 `/api/groups/:id/conclude|stop` 走它（收口说明 + 取消在跑任务）。
    */
@@ -121,6 +124,8 @@ export function createApp(options: ServerOptions): {
       "/api/groups",
       createGroupRoutes(options.agentGroupService, options.agentGroupOrchestrator),
     );
+    // v2 V2-1：群 MCP 服务面（claude/kimi 等外部 CLI 直连发言；token 绑定成员身份）
+    app.route("/api/groups/mcp", createGroupMcpRoutes(options.agentGroupService, options.dataRoot ?? "."));
   }
 
   // 可观测性（AgentLoop 观测面板） + 评测模块（WebUI）

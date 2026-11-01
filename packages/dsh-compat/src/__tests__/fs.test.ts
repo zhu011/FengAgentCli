@@ -123,6 +123,8 @@ describe("fs：写与编辑", () => {
     expect(created.before).toBeNull();
     expect(created.after).toBe("v1");
 
+    // Windows 计时分辨率下两次写可能同 tick（size 相同 → 版本碰撞），隔开保证 mtime 推进
+    await new Promise((r) => setTimeout(r, 5));
     const updated = await fs.writeText(target, "v2");
     expect(updated.operation).toBe("update");
     expect(updated.before).toBe("v1");
