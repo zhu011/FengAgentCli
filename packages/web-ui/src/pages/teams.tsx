@@ -475,7 +475,7 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
     } finally {
       setCreating(false);
     }
-  }, [groupSource, formName, formDesc, formMembers, formRounds, formIdleMinutes, mergeGroupIntoList, syncUrl]);
+  }, [groupSource, formName, formDesc, formMembers, formRounds, formIdleMinutes, formSpeechMode, mergeGroupIntoList, syncUrl]);
 
   const send = useCallback(async () => {
     if (!selectedGroupId || !input.trim() || sending) return;

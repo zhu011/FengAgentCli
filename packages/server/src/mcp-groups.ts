@@ -59,7 +59,9 @@ class McpTokenStore {
   private persist(): void {
     const record: Record<string, string> = {};
     for (const [token, member] of this.memberByToken) record[token] = member;
-    mkdirSync(join(this.file, ".."), { recursive: true });
+    // dataRoot 兜底为 "." 时 join(file, "..") === "."，mkdirSync 抛 EEXIST——目录已存在即跳过
+    const dir = join(this.file, "..");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(this.file, JSON.stringify(record));
   }
 }
