@@ -1,0 +1,4 @@
+- insert:
+    - id: feng-fixture-plugin
+      name: 'feng-fixture-plugin'
+      inject: [tools]

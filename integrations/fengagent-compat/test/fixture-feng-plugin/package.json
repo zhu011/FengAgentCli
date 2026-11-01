@@ -1,0 +1,16 @@
+{
+  "name": "feng-fixture-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FengAgentCli-shaped plugin fixture: registers a feng-form tool, used to verify direction B (feng plugins running inside dsh).",
+  "type": "module",
+  "main": "./plugin.mjs",
+  "exports": {
+    ".": "./plugin.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["plugin.mjs", "cordis.patch.yml"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}

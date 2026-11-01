@@ -1,0 +1,38 @@
+{
+  "name": "fengagent-compat",
+  "version": "0.1.4",
+  "private": true,
+  "description": "DSH plugin bridging direction B: lets FengAgentCli plugins (feng-shaped tools) run inside dsh by patching ctx.tools to accept feng ToolDefinitions.",
+  "type": "module",
+  "main": "./src/plugin.mjs",
+  "exports": {
+    ".": "./src/plugin.mjs",
+    "./adapter": "./src/adapter.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "zod": "^3.23.0"
+  },
+  "license": "MIT"
+}

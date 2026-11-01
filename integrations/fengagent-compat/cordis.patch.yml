@@ -1,0 +1,8 @@
+# fengagent-compat bundle patch: mounts the direction-B compat plugin on any
+# DSH profile. It patches ctx.tools to also accept FengAgentCli-shaped
+# ToolDefinitions (inputSchema + execute(input, context)), adapting them into
+# dsh tool definitions on the fly. No config needed.
+- insert:
+    - id: fengagent-compat
+      name: 'fengagent-compat'
+      inject: [tools]
