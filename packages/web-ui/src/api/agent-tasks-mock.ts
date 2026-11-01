@@ -248,6 +248,7 @@ export class AgentTasksMock {
         status: "created",
         content: req.content,
         createdAt: new Date().toISOString(),
+        ...(req.groupId === undefined ? {} : { groupId: req.groupId }),
       },
       events: [],
       streamText: "",

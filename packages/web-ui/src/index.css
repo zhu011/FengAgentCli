@@ -5907,3 +5907,47 @@ body {
   border-color: var(--danger);
   color: var(--danger);
 }
+
+/* ════ 「agent 团队」统一模块（M1）════ */
+
+/* 子视图分段控件（团队 / 任务库 / 成员库） */
+.tm-subnav {
+  margin-bottom: 4px;
+}
+
+.tm-subnav__chip {
+  font-size: 12px;
+  padding: 5px 14px;
+}
+
+/* 任务卡就地展开容器（嵌在消息流里） */
+.tm-taskcard-detail {
+  width: 100%;
+  max-width: 720px;
+  margin: 2px 0 10px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.tm-taskcard-detail__bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tm-taskcard-detail .ag-detail {
+  padding: 12px;
+}
+
+/* 团队内派单表单（贴在 composer 上方） */
+.tm-dispatch {
+  margin-bottom: 8px;
+}

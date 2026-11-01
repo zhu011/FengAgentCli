@@ -544,6 +544,8 @@ export interface AgentTask {
   durationMs?: number;
   /** 目标侧 ACP sessionId（跨进程 resume 用） */
   acpSessionId?: string;
+  /** 群内派发（G2）：任务所属群（团队上下文派单时带上） */
+  groupId?: string;
 }
 
 export interface AgentTaskListResponse {
@@ -561,6 +563,8 @@ export interface AgentTaskCreateRequest {
   content: string;
   /** 可选：绑定本机会话（From 列显示） */
   fromSession?: string;
+  /** 可选：群内派发（G2）——结果以 task_card 自动回群 */
+  groupId?: string;
 }
 
 /** 任务流式进度（SSE：状态推进 + 输出块） */

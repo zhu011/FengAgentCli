@@ -26,6 +26,7 @@ function makeMessage(
   content: string,
   kind: GroupMessage["kind"] = "chat",
   createdAt = nowIso(),
+  agentTaskId?: string,
 ): GroupMessage {
   return {
     id: `msg_mock_${nextSeq++}`,
@@ -36,6 +37,7 @@ function makeMessage(
     content,
     kind,
     createdAt,
+    ...(agentTaskId === undefined ? {} : { agentTaskId }),
   };
 }
 
@@ -81,6 +83,12 @@ export class GroupsMock {
     this.groups.set(id, group);
     const msgs = [makeMessage(id, "system", "system", `群「${name}」已创建，成员：${members.join("、")}`, "system", createdAt)];
     msgs.push(makeMessage(id, "coordinator", "fengagent", `大家好，我是本群协调者。任务丢进来即可，我会拆分并指派成员。`, "chat", nowIso(-3600_000 * this.groups.size + 60_000)));
+    // 种子任务卡：关联任务库 mock 的种子任务 t_mock_002（replied），供任务卡就地展开演示
+    if (status === "open") {
+      msgs.push(
+        makeMessage(id, "runtime", "kimi", `任务 t_mock_002 已完成：总结今天的日报`, "task_card", nowIso(-3600_000 * this.groups.size + 120_000), "t_mock_002"),
+      );
+    }
     this.messages.set(id, msgs);
   }
 
