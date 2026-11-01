@@ -74,6 +74,10 @@ async function main() {
     ...(runtimeResult.agentGroupOrchestrator
       ? { agentGroupOrchestrator: runtimeResult.agentGroupOrchestrator }
       : {}),
+    // S1：WebUI 插件注册表（ctx.webui）→ /api/webui/manifest + /api/webui/assets/*
+    ...(runtimeResult.runtime.ctx.webui
+      ? { webui: runtimeResult.runtime.ctx.webui }
+      : {}),
   });
 }
 

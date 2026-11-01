@@ -28,6 +28,7 @@ import { createEvalRoutes } from "./routes/eval.ts";
 import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks.ts";
 import { createGroupRoutes } from "./routes/groups.ts";
 import { createGroupMcpRoutes } from "./mcp-groups.ts";
+import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
 import type { GroupOrchestrator } from "@fengagent/groups";
@@ -68,6 +69,13 @@ export interface ServerOptions {
    * 群编排器（G3）：提供时 `/api/groups/:id/conclude|stop` 走它（收口说明 + 取消在跑任务）。
    */
   agentGroupOrchestrator?: GroupOrchestrator;
+  /**
+   * WebUI 插件注册表（S1：`ctx.webui`）。
+   *
+   * 提供时挂 `/api/webui/manifest` 与 `/api/webui/assets/*`；缺省不挂
+   * （测试/无插件场景），前端据此回退「无插件」。
+   */
+  webui?: WebuiRouteSource;
 }
 
 /**
@@ -154,6 +162,11 @@ export function createApp(options: ServerOptions): {
     llmClient,
     ...(judgeCacheRoot ? { judgeCacheRoot } : {}),
   }));
+
+  // S1：WebUI 插件装载链 —— 插件清单 + 插件静态资源（白名单 dataRoot/plugins）
+  if (options.webui) {
+    app.route("/api/webui", createWebuiRoutes(options.webui));
+  }
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）
   if (staticDir) {

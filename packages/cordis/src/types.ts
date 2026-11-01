@@ -16,6 +16,7 @@
  */
 
 import type { Context } from "@deepseek-ai/cordis";
+import type { WebuiAsset, WebuiManifest, WebuiRegistry } from "./webui.ts";
 import type {
   LLMClient,
   LLMRequest,
@@ -344,6 +345,21 @@ export interface RebuildService {
 
 /* ------------------------------ 运行时 ------------------------------ */
 
+/**
+ * WebUI 插件服务 — 扫描 `<dataRoot>/plugins` 的 `fengagent.webui` 声明。
+ *
+ * manifest 与 assets 解析共用同一份注册表：宿主 WebUI 免重启拉取，
+ * `/api/webui/assets/*` 只服务插件目录内的文件（白名单 + 防目录穿越）。
+ */
+export interface WebuiService {
+  /** 底层注册表（插件管理面 S2 复用） */
+  readonly registry: WebuiRegistry;
+  /** `GET /api/webui/manifest` 响应 */
+  manifest(): WebuiManifest;
+  /** 解析插件内相对路径（非法/越界/不存在返回 null） */
+  resolveAsset(pluginId: string, relativePath: string): WebuiAsset | null;
+}
+
 /** 插件注册项 — config 驱动加载（可插拔积木） */
 export interface RuntimePluginEntry {
   /** 插件 id（内置注册表或用户插件路径） */
@@ -383,6 +399,7 @@ export const BUILTIN_PLUGINS = {
   GRAPH: "feng.graph",
   EVENTS: "feng.events",
   REBUILD: "feng.rebuild",
+  WEBUI: "feng.webui",
 } as const;
 
 /* ------------------------------ Context 服务增强 ------------------------------ */
@@ -409,5 +426,10 @@ declare module "@deepseek-ai/cordis" {
      * 从事件日志全量投影重写（含 title/status/meta，#3 不丢），脱双写依赖。
      */
     rebuild: RebuildService;
+    /**
+     * WebUI 插件注册表（S1）— 扫描 `<dataRoot>/plugins` 的 `fengagent.webui`
+     * 声明，提供 manifest 与 assets 解析（白名单 + 防目录穿越）。
+     */
+    webui: WebuiService;
   }
 }

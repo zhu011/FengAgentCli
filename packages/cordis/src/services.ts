@@ -62,8 +62,10 @@ import type {
   StrategyService,
   ToolChoiceStrategy,
   ToolService,
+  WebuiService,
 } from "./types.ts";
 import { join } from "node:path";
+import type { WebuiAsset, WebuiManifest, WebuiRegistry } from "./webui.ts";
 
 /* ------------------------------ 事件服务（Phase 1） ------------------------------ */
 
@@ -732,5 +734,34 @@ export class GraphServiceImpl extends Service implements GraphService {
 
   getActiveHead(conversationId: string): ConversationNode | undefined {
     return this.store.getActiveHead(conversationId);
+  }
+}
+
+/* ------------------------------ WebUI 插件注册表（S1） ------------------------------ */
+
+/**
+ * WebUI 插件服务实现 — 提供 `ctx.webui`。
+ *
+ * 只读扫描 `<dataRoot>/plugins`：manifest 与 assets 解析都落在注册表里，
+ * HTTP 路由（`/api/webui/*`）与插件管理面（S2）共用同一份注册表。
+ */
+export class WebuiServiceImpl extends Service implements WebuiService {
+  constructor(
+    ctx: Context,
+    private readonly webuiRegistry: WebuiRegistry,
+  ) {
+    super(ctx, "webui");
+  }
+
+  get registry(): WebuiRegistry {
+    return this.webuiRegistry;
+  }
+
+  manifest(): WebuiManifest {
+    return this.webuiRegistry.manifest();
+  }
+
+  resolveAsset(pluginId: string, relativePath: string): WebuiAsset | null {
+    return this.webuiRegistry.resolveAsset(pluginId, relativePath);
   }
 }

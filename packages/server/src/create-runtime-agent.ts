@@ -544,6 +544,12 @@ export async function createRuntimeAgent(
         id: BUILTIN_PLUGINS.REBUILD,
         config: { store: eventStore, sessionStore: storageBackend },
       },
+      // S1：WebUI 插件注册表（`/api/webui/manifest` + assets），
+      // 扫描 `<dataRoot>/plugins/*` 的 `fengagent.webui` 声明
+      {
+        id: BUILTIN_PLUGINS.WEBUI,
+        config: { pluginsRoot: join(resolveDataRoot({ workdir }), "plugins") },
+      },
       {
         id: BUILTIN_PLUGINS.LOOP,
         config: {
