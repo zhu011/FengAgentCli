@@ -363,6 +363,24 @@ export class ApiClient {
     return (await res.json()) as GroupMessage;
   }
 
+  /** PATCH /api/groups/:id — 改发言模式（V2-3/V2-4） */
+  async updateGroup(groupId: string, patch: { speechMode?: "coordinated" | "free" }): Promise<GroupInfo> {
+    const res = await fetch(`${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to update group");
+    return (await res.json()) as GroupInfo;
+  }
+
+  /** GET /api/groups/:id/status — 编排状态快照（V2-4 状态条） */
+  async getGroupStatus(groupId: string): Promise<{ speechMode: "coordinated" | "free"; rounds: number; maxRounds: number; lastSpeaker?: string; nextSpeaker?: string; budget?: { limit: number; remaining: Record<string, number> } }> {
+    const res = await fetch(`${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}/status`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get group status");
+    return await res.json();
+  }
+
   /** POST /api/groups/:id/conclude — 结束讨论（幂等） */
   async concludeGroup(groupId: string): Promise<GroupInfo> {
     const res = await fetch(`${this.baseUrl}/api/groups/${encodeURIComponent(groupId)}/conclude`, {

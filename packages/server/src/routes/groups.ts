@@ -145,6 +145,9 @@ export function createGroupRoutes(
           ? { idleTimeoutMs: body.idleTimeoutMs }
           : {}),
         ...(typeof body.coordinator === "string" ? { coordinator: body.coordinator } : {}),
+        ...(body.speechMode === "coordinated" || body.speechMode === "free"
+            ? { speechMode: body.speechMode }
+            : {}),
         ...(typeof body.createdBy === "string" ? { createdBy: body.createdBy } : {}),
       });
       return c.json(group, 201);
@@ -186,6 +189,9 @@ export function createGroupRoutes(
           ...(typeof body.maxRounds === "number" ? { maxRounds: body.maxRounds } : {}),
           ...(typeof body.idleTimeoutMs === "number"
             ? { idleTimeoutMs: body.idleTimeoutMs }
+            : {}),
+          ...(body.speechMode === "coordinated" || body.speechMode === "free"
+            ? { speechMode: body.speechMode }
             : {}),
         }),
       );
@@ -242,6 +248,14 @@ export function createGroupRoutes(
       const payload = toErrorPayload(err);
       return fail(c, payload.message, payload.code);
     }
+  });
+
+  // GET /:id/status — 编排状态快照（V2-4：前端自治状态条消费；无编排器时 501）
+  app.get("/:id/status", (c) => {
+    const id = c.req.param("id");
+    if (!service.getGroup(id)) return fail(c, `群不存在: ${id}`, "not_found");
+    if (!orchestrator) return c.json({ error: { message: "编排器未装配", code: "bad_request" } }, 501);
+    return c.json(orchestrator.getStatus(id) ?? { groupId: id, speechMode: "coordinated" });
   });
 
   // POST /:id/conclude — 关群（幂等；有编排器时写收口说明 + 取消在跑任务）

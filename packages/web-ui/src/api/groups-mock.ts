@@ -76,6 +76,7 @@ export class GroupsMock {
       status,
       maxRounds,
       idleTimeoutMs: 600_000,
+      speechMode: "coordinated",
       createdAt,
       updatedAt: createdAt,
       lastMessageAt: createdAt,
@@ -111,6 +112,21 @@ export class GroupsMock {
         agentName: name === "fengagent" ? "fengagent-acp" : name === "kimi" ? "Kimi Code CLI" : "deepseek-harness-acp",
       })),
     });
+  }
+
+  updateGroup(groupId: string, patch: { speechMode?: "coordinated" | "free" }): Promise<GroupInfo> {
+    const g = this.groups.get(groupId);
+    if (!g) return Promise.reject(new Error(`群不存在: ${groupId}`));
+    if (patch.speechMode) g.speechMode = patch.speechMode;
+    return Promise.resolve({ ...g });
+  }
+
+  getGroupStatus(groupId: string): Promise<{ speechMode: "coordinated" | "free"; rounds: number; maxRounds: number; lastSpeaker?: string; nextSpeaker?: string; budget?: { limit: number; remaining: Record<string, number> } }> {
+    const g = this.groups.get(groupId);
+    if (!g) return Promise.reject(new Error(`群不存在: ${groupId}`));
+    const remaining: Record<string, number> = {};
+    for (const m of g.members) remaining[m] = 5;
+    return Promise.resolve({ speechMode: g.speechMode ?? "coordinated", rounds: 1, maxRounds: g.maxRounds, lastSpeaker: "fengagent", budget: { limit: 5, remaining } });
   }
 
   createGroup(req: {

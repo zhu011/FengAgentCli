@@ -53,6 +53,16 @@ interface TeamsPageProps {
 /* ------------------------------ 团队数据源 ------------------------------ */
 
 /** 群数据源最小接口（client 与 mock 共同满足） */
+/** 编排状态快照（GET /api/groups/:id/status；V2-4 状态条消费） */
+interface GroupOrchestrationStatusLike {
+  speechMode: "coordinated" | "free";
+  rounds: number;
+  maxRounds: number;
+  lastSpeaker?: string;
+  nextSpeaker?: string;
+  budget?: { limit: number; remaining: Record<string, number> };
+}
+
 interface GroupSource {
   listGroups(): Promise<{
     groups: GroupInfo[];
@@ -64,9 +74,12 @@ interface GroupSource {
     members: string[];
     maxRounds?: number;
     idleTimeoutMs?: number;
+    speechMode?: "coordinated" | "free";
   }): Promise<GroupInfo>;
   getGroup(groupId: string): Promise<{ group: GroupInfo; messages: GroupMessage[] }>;
   sendGroupMessage(groupId: string, req: { content: string; kind?: "chat" | "decision" }): Promise<GroupMessage>;
+  updateGroup(groupId: string, patch: { speechMode?: "coordinated" | "free" }): Promise<GroupInfo>;
+  getGroupStatus(groupId: string): Promise<GroupOrchestrationStatusLike>;
   concludeGroup(groupId: string): Promise<GroupInfo>;
   stopGroup(groupId: string): Promise<{ group: GroupInfo; cancelledTasks: string[] }>;
   streamGroup(groupId: string, after: number, signal?: AbortSignal): AsyncGenerator<GroupStreamEvent>;
@@ -207,6 +220,8 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
   const [formMembers, setFormMembers] = useState<string[]>([]);
   const [formRounds, setFormRounds] = useState(3);
   const [formIdleMinutes, setFormIdleMinutes] = useState(10);
+  const [formSpeechMode, setFormSpeechMode] = useState<"coordinated" | "free">("coordinated");
+  const [orchStatus, setOrchStatus] = useState<GroupOrchestrationStatusLike | null>(null);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -219,6 +234,8 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
 
   // 关停结果提示
   const [stopNotice, setStopNotice] = useState<string | null>(null);
+  const [switchingMode, setSwitchingMode] = useState(false);
+
 
   /** 页内 URL 同步（replaceState：可分享、不堆历史） */
   const syncUrl = useCallback((next: { sub?: TeamsSubView; group?: string | null; task?: string | null }) => {
@@ -372,6 +389,27 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
     };
   }, [groupSource, selectedGroupId]);
 
+  // 编排状态轮询（V2-4 状态条；编排器未装配时静默跳过）
+  useEffect(() => {
+    setOrchStatus(null);
+    if (!selectedGroupId) return;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const st = await groupSource.getGroupStatus(selectedGroupId);
+        if (alive) setOrchStatus(st);
+      } catch {
+        if (alive) setOrchStatus(null);
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 5_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [groupSource, selectedGroupId]);
+
   // 消息流自动滚底（任务卡展开时不抢滚动）
   useEffect(() => {
     if (expandedTaskId) return;
@@ -388,6 +426,24 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
     });
   }, []);
 
+  /** 切换发言模式（V2-4：PATCH speechMode，编排器即时生效） */
+  const switchSpeechMode = useCallback(
+    async (mode: "coordinated" | "free") => {
+      if (!selectedGroupId || group?.speechMode === mode) return;
+      setSwitchingMode(true);
+      try {
+        const updated = await groupSource.updateGroup(selectedGroupId, { speechMode: mode });
+        setGroup(updated);
+        mergeGroupIntoList(updated);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSwitchingMode(false);
+      }
+    },
+    [selectedGroupId, group?.speechMode, groupSource, mergeGroupIntoList],
+  );
+
   const submitCreate = useCallback(async () => {
     if (!formName.trim() || formMembers.length === 0) {
       setFormError("请填写团队名并至少选择一个成员");
@@ -402,6 +458,7 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
         members: formMembers,
         maxRounds: formRounds,
         idleTimeoutMs: Math.max(1, formIdleMinutes) * 60_000,
+        speechMode: formSpeechMode,
       });
       mergeGroupIntoList(created);
       setCreateOpen(false);
@@ -410,6 +467,7 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
       setFormMembers([]);
       setFormRounds(3);
       setFormIdleMinutes(10);
+      setFormSpeechMode("coordinated");
       setSelectedGroupId(created.id);
       syncUrl({ sub: "teams", group: created.id });
     } catch (err) {
@@ -677,6 +735,44 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
                   </div>
                 </header>
 
+                <div className="tm-modebar">
+                  <div className="tm-modebar__switch" role="group" aria-label="发言模式">
+                    <button
+                      type="button"
+                      className={`tm-modebar__opt ${(group.speechMode ?? "coordinated") === "coordinated" ? "tm-modebar__opt--on" : ""}`}
+                      disabled={group.status === "concluded" || switchingMode}
+                      onClick={() => void switchSpeechMode("coordinated")}
+                    >
+                      协调者调度
+                    </button>
+                    <button
+                      type="button"
+                      className={`tm-modebar__opt ${group.speechMode === "free" ? "tm-modebar__opt--on" : ""}`}
+                      disabled={group.status === "concluded" || switchingMode}
+                      onClick={() => void switchSpeechMode("free")}
+                    >
+                      自治直连
+                    </button>
+                  </div>
+                  {orchStatus ? (
+                    <>
+                      <span className="tm-modebar__stat">轮次 {orchStatus.rounds}/{orchStatus.maxRounds}</span>
+                      {orchStatus.lastSpeaker ? (
+                        <span className="tm-modebar__stat">最近发言 {orchStatus.lastSpeaker}</span>
+                      ) : null}
+                      {orchStatus.nextSpeaker ? (
+                        <span className="tm-modebar__stat tm-modebar__stat--turn">发言权 → {orchStatus.nextSpeaker}</span>
+                      ) : null}
+                      {orchStatus.speechMode === "free" && orchStatus.budget ? (
+                        <span className="tm-modebar__stat">
+                          预算 {Object.entries(orchStatus.budget.remaining)
+                            .map(([m, r]) => `${m}:${r}/${orchStatus.budget!.limit}`)
+                            .join(" · ")}
+                        </span>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
                 {group.status === "concluded" ? (
                   <div className="gr-concluded-bar">
                     <CheckCircle2 size={13} aria-hidden="true" /> 已收口 — {concludeReason ?? "讨论已收口"}
@@ -942,6 +1038,25 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
                 value={formIdleMinutes}
                 onChange={(e) => setFormIdleMinutes(Number(e.target.value) || 10)}
               />
+            </div>
+            <div className="ag-form__row">
+              <span className="ag-form__label">发言模式</span>
+              <div className="tm-modebar__switch">
+                <button
+                  type="button"
+                  className={`tm-modebar__opt ${formSpeechMode === "coordinated" ? "tm-modebar__opt--on" : ""}`}
+                  onClick={() => setFormSpeechMode("coordinated")}
+                >
+                  协调者调度
+                </button>
+                <button
+                  type="button"
+                  className={`tm-modebar__opt ${formSpeechMode === "free" ? "tm-modebar__opt--on" : ""}`}
+                  onClick={() => setFormSpeechMode("free")}
+                >
+                  自治直连
+                </button>
+              </div>
             </div>
             {formError ? <div className="ag-form__error">{formError}</div> : null}
             <div className="ag-form__actions">

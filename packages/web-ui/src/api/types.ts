@@ -593,6 +593,8 @@ export interface GroupInfo {
   /** 成员 runtime 注册名（人隐含在场） */
   members: string[];
   status: GroupStatus;
+  /** 发言模式（V2-3）：coordinated 协调者调度（缺省，v1）| free 自治直连 */
+  speechMode?: "coordinated" | "free";
   /** 编排轮上限（G3 消费） */
   maxRounds: number;
   /** 静默超时（毫秒，G3）：超过即自动收口 */
