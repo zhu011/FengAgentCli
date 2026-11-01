@@ -1,0 +1,20 @@
+{
+  "name": "@fengagent/dsh-compat",
+  "version": "0.1.0",
+  "description": "dsh 插件兼容层（P1/M1）：让 tools-only dsh 插件直接装进 FengAgentCli 运行时",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/**/*.ts"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@fengagent/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@fengagent/cordis": "workspace:*"
+  }
+}
