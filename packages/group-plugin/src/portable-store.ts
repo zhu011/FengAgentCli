@@ -40,6 +40,18 @@ function normalizeMembers(members: CreateAgentGroupInput["members"]): NonNullabl
   return result;
 }
 
+/**
+ * 老 JSON 补字段（V2-3）：`speech_mode` 之前的存档没有 `speechMode`，按 v1 默认补齐。
+ *
+ * @param group - 磁盘上读出的群记录
+ */
+function normalizeGroup(group: AgentGroupRecord): AgentGroupRecord {
+  return {
+    ...group,
+    speechMode: group.speechMode === "free" ? "free" : "coordinated",
+  };
+}
+
 /** 便携 JSON 群存储：`<dataRoot>/groups.json` 整文件读写 */
 export class PortableGroupStore implements GroupStore {
   private state: PortableState;
@@ -52,7 +64,10 @@ export class PortableGroupStore implements GroupStore {
     if (existsSync(this.file)) {
       try {
         const parsed = JSON.parse(readFileSync(this.file, "utf8")) as PortableState;
-        this.state = { groups: parsed.groups ?? [], messages: parsed.messages ?? [] };
+        this.state = {
+          groups: (parsed.groups ?? []).map(normalizeGroup),
+          messages: parsed.messages ?? [],
+        };
       } catch {
         this.state = { groups: [], messages: [] };
       }
@@ -79,6 +94,7 @@ export class PortableGroupStore implements GroupStore {
       coordinator: input.coordinator?.trim() || "fengagent",
       maxRounds: input.maxRounds ?? 20,
       idleTimeoutMs: input.idleTimeoutMs ?? 600_000,
+      speechMode: input.speechMode === "free" ? "free" : "coordinated",
       createdAt: at,
       updatedAt: at,
       createdBy: input.createdBy ?? "unknown",
@@ -116,6 +132,7 @@ export class PortableGroupStore implements GroupStore {
       ...(patch.coordinator !== undefined ? { coordinator: patch.coordinator } : {}),
       ...(patch.maxRounds !== undefined ? { maxRounds: patch.maxRounds } : {}),
       ...(patch.idleTimeoutMs !== undefined ? { idleTimeoutMs: patch.idleTimeoutMs } : {}),
+      ...(patch.speechMode !== undefined ? { speechMode: patch.speechMode } : {}),
       updatedAt: patch.at ?? this.now(),
     };
     this.state.groups[idx] = next;

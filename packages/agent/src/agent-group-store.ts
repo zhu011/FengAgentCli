@@ -27,6 +27,13 @@ import { expandTilde, generateId } from "@fengagent/shared/utils";
 /** 群状态（契约 v1.0：只有 open / concluded） */
 export type AgentGroupStatus = "open" | "concluded";
 
+/**
+ * 群发言模式（V2-3）：
+ * - `coordinated`（缺省，v1 兼容）：协调者调度回合，成员直连发言不触发新回合；
+ * - `free`（自治）：成员之间直接发言/求助，收敛靠轮数、发言预算、静默超时与人类拍板。
+ */
+export type GroupSpeechMode = "coordinated" | "free";
+
 /** 消息种类（G2/G3 用 task_card / decision，G1 主要是 chat / system） */
 export type GroupMessageKind = "chat" | "task_card" | "decision" | "system";
 
@@ -56,6 +63,8 @@ export interface AgentGroupRecord {
   maxRounds: number;
   /** 静默超时（毫秒，G3） */
   idleTimeoutMs: number;
+  /** 发言模式（V2-3；缺省 `coordinated` = v1 协调者中转） */
+  speechMode: GroupSpeechMode;
   createdAt: number;
   updatedAt: number;
   createdBy: string;
@@ -84,6 +93,8 @@ export interface CreateAgentGroupInput {
   coordinator?: string;
   maxRounds?: number;
   idleTimeoutMs?: number;
+  /** 发言模式（V2-3；缺省 `coordinated`） */
+  speechMode?: GroupSpeechMode;
   createdBy?: string;
   at?: number;
 }
@@ -97,6 +108,8 @@ export interface UpdateAgentGroupInput {
   coordinator?: string;
   maxRounds?: number;
   idleTimeoutMs?: number;
+  /** 发言模式（V2-3；`coordinated` ↔ `free` 可在线切换） */
+  speechMode?: GroupSpeechMode;
   at?: number;
 }
 
@@ -128,6 +141,8 @@ export interface ListGroupMessagesOptions {
 
 const DEFAULT_MAX_ROUNDS = 3;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+/** 缺省发言模式（v1 兼容：只有协调者调度回合） */
+const DEFAULT_SPEECH_MODE: GroupSpeechMode = "coordinated";
 
 interface GroupRow {
   id: string;
@@ -138,6 +153,7 @@ interface GroupRow {
   coordinator: string;
   max_rounds: number;
   idle_timeout_ms: number;
+  speech_mode: string;
   created_at: number;
   updated_at: number;
   created_by: string;
@@ -172,6 +188,7 @@ function rowToGroup(row: GroupRow): AgentGroupRecord {
     coordinator: row.coordinator,
     maxRounds: row.max_rounds,
     idleTimeoutMs: row.idle_timeout_ms,
+    speechMode: parseSpeechMode(row.speech_mode),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by,
@@ -217,6 +234,7 @@ export class AgentGroupStore {
         coordinator TEXT NOT NULL DEFAULT '',
         max_rounds INTEGER NOT NULL DEFAULT ${DEFAULT_MAX_ROUNDS},
         idle_timeout_ms INTEGER NOT NULL DEFAULT ${DEFAULT_IDLE_TIMEOUT_MS},
+        speech_mode TEXT NOT NULL DEFAULT '${DEFAULT_SPEECH_MODE}',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         created_by TEXT NOT NULL DEFAULT 'dashboard'
@@ -240,6 +258,23 @@ export class AgentGroupStore {
       CREATE INDEX IF NOT EXISTS idx_group_messages_task
         ON group_messages(agent_task_id);
     `);
+    this.ensureSpeechModeColumn();
+  }
+
+  /**
+   * 老库补列（V2-3）：`speech_mode` 缺失时 `ALTER TABLE` 补上。
+   *
+   * 与 `agent_tasks.group_id` 同款做法：`CREATE TABLE IF NOT EXISTS` 不会改已存在的表，
+   * 所以已有数据根要单独补列；老群一律落到 `coordinated`，v1 行为不变。
+   */
+  private ensureSpeechModeColumn(): void {
+    const columns = this.db.query("PRAGMA table_info(agent_groups)").all() as Array<{
+      name: string;
+    }>;
+    if (columns.some((column) => column.name === "speech_mode")) return;
+    this.db.exec(
+      `ALTER TABLE agent_groups ADD COLUMN speech_mode TEXT NOT NULL DEFAULT '${DEFAULT_SPEECH_MODE}'`,
+    );
   }
 
   // ──────────────────────────────────────────────
@@ -262,8 +297,8 @@ export class AgentGroupStore {
       .query(
         `INSERT INTO agent_groups
          (id, name, description, status, members_json, coordinator, max_rounds, idle_timeout_ms,
-          created_at, updated_at, created_by)
-         VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
+          speech_mode, created_at, updated_at, created_by)
+         VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -273,6 +308,7 @@ export class AgentGroupStore {
         input.coordinator?.trim() ?? "",
         positiveInt(input.maxRounds, DEFAULT_MAX_ROUNDS),
         positiveInt(input.idleTimeoutMs, DEFAULT_IDLE_TIMEOUT_MS),
+        parseSpeechMode(input.speechMode, true),
         at,
         at,
         input.createdBy?.trim() || "dashboard",
@@ -348,6 +384,10 @@ export class AgentGroupStore {
     if (patch.idleTimeoutMs !== undefined) {
       sets.push("idle_timeout_ms = ?");
       params.push(positiveInt(patch.idleTimeoutMs, DEFAULT_IDLE_TIMEOUT_MS));
+    }
+    if (patch.speechMode !== undefined) {
+      sets.push("speech_mode = ?");
+      params.push(parseSpeechMode(patch.speechMode, true));
     }
     params.push(id);
     this.db.query(`UPDATE agent_groups SET ${sets.join(", ")} WHERE id = ?`).run(...params);
@@ -512,4 +552,19 @@ function normalizeMembers(members: readonly GroupMember[]): GroupMember[] {
 function positiveInt(value: number | undefined, fallback: number): number {
   if (value === undefined || !Number.isFinite(value) || value <= 0) return fallback;
   return Math.floor(value);
+}
+
+/**
+ * 发言模式解析：未知值回落 `coordinated`（v1 默认）；`strict` 时非法值直接抛错。
+ *
+ * @param value - 待解析值（读库/内存里可能是任意字符串）
+ * @param strict - 写入口用：非法值不进库
+ */
+function parseSpeechMode(value: unknown, strict = false): GroupSpeechMode {
+  if (value === undefined || value === null || value === "") return DEFAULT_SPEECH_MODE;
+  if (value === "coordinated" || value === "free") return value;
+  if (strict) {
+    throw new Error(`非法发言模式: ${String(value)}（可选 coordinated / free）`);
+  }
+  return DEFAULT_SPEECH_MODE;
 }

@@ -67,6 +67,7 @@ export type {
   GroupMessageFromKind,
   GroupMessageKind,
   GroupMessageRecord,
+  GroupSpeechMode,
   CreateAgentGroupInput,
   UpdateAgentGroupInput,
   AppendGroupMessageInput,

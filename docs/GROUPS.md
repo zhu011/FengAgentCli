@@ -8,7 +8,7 @@
 
 | 表 | 角色 | 关键字段 |
 |---|---|---|
-| `agent_groups` | 群（对话聚合根） | `id(grp_…)` / `name` / `description` / `status(open|concluded)` / `members_json` / `coordinator` / `max_rounds` / `idle_timeout_ms` |
+| `agent_groups` | 群（对话聚合根） | `id(grp_…)` / `name` / `description` / `status(open|concluded)` / `members_json` / `coordinator` / `max_rounds` / `idle_timeout_ms` / `speech_mode` |
 | `group_messages` | 群聊日志（append-only） | `id(msg_…)` / `seq`（群内单调，1 起） / `from_kind` / `from_name` / `content` / `kind` / `agent_task_id` |
 
 - 任务不进群表：群内派发复用 `agent_tasks`（G2 加 `groupId` 语义），群消息只用
@@ -22,12 +22,12 @@
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
 | GET | `/api/groups` | `status` / `limit`（可选） | `{groups: GroupInfo[], runtimes: RuntimeInfo[]}` |
-| POST | `/api/groups` | `{name, description?, members: string[], maxRounds?}` | 201 `GroupInfo`；成员未注册/未启用 → **400** |
+| POST | `/api/groups` | `{name, description?, members: string[], maxRounds?, speechMode?}` | 201 `GroupInfo`；成员未注册/未启用 → **400** |
 | GET | `/api/groups/:id` | — | `{group, messages}`（**全量**消息，G1 不分页） |
 | POST | `/api/groups/:id/messages` | `{content, kind?: "chat"}` | 201 `GroupMessage`（`fromKind=human`、`fromName=human`）；已 `concluded` → **409** |
 | POST | `/api/groups/:id/agent-messages` | `{content, fromName, kind?}` | 201 `GroupMessage`（协调者 → `coordinator`，成员 runtime → `runtime`）；非成员 → **403**；已关群 → 409 |
 | POST | `/api/groups/:id/conclude` | — | `GroupInfo`（`status=concluded`，**幂等**：重复调用返回原样） |
-| PATCH | `/api/groups/:id` | `{name?, description?, members?, maxRounds?}` | `GroupInfo`（契约外的便利接口，改名/改成员用） |
+| PATCH | `/api/groups/:id` | `{name?, description?, members?, maxRounds?, speechMode?}` | `GroupInfo`（契约外的便利接口，改名/改成员/切模式用） |
 | GET | `/api/groups/:id/messages` | `after` / `limit`（可选） | `{messages, nextSeq}`（增量读取；SSE 重连同款语义） |
 | GET | `/api/groups/:id/stream` | `after`（可选，默认 0） | 群 SSE（见 §3） |
 
@@ -38,7 +38,7 @@ HTTP 状态 400 / 403 / 404 / 409。
 
 ```ts
 GroupInfo   { id, name, description, members: string[], status: "open"|"concluded",
-              maxRounds, createdAt, updatedAt, lastMessageAt? }
+              maxRounds, speechMode: "coordinated"|"free", createdAt, updatedAt, lastMessageAt? }
 GroupMessage{ id, groupId, seq, fromKind: "human"|"runtime"|"coordinator"|"system",
               fromName, content, kind: "chat"|"task_card"|"decision"|"system",
               agentTaskId?, createdAt }
@@ -101,7 +101,7 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
 
 ## 7. G3（已实现）：编排收敛 + 人在环
 
-`GroupOrchestrator`（`packages/server/src/group-orchestrator.ts`）三条独立策略，共用一个
+`GroupOrchestrator`（`packages/groups/src/group-orchestrator.ts`）三条独立策略，共用一个
 **幂等 `conclude()`**：
 
 | 策略 | 触发 | 行为 |
@@ -125,7 +125,45 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
   - 静默超时可配：`POST /api/groups` 与 `PATCH /api/groups/:id` 接受 `idleTimeoutMs`
     （默认 600000），`GroupInfo` 回显该字段供前端展示。
 
-## 8. 自测覆盖
+## 8. V2-3（已实现）：自治发言 —— `speechMode` / 发言预算 / @ 仲裁 / 轮数升级
+
+外部 agent 经 MCP 直连发言后，「谁说、何时说、何时停」从协调者调度变成域层策略。
+落点在 `@fengagent/groups`（`AgentGroupService` + `GroupOrchestrator`），**不新增调度进程**：
+
+| `speechMode` | 语义 |
+|---|---|
+| `coordinated`（缺省，v1 兼容） | 只有协调者调度回合；成员直连发言仍可用，但**不计轮、不占预算、不参与仲裁**（中途求助不改轮次模型） |
+| `free`（自治） | 成员之间直接发言/求助，收敛靠下面四闸 |
+
+free 模式四闸：
+
+1. **轮数升级**：`maxRounds` 是**总轮数**，一轮 = 一名成员的一组连续发言（同一人连发不增轮，
+   换人才 +1）；人类发言把轮数清零。到上限自动收口（system 说明写明「free 模式共 N 轮」）。
+2. **发言预算**：每成员每窗口最多 N 条（`GroupOrchestratorOptions.speechBudget`，默认 5 条 / 60s，
+   按成员分别计窗；协调者不计）。超预算的发言在**落库前**被拒：
+   `GroupError{code:"conflict"}` → HTTP **409**，消息不落库、不广播。
+3. **发言权仲裁**：消息正文里 `@某人`（MCP 的 `group_reply` 同样只是发一条带 `@` 的消息）→
+   下一发言权归他；持权期间其他成员插话被拒（409）。人 / 协调者可随时发言（主持人改派）；
+   没人被 @ 时发言权开放。`arbitration:"advisory"` 只记录不拦截。
+   `onTurn(groupId, speaker)` 在发言权转移时回调，宿主可据此派发任务。
+4. `idleTimeoutMs` / 人类拍板不变（拍板即收口）。
+
+实现要点：
+
+- **写前准入**：`AgentGroupService.onBeforeMessage(hook)` 是新增的**写前**钩子
+  （`onMessage` 是写后观察，管不住刷屏）。`GroupOrchestrator` 构造时自动注册，
+  free 模式下超额/抢权直接 409；钩子自身抛错按 fail-closed 处理。
+- **只拦「直接发言」**：准入上下文带 `source`（`human` / `agent` / `system` / `task-result`），
+  只有 `agent`（MCP、群工具、`agent-messages`）走预算与仲裁；服务端代写的任务结果
+  （`postRuntimeMessage`，`task_card` + `agentTaskId`）不占轮、不占预算、不改发言权，不会被 409 吞掉。
+- **状态可查询**：`orchestrator.getStatus(groupId)` →
+  `{speechMode, status, maxRounds, rounds, coordinatorTurns, lastSpeaker?, nextSpeaker?,
+  budget:{limit, windowMs, used, remaining}, idleTimeoutMs}`，前端状态条（V2-4）直接用。
+- **持久化**：`agent_groups.speech_mode`（老库自动 `ALTER TABLE` 补列，缺省 `coordinated`）；
+  便携 JSON store 同步补字段，老存档读成 `coordinated`。
+- **零回归**：`coordinated` 下 `onMessage` 走 v1 原路径，准入恒放行；v1 用例全部保持通过。
+
+## 9. 自测覆盖
 
 - `packages/agent/src/__tests__/agent-group-store.test.ts`（7）：建群/默认值/成员去重、
   列表与状态过滤、seq 单调、`after` 增量、尾部最近消息、关群禁言、未知群拒写。
@@ -142,3 +180,10 @@ GET /api/groups/:id/stream?after=<seq>       # 也接受 Last-Event-ID
   重置计数、静默超时 sweep 与幂等、human decision 立即收口、`POST /:id/stop` 幂等 +
   返回取消任务、`POST /:id/conclude` 留收口说明、`group_conclude` 工具（decision 落库 + 关群
   + 取消任务数）。
+- `packages/groups/src/__tests__/group-speech-v2.test.ts`（14，V2-3）：缺省 `coordinated` 回显与
+  v1 轮次语义、成员发言不计轮不占预算、人类发言清零并越过发言权；free 模式成员互发 + 换人计轮
+  + 到上限收口、连发只算一轮、在线切回 `coordinated`；预算窗口内第 N+1 条 409 且不落库、
+  跨窗口恢复、按成员分别计数；`@` 仲裁（被 @ 者持权、插话 409、回应后转移、协调者改派）、
+  `advisory` 只记录、`onTurn` 回调；`getStatus` 快照；老库补 `speech_mode` 列。
+- `packages/group-plugin/src/__tests__/portable-store.test.ts`（2，V2-3）：便携 JSON store 的
+  `speechMode` 缺省/读写，老存档补 `coordinated`。

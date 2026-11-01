@@ -7253,6 +7253,7 @@ class AgentGroupService {
   store;
   subscribers = new Map;
   messageHooks = new Set;
+  admissionHooks = new Set;
   runtimes;
   defaultCoordinator;
   constructor(options) {
@@ -7275,6 +7276,7 @@ class AgentGroupService {
       coordinator,
       ...request.maxRounds === undefined ? {} : { maxRounds: request.maxRounds },
       ...request.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: request.idleTimeoutMs },
+      ...request.speechMode === undefined ? {} : { speechMode: request.speechMode },
       ...request.createdBy === undefined ? {} : { createdBy: request.createdBy }
     });
     this.postSystemMessage(group.id, "群已创建");
@@ -7312,7 +7314,8 @@ class AgentGroupService {
         }))
       },
       ...patch.maxRounds === undefined ? {} : { maxRounds: patch.maxRounds },
-      ...patch.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: patch.idleTimeoutMs }
+      ...patch.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: patch.idleTimeoutMs },
+      ...patch.speechMode === undefined ? {} : { speechMode: patch.speechMode }
     });
     const dto = this.toGroupDto(group);
     this.emit(id, { type: "group", group: dto });
@@ -7347,7 +7350,7 @@ class AgentGroupService {
       fromKind: "human",
       fromName: "human",
       ...request.kind === undefined ? {} : { kind: request.kind }
-    });
+    }, "human");
   }
   postAgentMessage(id, request) {
     const group = this.store.get(id);
@@ -7367,7 +7370,7 @@ class AgentGroupService {
       fromKind: isCoordinator ? "coordinator" : "runtime",
       fromName,
       ...request.kind === undefined ? {} : { kind: request.kind }
-    });
+    }, "agent");
   }
   postSystemMessage(id, content) {
     return this.appendAndEmit(id, {
@@ -7375,7 +7378,7 @@ class AgentGroupService {
       fromKind: "system",
       fromName: "system",
       kind: "system"
-    });
+    }, "system");
   }
   postRuntimeMessage(id, input) {
     return this.appendAndEmit(id, {
@@ -7384,7 +7387,7 @@ class AgentGroupService {
       fromName: input.runtime,
       ...input.kind === undefined ? {} : { kind: input.kind },
       ...input.agentTaskId === undefined ? {} : { agentTaskId: input.agentTaskId }
-    });
+    }, "task-result");
   }
   subscribe(id, listener) {
     const set = this.subscribers.get(id) ?? new Set;
@@ -7402,12 +7405,20 @@ class AgentGroupService {
       this.messageHooks.delete(hook);
     };
   }
+  onBeforeMessage(hook) {
+    this.admissionHooks.add(hook);
+    return () => {
+      this.admissionHooks.delete(hook);
+    };
+  }
   close() {
     this.subscribers.clear();
     this.messageHooks.clear();
+    this.admissionHooks.clear();
     this.store.close();
   }
-  appendAndEmit(id, input) {
+  appendAndEmit(id, input, source) {
+    this.assertAdmitted(id, input, source);
     let message;
     try {
       message = this.store.appendMessage({ groupId: id, ...input });
@@ -7440,6 +7451,29 @@ class AgentGroupService {
       throw new GroupError(`未注册或未启用的 runtime: ${unknown.join(", ")}`, "bad_request");
     }
   }
+  assertAdmitted(id, input, source) {
+    if (this.admissionHooks.size === 0)
+      return;
+    const context = {
+      groupId: id,
+      source,
+      fromKind: input.fromKind,
+      fromName: input.fromName,
+      content: input.content,
+      ...input.kind === undefined ? {} : { kind: input.kind }
+    };
+    for (const hook of this.admissionHooks) {
+      let result;
+      try {
+        result = hook(context);
+      } catch (err) {
+        throw new GroupError(`发言准入校验失败: ${err instanceof Error ? err.message : String(err)}`, "conflict");
+      }
+      if (!result.allowed) {
+        throw new GroupError(result.reason, result.code);
+      }
+    }
+  }
   emit(id, event) {
     for (const listener of this.subscribers.get(id) ?? []) {
       try {
@@ -7459,6 +7493,7 @@ class AgentGroupService {
       status: group.status,
       maxRounds: group.maxRounds,
       idleTimeoutMs: group.idleTimeoutMs,
+      speechMode: group.speechMode,
       createdAt: new Date(group.createdAt).toISOString(),
       updatedAt: new Date(group.updatedAt).toISOString(),
       ...last === null ? {} : { lastMessageAt: new Date(last.createdAt).toISOString() }
@@ -7492,19 +7527,32 @@ function uniqueNames(names) {
 }
 // ../groups/src/group-orchestrator.ts
 var log2 = createLogger("group-orchestrator");
+var DEFAULT_SPEECH_BUDGET_LIMIT = 5;
+var DEFAULT_SPEECH_BUDGET_WINDOW_MS = 60000;
 
 class GroupOrchestrator {
   groups;
   cancelGroupTasks;
   now;
   sweepIntervalMs;
+  budget;
+  arbitration;
+  onTurn;
   states = new Map;
+  disposeAdmission;
   timer;
   constructor(options) {
     this.groups = options.groups;
     this.cancelGroupTasks = options.cancelGroupTasks;
     this.now = options.now ?? Date.now;
     this.sweepIntervalMs = options.sweepIntervalMs ?? 5000;
+    this.budget = {
+      limit: positiveInt(options.speechBudget?.limit, DEFAULT_SPEECH_BUDGET_LIMIT),
+      windowMs: positiveInt(options.speechBudget?.windowMs, DEFAULT_SPEECH_BUDGET_WINDOW_MS)
+    };
+    this.arbitration = options.arbitration ?? "enforce";
+    this.onTurn = options.onTurn;
+    this.disposeAdmission = this.groups.onBeforeMessage((context) => this.admit(context));
   }
   start() {
     if (this.timer !== undefined || this.sweepIntervalMs <= 0)
@@ -7525,16 +7573,22 @@ class GroupOrchestrator {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    this.disposeAdmission();
   }
   onMessage(groupId, message) {
     const group = this.groups.getGroup(groupId);
     if (!group || group.status !== "open")
       return;
     const at = Date.parse(message.createdAt);
-    const state = this.state(groupId, Number.isFinite(at) ? at : this.now());
+    const when = Number.isFinite(at) ? at : this.now();
+    const state = this.state(groupId, when);
     if (message.fromKind === "human") {
       state.coordinatorTurns = 0;
-      state.lastActivityAt = Number.isFinite(at) ? at : this.now();
+      state.rounds = 0;
+      state.lastSpeaker = undefined;
+      state.nextSpeaker = undefined;
+      state.budget.clear();
+      state.lastActivityAt = when;
       if (message.kind === "decision") {
         this.conclude(groupId, {
           by: "human",
@@ -7544,7 +7598,15 @@ class GroupOrchestrator {
       }
       return;
     }
-    state.lastActivityAt = Number.isFinite(at) ? at : this.now();
+    if (message.fromKind === "system")
+      return;
+    state.lastActivityAt = when;
+    if (group.speechMode === "free") {
+      if (message.kind === "task_card" || message.agentTaskId !== undefined)
+        return;
+      this.onFreeMessage(group, state, message, when);
+      return;
+    }
     if (message.fromKind === "coordinator") {
       state.coordinatorTurns += 1;
       if (group.maxRounds > 0 && state.coordinatorTurns >= group.maxRounds) {
@@ -7554,6 +7616,36 @@ class GroupOrchestrator {
         });
       }
     }
+  }
+  getStatus(groupId) {
+    const group = this.groups.getGroup(groupId);
+    if (!group)
+      return null;
+    const record = this.groups.store.get(groupId);
+    const state = this.states.get(groupId);
+    const at = this.now();
+    const coordinator = record?.coordinator ?? "";
+    const used = {};
+    const remaining = {};
+    for (const name of group.members) {
+      if (name === coordinator)
+        continue;
+      const count = state === undefined ? 0 : countInWindow(state.budget.get(name), at, this.budget.windowMs);
+      used[name] = count;
+      remaining[name] = Math.max(0, this.budget.limit - count);
+    }
+    return {
+      groupId,
+      speechMode: group.speechMode,
+      status: group.status,
+      maxRounds: group.maxRounds,
+      rounds: state?.rounds ?? 0,
+      coordinatorTurns: state?.coordinatorTurns ?? 0,
+      ...state?.lastSpeaker === undefined ? {} : { lastSpeaker: state.lastSpeaker },
+      ...state?.nextSpeaker === undefined ? {} : { nextSpeaker: state.nextSpeaker },
+      budget: { limit: this.budget.limit, windowMs: this.budget.windowMs, used, remaining },
+      idleTimeoutMs: record?.idleTimeoutMs ?? group.idleTimeoutMs
+    };
   }
   sweepIdle(now) {
     const at = now ?? this.now();
@@ -7614,6 +7706,85 @@ class GroupOrchestrator {
   stop(groupId) {
     return this.conclude(groupId, { by: "human", reason: "人类中途关停" });
   }
+  onFreeMessage(group, state, message, at) {
+    const speaker = message.fromName;
+    if (state.lastSpeaker !== speaker) {
+      state.rounds += 1;
+      state.lastSpeaker = speaker;
+    }
+    const stamps = state.budget.get(speaker) ?? [];
+    stamps.push(at);
+    state.budget.set(speaker, stamps);
+    const addressed = this.mentionedMember(group, message.content, speaker);
+    state.nextSpeaker = addressed;
+    if (addressed !== undefined && this.onTurn) {
+      try {
+        this.onTurn(group.id, addressed);
+      } catch (err) {
+        log2.warn("onTurn", `发言权回调失败（group=${group.id}, speaker=${addressed}）: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (group.maxRounds > 0 && state.rounds >= group.maxRounds) {
+      this.conclude(group.id, {
+        by: "system",
+        reason: `达到轮次上限（free 模式共 ${group.maxRounds} 轮，一轮 = 一名成员的一组连续发言），` + "自动收口"
+      });
+    }
+  }
+  admit(context) {
+    if (context.source !== "agent")
+      return { allowed: true };
+    const group = this.groups.getGroup(context.groupId);
+    if (!group || group.status !== "open" || group.speechMode !== "free") {
+      return { allowed: true };
+    }
+    const coordinator = this.groups.store.get(context.groupId)?.coordinator ?? "";
+    if (coordinator !== "" && context.fromName === coordinator) {
+      return { allowed: true };
+    }
+    if (this.arbitration === "enforce") {
+      const floor = this.states.get(context.groupId)?.nextSpeaker;
+      if (floor !== undefined && floor !== context.fromName) {
+        return {
+          allowed: false,
+          code: "conflict",
+          reason: `发言权在 ${floor}（被上一条消息 @ 指定），等其回应或由协调者改派`
+        };
+      }
+    }
+    const at = this.now();
+    const state = this.states.get(context.groupId);
+    const used = state === undefined ? 0 : countInWindow(state.budget.get(context.fromName), at, this.budget.windowMs);
+    if (used >= this.budget.limit) {
+      return {
+        allowed: false,
+        code: "conflict",
+        reason: `发言预算已用尽（${Math.round(this.budget.windowMs / 1000)}s 内最多 ${this.budget.limit} 条），` + "等窗口刷新或由协调者收口"
+      };
+    }
+    return { allowed: true };
+  }
+  mentionedMember(group, content, self) {
+    let best;
+    for (const name of group.members) {
+      if (name === "" || name === self)
+        continue;
+      const needle = `@${name}`;
+      let from = 0;
+      for (;; ) {
+        const index = content.indexOf(needle, from);
+        if (index === -1)
+          break;
+        if (isMentionBoundary(content, index + needle.length)) {
+          if (best === undefined || index < best.index)
+            best = { index, name };
+          break;
+        }
+        from = index + 1;
+      }
+    }
+    return best?.name;
+  }
   state(groupId, at) {
     const existing = this.states.get(groupId);
     if (existing)
@@ -7622,11 +7793,34 @@ class GroupOrchestrator {
     const seeded = group?.lastMessageAt === undefined ? at : Date.parse(group.lastMessageAt);
     const state = {
       coordinatorTurns: 0,
-      lastActivityAt: Number.isFinite(seeded) ? seeded : at
+      lastActivityAt: Number.isFinite(seeded) ? seeded : at,
+      rounds: 0,
+      budget: new Map
     };
     this.states.set(groupId, state);
     return state;
   }
+}
+function countInWindow(stamps, at, windowMs) {
+  if (stamps === undefined || stamps.length === 0)
+    return 0;
+  let count = 0;
+  for (const stamp of stamps) {
+    if (at - stamp < windowMs)
+      count += 1;
+  }
+  return count;
+}
+function isMentionBoundary(content, end) {
+  if (end >= content.length)
+    return true;
+  const next = content[end] ?? "";
+  return !/[A-Za-z0-9_-]/.test(next);
+}
+function positiveInt(value, fallback) {
+  if (value === undefined || !Number.isFinite(value) || value <= 0)
+    return fallback;
+  return Math.floor(value);
 }
 // ../core/src/permission.ts
 var ALLOW = { decision: "allow" };
@@ -17285,7 +17479,7 @@ function createSkillTool(skillLoader) {
   };
 }
 var skillTool = createSkillTool();
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
+// ../tools/node_modules/zod/v4/core/core.js
 var NEVER3 = Object.freeze({
   status: "aborted"
 });
@@ -17345,7 +17539,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
+// ../tools/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -17859,7 +18053,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
+// ../tools/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -17933,7 +18127,7 @@ function formatError(error, _mapper) {
   return fieldErrors;
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
+// ../tools/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -17982,7 +18176,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   } : { success: true, data: result.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
+// ../tools/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -18041,7 +18235,7 @@ var _null = /null/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
+// ../tools/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -18425,7 +18619,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
+// ../tools/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -18463,14 +18657,14 @@ class Doc {
   }
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
+// ../tools/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 0,
   patch: 0
 };
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
+// ../tools/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -19747,7 +19941,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
+// ../tools/node_modules/zod/v4/locales/en.js
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -19864,7 +20058,7 @@ function en_default3() {
     localeError: error()
   };
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
+// ../tools/node_modules/zod/v4/core/registries.js
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 
@@ -19914,7 +20108,7 @@ function registry() {
   return new $ZodRegistry;
 }
 var globalRegistry = /* @__PURE__ */ registry();
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
+// ../tools/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -20452,7 +20646,7 @@ function getLiteralValue(schema) {
     return directValue;
   return;
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
+// ../tools/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -20493,7 +20687,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
+// ../tools/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -20522,13 +20716,13 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
+// ../tools/node_modules/zod/v4/classic/parse.js
 var parse3 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse3 = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
+// ../tools/node_modules/zod/v4/classic/schemas.js
 var ZodType3 = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   inst.def = def;
@@ -21173,7 +21367,7 @@ function superRefine(fn) {
 function preprocess(fn, schema) {
   return pipe(transform(fn), schema);
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/compat.js
+// ../tools/node_modules/zod/v4/classic/compat.js
 var ZodIssueCode3 = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -21187,7 +21381,7 @@ var ZodIssueCode3 = {
   invalid_value: "invalid_value",
   custom: "custom"
 };
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/coerce.js
+// ../tools/node_modules/zod/v4/classic/coerce.js
 var exports_coerce = {};
 __export(exports_coerce, {
   string: () => string3,
@@ -21212,7 +21406,7 @@ function date3(params) {
   return _coercedDate(ZodDate3, params);
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
+// ../tools/node_modules/zod/v4/classic/external.js
 config(en_default3());
 
 // ../tools/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js
@@ -25322,6 +25516,12 @@ function normalizeMembers(members) {
   }
   return result;
 }
+function normalizeGroup(group) {
+  return {
+    ...group,
+    speechMode: group.speechMode === "free" ? "free" : "coordinated"
+  };
+}
 
 class PortableGroupStore {
   state;
@@ -25333,7 +25533,10 @@ class PortableGroupStore {
     if (existsSync4(this.file)) {
       try {
         const parsed = JSON.parse(readFileSync2(this.file, "utf8"));
-        this.state = { groups: parsed.groups ?? [], messages: parsed.messages ?? [] };
+        this.state = {
+          groups: (parsed.groups ?? []).map(normalizeGroup),
+          messages: parsed.messages ?? []
+        };
       } catch {
         this.state = { groups: [], messages: [] };
       }
@@ -25359,6 +25562,7 @@ class PortableGroupStore {
       coordinator: input.coordinator?.trim() || "fengagent",
       maxRounds: input.maxRounds ?? 20,
       idleTimeoutMs: input.idleTimeoutMs ?? 600000,
+      speechMode: input.speechMode === "free" ? "free" : "coordinated",
       createdAt: at,
       updatedAt: at,
       createdBy: input.createdBy ?? "unknown"
@@ -25395,6 +25599,7 @@ class PortableGroupStore {
       ...patch.coordinator !== undefined ? { coordinator: patch.coordinator } : {},
       ...patch.maxRounds !== undefined ? { maxRounds: patch.maxRounds } : {},
       ...patch.idleTimeoutMs !== undefined ? { idleTimeoutMs: patch.idleTimeoutMs } : {},
+      ...patch.speechMode !== undefined ? { speechMode: patch.speechMode } : {},
       updatedAt: patch.at ?? this.now()
     };
     this.state.groups[idx] = next;
@@ -25472,7 +25677,10 @@ function groupPlugin(options = {}) {
     });
     const orchestrator = new GroupOrchestrator({
       groups: service,
-      ...options.cancelGroupTasks === undefined ? {} : { cancelGroupTasks: options.cancelGroupTasks }
+      ...options.cancelGroupTasks === undefined ? {} : { cancelGroupTasks: options.cancelGroupTasks },
+      ...options.speechBudget === undefined ? {} : { speechBudget: options.speechBudget },
+      ...options.arbitration === undefined ? {} : { arbitration: options.arbitration },
+      ...options.onTurn === undefined ? {} : { onTurn: options.onTurn }
     });
     service.onMessage((groupId, message) => orchestrator.onMessage(groupId, message));
     orchestrator.start();

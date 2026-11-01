@@ -23,6 +23,7 @@ import type {
   GroupMessageFromKind,
   GroupMessageKind,
   GroupMessageRecord,
+  GroupSpeechMode,
   ListAgentGroupsFilter,
   ListGroupMessagesOptions,
   UpdateAgentGroupInput,
@@ -74,6 +75,12 @@ export interface GroupInfoDto {
   maxRounds: number;
   /** 静默超时（毫秒，G3）：超过即自动收口；前端可据此展示/提示 */
   idleTimeoutMs: number;
+  /**
+   * 发言模式（V2-3）：
+   * - `coordinated`（缺省）：v1 协调者调度回合；
+   * - `free`：成员直连发言，收敛走轮数 / 发言预算 / 静默 / 拍板。
+   */
+  speechMode: GroupSpeechMode;
   createdAt: string;
   updatedAt: string;
   lastMessageAt?: string;
@@ -108,6 +115,8 @@ export interface CreateGroupRequest {
   maxRounds?: number;
   /** 静默超时（毫秒，G3）；缺省 10 分钟 */
   idleTimeoutMs?: number;
+  /** 发言模式（V2-3）；缺省 `coordinated`（v1 兼容） */
+  speechMode?: GroupSpeechMode;
   /** 协调者名（缺省 `fengagent`；会作为成员出现在 `members` 里） */
   coordinator?: string;
   createdBy?: string;
@@ -121,6 +130,8 @@ export interface UpdateGroupRequest {
   members?: string[];
   maxRounds?: number;
   idleTimeoutMs?: number;
+  /** 发言模式（V2-3）：`coordinated` ↔ `free` 可在线切换 */
+  speechMode?: GroupSpeechMode;
 }
 
 /** 人发言请求（= 前端 `GroupMessageRequest`） */
@@ -135,6 +146,40 @@ export interface PostAgentMessageRequest {
   fromName: string;
   kind?: GroupMessageKind;
 }
+
+/**
+ * 消息来源（准入用，不落库）：
+ * - `human`：人在群里发言；
+ * - `agent`：成员/协调者**直接**发言（MCP / 群工具 / REST `agent-messages`）—— 只对这路做预算与仲裁；
+ * - `system`：系统提示（建群、收口说明等）；
+ * - `task-result`：服务端代写的外部任务结果（G2 `postRuntimeMessage`，带 `agentTaskId`）。
+ */
+export type GroupMessageSource = "human" | "agent" | "system" | "task-result";
+
+/** 落库前的发言准入上下文（V2-3：发言预算 / 发言权仲裁在这里拦） */
+export interface GroupMessageAdmissionContext {
+  groupId: string;
+  source: GroupMessageSource;
+  fromKind: GroupMessageFromKind;
+  fromName: string;
+  content: string;
+  kind?: GroupMessageKind;
+}
+
+/** 准入结论：放行，或带错误码拒绝（拒绝时消息不落库） */
+export type GroupMessageAdmissionResult =
+  | { allowed: true }
+  | { allowed: false; code: GroupErrorCode; reason: string };
+
+/**
+ * 发言准入钩子（V2-3）。
+ *
+ * 与 `onMessage`（落库后观察）互补：这里在**写库前**判定，返回 `allowed:false`
+ * 会抛 `GroupError`（`conflict` → HTTP 409），消息不会落库、也不会广播。
+ */
+export type GroupMessageAdmission = (
+  context: GroupMessageAdmissionContext,
+) => GroupMessageAdmissionResult;
 
 /** 群服务选项 */
 export interface AgentGroupServiceOptions {
@@ -155,6 +200,7 @@ export class AgentGroupService {
   readonly store: GroupStore;
   private readonly subscribers = new Map<string, Set<(event: GroupStreamEvent) => void>>();
   private readonly messageHooks = new Set<(groupId: string, message: GroupMessageDto) => void>();
+  private readonly admissionHooks = new Set<GroupMessageAdmission>();
   private readonly runtimes: () => GroupRuntimeCard[];
   private readonly defaultCoordinator: string;
 
@@ -192,6 +238,7 @@ export class AgentGroupService {
       ...(request.idleTimeoutMs === undefined
         ? {}
         : { idleTimeoutMs: request.idleTimeoutMs }),
+      ...(request.speechMode === undefined ? {} : { speechMode: request.speechMode }),
       ...(request.createdBy === undefined ? {} : { createdBy: request.createdBy }),
     });
     // 契约：建群落一条 system 消息「群已创建」
@@ -251,6 +298,7 @@ export class AgentGroupService {
       ...(patch.idleTimeoutMs === undefined
         ? {}
         : { idleTimeoutMs: patch.idleTimeoutMs }),
+      ...(patch.speechMode === undefined ? {} : { speechMode: patch.speechMode }),
     });
     const dto = this.toGroupDto(group);
     this.emit(id, { type: "group", group: dto });
@@ -306,12 +354,16 @@ export class AgentGroupService {
    * @param request - 内容 + 种类
    */
   postHumanMessage(id: string, request: PostHumanMessageRequest): GroupMessageDto {
-    return this.appendAndEmit(id, {
-      content: request.content,
-      fromKind: "human",
-      fromName: "human",
-      ...(request.kind === undefined ? {} : { kind: request.kind }),
-    });
+    return this.appendAndEmit(
+      id,
+      {
+        content: request.content,
+        fromKind: "human",
+        fromName: "human",
+        ...(request.kind === undefined ? {} : { kind: request.kind }),
+      },
+      "human",
+    );
   }
 
   /**
@@ -333,22 +385,30 @@ export class AgentGroupService {
       throw new GroupError(`发言人不在群成员里: ${fromName}`, "forbidden");
     }
     const isCoordinator = fromName === group.coordinator;
-    return this.appendAndEmit(id, {
-      content: request.content,
-      fromKind: isCoordinator ? "coordinator" : "runtime",
-      fromName,
-      ...(request.kind === undefined ? {} : { kind: request.kind }),
-    });
+    return this.appendAndEmit(
+      id,
+      {
+        content: request.content,
+        fromKind: isCoordinator ? "coordinator" : "runtime",
+        fromName,
+        ...(request.kind === undefined ? {} : { kind: request.kind }),
+      },
+      "agent",
+    );
   }
 
   /** 系统提示（建群、关群等），不占成员身份 */
   postSystemMessage(id: string, content: string): GroupMessageDto {
-    return this.appendAndEmit(id, {
-      content,
-      fromKind: "system",
-      fromName: "system",
-      kind: "system",
-    });
+    return this.appendAndEmit(
+      id,
+      {
+        content,
+        fromKind: "system",
+        fromName: "system",
+        kind: "system",
+      },
+      "system",
+    );
   }
 
   /**
@@ -366,13 +426,17 @@ export class AgentGroupService {
       kind?: GroupMessageKind;
     },
   ): GroupMessageDto {
-    return this.appendAndEmit(id, {
-      content: input.content,
-      fromKind: "runtime",
-      fromName: input.runtime,
-      ...(input.kind === undefined ? {} : { kind: input.kind }),
-      ...(input.agentTaskId === undefined ? {} : { agentTaskId: input.agentTaskId }),
-    });
+    return this.appendAndEmit(
+      id,
+      {
+        content: input.content,
+        fromKind: "runtime",
+        fromName: input.runtime,
+        ...(input.kind === undefined ? {} : { kind: input.kind }),
+        ...(input.agentTaskId === undefined ? {} : { agentTaskId: input.agentTaskId }),
+      },
+      "task-result",
+    );
   }
 
   /** 订阅群事件（SSE） */
@@ -400,10 +464,27 @@ export class AgentGroupService {
     };
   }
 
+  /**
+   * 订阅「落库前准入」（V2-3：发言预算 / 发言权仲裁）。
+   *
+   * 钩子按注册顺序执行，**任一**返回 `allowed:false` 即拒绝（fail-closed），
+   * 抛 `GroupError`（带钩子给的 code，默认 `conflict`）。钩子自己抛错按拒绝处理，
+   * 避免策略异常时把群刷穿。
+   *
+   * @param hook - 准入判定；返回 `{allowed:true}` 放行
+   */
+  onBeforeMessage(hook: GroupMessageAdmission): () => void {
+    this.admissionHooks.add(hook);
+    return () => {
+      this.admissionHooks.delete(hook);
+    };
+  }
+
   /** 关闭（SSE 订阅清空 + 关库） */
   close(): void {
     this.subscribers.clear();
     this.messageHooks.clear();
+    this.admissionHooks.clear();
     this.store.close();
   }
 
@@ -421,7 +502,9 @@ export class AgentGroupService {
       kind?: GroupMessageKind;
       agentTaskId?: string;
     },
+    source: GroupMessageSource,
   ): GroupMessageDto {
+    this.assertAdmitted(id, input, source);
     let message: GroupMessageRecord;
     try {
       message = this.store.appendMessage({ groupId: id, ...input });
@@ -454,6 +537,50 @@ export class AgentGroupService {
     }
   }
 
+  /**
+   * 落库前准入（V2-3）：任一钩子拒绝即抛 `GroupError`，消息不落库。
+   *
+   * 钩子抛错按拒绝处理（fail-closed）——策略自己坏了也不能让群被刷穿。
+   *
+   * @param id - 群 id
+   * @param input - 待写入的消息字段
+   * @param source - 消息来源（只有 `agent` 会走预算/仲裁）
+   */
+  private assertAdmitted(
+    id: string,
+    input: {
+      content: string;
+      fromKind: GroupMessageFromKind;
+      fromName: string;
+      kind?: GroupMessageKind;
+    },
+    source: GroupMessageSource,
+  ): void {
+    if (this.admissionHooks.size === 0) return;
+    const context: GroupMessageAdmissionContext = {
+      groupId: id,
+      source,
+      fromKind: input.fromKind,
+      fromName: input.fromName,
+      content: input.content,
+      ...(input.kind === undefined ? {} : { kind: input.kind }),
+    };
+    for (const hook of this.admissionHooks) {
+      let result: GroupMessageAdmissionResult;
+      try {
+        result = hook(context);
+      } catch (err) {
+        throw new GroupError(
+          `发言准入校验失败: ${err instanceof Error ? err.message : String(err)}`,
+          "conflict",
+        );
+      }
+      if (!result.allowed) {
+        throw new GroupError(result.reason, result.code);
+      }
+    }
+  }
+
   private emit(id: string, event: GroupStreamEvent): void {
     for (const listener of this.subscribers.get(id) ?? []) {
       try {
@@ -477,6 +604,7 @@ export class AgentGroupService {
       status: group.status,
       maxRounds: group.maxRounds,
       idleTimeoutMs: group.idleTimeoutMs,
+      speechMode: group.speechMode,
       createdAt: new Date(group.createdAt).toISOString(),
       updatedAt: new Date(group.updatedAt).toISOString(),
       ...(last === null ? {} : { lastMessageAt: new Date(last.createdAt).toISOString() }),

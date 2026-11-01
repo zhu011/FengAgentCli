@@ -30,6 +30,12 @@ export interface GroupPluginOptions {
   runtimes?: () => Array<{ name: string; enabled: boolean }>;
   /** 取消某群未终态任务（G3 关停语义；缺省无操作） */
   cancelGroupTasks?: (groupId: string) => string[];
+  /** 发言预算（V2-3；free 模式，缺省 5 条 / 60s） */
+  speechBudget?: { limit?: number; windowMs?: number };
+  /** 发言权仲裁强度（V2-3；缺省 `enforce`） */
+  arbitration?: "enforce" | "advisory";
+  /** 发言权转移回调（V2-3；宿主可据此派发任务） */
+  onTurn?: (groupId: string, speaker: string) => void;
   /** 装配完成回调（server 由此拿 service/orchestrator 挂 REST 路由） */
   onReady?: (instances: { service: AgentGroupService; orchestrator: GroupOrchestrator }) => void;
 }
@@ -55,6 +61,9 @@ export function groupPlugin(options: GroupPluginOptions = {}) {
     const orchestrator = new GroupOrchestrator({
       groups: service,
       ...(options.cancelGroupTasks === undefined ? {} : { cancelGroupTasks: options.cancelGroupTasks }),
+      ...(options.speechBudget === undefined ? {} : { speechBudget: options.speechBudget }),
+      ...(options.arbitration === undefined ? {} : { arbitration: options.arbitration }),
+      ...(options.onTurn === undefined ? {} : { onTurn: options.onTurn }),
     });
     service.onMessage((groupId, message) => orchestrator.onMessage(groupId, message));
     orchestrator.start();
