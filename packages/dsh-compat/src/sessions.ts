@@ -7,10 +7,12 @@
  *   （见 `projection.ts`，有损性在那里逐条写明）；
  * - 写：`create` / `fork` → `storage.saveSession` + `saveMessages`；
  * - 持久化屏障：`flush` → `storage.flush()`（图存储落盘；会话本身逐条同步写）；
- * - 事件溯源生命周期（`prepare` / `enter` / `announce`、`session.append`、
- *   `session.surface`）**明确不支持**：FengAgentCli 没有 append-only 事件日志
- *   作为会话事实源，假装支持会让 dsh 插件的写入静默丢失。调用即抛
- *   {@link DshContractUnsupportedError}。
+ * - `prepare` / `enter` / `announce`（dsh 的「未发布创建事务」）**明确不支持**：
+ *   FengAgentCli 的创建就是一次普通存储写，没有可回滚的中间态。调用即抛
+ *   {@link DshContractUnsupportedError}；
+ * - `session.append`：装到 `dsh-services` 上时走**进程内领域事件日志**
+ *   （`session-events.ts`），并驱动 `ctx.sessionProjections`；单独 new
+ *   {@link SessionsCompat}（不带事件日志）时仍按「不支持」抛错，行为不变。
  *
  * 身份约定：dsh 用 `session-<n>` 这类 id；这里只要调用方给 id 就原样使用，
  * 不给则用 FengAgentCli 的 uuid。
@@ -33,11 +35,13 @@ import {
   projectSessionEvents,
   type ProjectedSessionEvent,
 } from "./projection.ts";
+import type { SessionEventLog } from "./session-events.ts";
+import type { SessionProjectionsCompat } from "./session-projections.ts";
 
 /** 不支持事件溯源写路径的统一说明 */
 const EVENT_SOURCED_DETAIL =
   "FengAgentCli persists messages (SQLite sessions/messages), not an append-only session event log; " +
-  "the event-sourced write path lands with the P3/P4 event-log bridge";
+  "the in-process event log only exists when dsh-services wires one in";
 
 /** 会话创建元数据在内存中的覆盖（FengAgentCli 的 sessions 表没有这些列） */
 interface SessionHeaderOverride {
@@ -48,12 +52,21 @@ interface SessionHeaderOverride {
   readonly delegationDepth?: number;
 }
 
+/** `session.append` 的接线（有事件日志才可用） */
+export interface SessionEventBridge {
+  /** 领域事件日志 */
+  readonly log: SessionEventLog;
+  /** 投影注册表（可选；有则每追加一条事件驱动一格） */
+  readonly projections?: SessionProjectionsCompat;
+}
+
 /**
  * dsh `Session` 的只读投影。
  *
  * 每次读 `events` 都从存储重新投影，保证看到最新消息；`seq` 在消息追加后
  * 会整体位移（投影是派生视图，不是稳定日志），这是与 dsh 的关键差异，
- * 已在契约文档中标注。
+ * 已在契约文档中标注。装了事件桥之后，`events` 末尾会接上领域事件
+ * （`todo/write` 等），同样按读取时的消息条数重排 `seq`。
  */
 export class CompatSession implements DshSessionLike {
   private readonly headerValue: DshSessionHeader;
@@ -62,6 +75,7 @@ export class CompatSession implements DshSessionLike {
     readonly id: string,
     private readonly load: () => Session | null | undefined,
     override: SessionHeaderOverride = {},
+    private readonly bridge?: SessionEventBridge,
   ) {
     const session = load();
     this.headerValue = Object.freeze({
@@ -82,16 +96,40 @@ export class CompatSession implements DshSessionLike {
   }
 
   get events(): readonly DshSessionEvent[] {
-    return projectSessionEvents(this.messages).map(({ seq, type, time, data }) => ({
-      seq,
-      type,
-      time,
-      data,
-    }));
+    const projected: DshSessionEvent[] = projectSessionEvents(this.messages).map(
+      ({ seq, type, time, data }) => ({ seq, type, time, data }),
+    );
+    const appended = this.bridge?.log.list(this.id) ?? [];
+    if (appended.length === 0) return projected;
+    const base = projected.length;
+    return [
+      ...projected,
+      ...appended.map((event, index) => ({ ...event, seq: base + index })),
+    ];
   }
 
-  append(_type?: string, _data?: unknown): never {
-    throw new DshContractUnsupportedError("session.append", EVENT_SOURCED_DETAIL);
+  /**
+   * 追加一条领域事件（`todo/write` 这类）。
+   *
+   * @param type - 事件类型
+   * @param data - 事件负载（整体状态，不是增量）
+   * @returns 已提交的事件
+   * @throws 没有接线事件日志时抛「不支持」
+   */
+  append(type?: string, data?: unknown): DshSessionEvent {
+    if (!this.bridge) {
+      throw new DshContractUnsupportedError("session.append", EVENT_SOURCED_DETAIL);
+    }
+    if (typeof type !== "string" || type.length === 0) {
+      throw new DshContractError("session.append", "event type must be a non-empty string");
+    }
+    const raw = this.bridge.log.append(this.id, type, data);
+    // seq 与 `events` 的拼接视图对齐（消息投影在前、领域事件在后），
+    // 让投影的 `asOfSeq` 和读到的日志位置是同一个编号空间
+    const base = projectSessionEvents(this.messages).length;
+    const event: DshSessionEvent = { ...raw, seq: base + raw.seq };
+    this.bridge.projections?.drive(this, event);
+    return event;
   }
 
   requestHeader(): undefined {
@@ -107,15 +145,32 @@ export class CompatSession implements DshSessionLike {
   }
 }
 
+/** `dsh-services` 装配时传入的事件桥选项 */
+export interface SessionsCompatOptions {
+  /** 进程内领域事件日志（省略则 `session.append` 仍不支持） */
+  readonly events?: SessionEventLog;
+  /** 领域事件驱动的投影注册表 */
+  readonly projections?: SessionProjectionsCompat;
+}
+
 /** `ctx.sessions` 的映射实现 */
 export class SessionsCompat implements DshSessionsLike {
   private readonly live = new Map<string, CompatSession>();
   private readonly headers = new Map<string, SessionHeaderOverride>();
+  private readonly bridge?: SessionEventBridge;
 
   constructor(
     private readonly storage: StorageService,
     private readonly defaultModel: () => string,
-  ) {}
+    options: SessionsCompatOptions = {},
+  ) {
+    if (options.events) {
+      this.bridge = {
+        log: options.events,
+        ...(options.projections === undefined ? {} : { projections: options.projections }),
+      };
+    }
+  }
 
   get(id: string): CompatSession | undefined {
     const session = this.storage.loadSession(id);
@@ -125,7 +180,12 @@ export class SessionsCompat implements DshSessionsLike {
     }
     const existing = this.live.get(id);
     if (existing) return existing;
-    const view = new CompatSession(id, () => this.storage.loadSession(id), this.headers.get(id));
+    const view = new CompatSession(
+      id,
+      () => this.storage.loadSession(id),
+      this.headers.get(id),
+      this.bridge,
+    );
     this.live.set(id, view);
     return view;
   }
@@ -181,6 +241,7 @@ export class SessionsCompat implements DshSessionsLike {
       session.id,
       () => this.storage.loadSession(session.id),
       override,
+      this.bridge,
     );
     this.live.set(session.id, view);
     return view;
@@ -238,6 +299,7 @@ export class SessionsCompat implements DshSessionsLike {
       child.id,
       () => this.storage.loadSession(child.id),
       override,
+      this.bridge,
     );
     this.live.set(child.id, view);
     return view;

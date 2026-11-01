@@ -93,9 +93,27 @@ dsh peer 矩阵**钉版本装在根 devDependencies**（当前：`dsh-tools` / `
   systemPrompt 15 必需、…），可按分级做 preflight 诊断；排期建议见
   `docs/DSH-CONTRACT-MAP.md` §9。
 
-仍不能真正工作的插件：`sessionProjections` 型（todo-plus）、`systemPrompt`+`fs` 型
-（better-edit）——属下一批 `trivial-shim`/`needs-design`；`session.append` 等事件溯源
-写路径继续显式 unsupported。
+仍不能真正工作的插件：P3 收尾前是 `sessionProjections` 型（todo-plus）与
+`systemPrompt`+`fs` 型（better-edit）；现在三面都已补齐，见下节。
+
+## P3 收尾：`systemPrompt` / `fs` / `sessionProjections`
+
+`dsh-services` 现在一并提供：
+
+- **`ctx.systemPrompt`**（`src/system-prompt.ts`）：有序段落/上下文/变量/工具 schema
+  注册表 + `getSectionOrder`/`getContextOrder` + `assemble()`/`renderPrompt`。
+  不按 scope 分层（同名按引用计数覆盖），`complete` 段落取最后一个。
+- **`ctx.fs`**（`src/fs.ts`）：`node:fs` 本机后端，`resolve/stat/readText/readBytes/
+  writeText/editText/listDir` 全量 + `FS_*` 错误码；`sandboxMode` 恒 `undefined`
+  （不装第二道沙箱），`version` 是 `size:mtime` 派生串。
+- **`ctx.sessionProjections`**（`src/session-projections.ts`）+ 进程内领域事件日志
+  （`src/session-events.ts`）：`session.append("todo/write", …)` 真的写日志并驱动
+  投影，`snapshot()`/`checkpoint()`/`restore()` 可用。事件日志不落盘，`restoreFloor()`
+  恒 0，跨重启的持久事件溯源仍属 P4。
+
+市场插件口径因此变化：`dsh-better-edit` 的「缺 `systemPrompt, fs`」装载门已放行；
+`dsh-tool-todo-plus` 的预检通过、工具注册、面板值随 append 实时更新。逐项偏差见
+`docs/DSH-CONTRACT-MAP.md` §10。
 
 ## M1 范围与限制
 

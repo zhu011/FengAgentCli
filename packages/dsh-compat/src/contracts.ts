@@ -60,7 +60,10 @@ export type DshContractPath =
   | "scope.of"
   | "scope.create"
   | "scope.bindParent"
-  | "scope.target";
+  | "scope.target"
+  | "systemPrompt"
+  | "fs"
+  | "sessionProjections";
 
 /** 能力分级 */
 export type DshCapabilityTier = "direct" | "adapt" | "unsupported";
@@ -154,8 +157,14 @@ export interface DshSessionLike {
   readonly id: string;
   readonly header: DshSessionHeader;
   readonly events: readonly DshSessionEvent[];
-  /** 事件溯源写入口：不支持（FengAgentCli 写路径是 storage.saveMessage*） */
-  append(type: string, data?: unknown): never;
+  /**
+   * 事件溯源写入口。
+   *
+   * 装了 `dsh-services` 时写入进程内领域事件日志并返回该事件；单独构造的
+   * {@link CompatSession}（无事件桥）仍抛 `dsh_contract_unsupported`。
+   * 声明成返回 `never` 会让「已支持」的实现无法结构化匹配，故按真实返回面声明。
+   */
+  append(type: string, data?: unknown): DshSessionEvent;
   /** dsh 的请求头折叠：FengAgentCli 没有 request/header 事件 → undefined */
   requestHeader(): undefined;
   /** dsh 的顺序 surface：不支持（没有 surfaceOp） */

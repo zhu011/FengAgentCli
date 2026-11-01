@@ -1,15 +1,16 @@
 /**
- * @fengagent/dsh-compat — 服务面插件（P2）
+ * @fengagent/dsh-compat — 服务面插件（P2 + P3 收尾）
  *
  * `dshCompatPlugin`（P1）只补 `ctx.tools` 的 dsh 接口面；本插件补**更高阶服务面**：
- * `ctx.sessions` / `ctx.agents` / `ctx.agentDefaultModel`。
+ * `ctx.sessions` / `ctx.agents` / `ctx.agentDefaultModel`（P2）、`ctx.llm`（P3），
+ * 以及 `ctx.systemPrompt` / `ctx.fs` / `ctx.sessionProjections`（P3 收尾）。
  *
  * 装配顺序（runtime 插件列表）：
  * ```
  * feng.model        （可选：没有时 agentDefaultModel 用 fallback）
  * feng.storage      （必需：sessions 的事实源）
  * dsh-services      （本插件）
- * <dsh 插件…>       （inject: ['sessions'|'agents'|'agentDefaultModel'] 可解析）
+ * <dsh 插件…>       （inject: ['sessions'|'systemPrompt'|'fs'|'sessionProjections'…] 可解析）
  * ```
  *
  * 与 `dshCompatPlugin` 分开导出是刻意的：只想装 tools-only dsh 插件的运行时不
@@ -25,8 +26,12 @@ import type { ToolDefinition } from "@fengagent/core";
 import type { DshCapability, DshContextLike, DshToolSchema } from "./contracts.ts";
 import { AgentDefaultModelCompat } from "./agent-default-model.ts";
 import { AgentsCompat } from "./agents.ts";
+import { LocalFileSystemCompat } from "./fs.ts";
 import { LlmCompat, type DshModelLike } from "./llm.ts";
+import { SessionEventLog } from "./session-events.ts";
+import { SessionProjectionsCompat } from "./session-projections.ts";
 import { SessionsCompat } from "./sessions.ts";
+import { SystemPromptCompat } from "./system-prompt.ts";
 
 export const name = "dsh-services";
 /** 事实源：storage。model 可选，因此不进 inject（缺失时 agentDefaultModel 走 fallback） */
@@ -39,6 +44,18 @@ export interface DshServicesConfig {
   model?: string;
   /** dsh JSON-Schema → FengAgentCli ToolDefinition 的转换器（`ctx.llm` 带 tools 时必需） */
   toolSchemaConverter?: (schema: DshToolSchema) => ToolDefinition;
+  /**
+   * 是否装配 `ctx.fs`（默认开）。关掉后 `inject: ['fs']` 的插件会在装载前被
+   * loader 的 inject 预检点名拒绝，而不是装到一半才发现。
+   */
+  fs?: boolean;
+  /** 是否装配 `ctx.systemPrompt`（默认开） */
+  systemPrompt?: boolean;
+  /**
+   * 是否装配 `ctx.sessionProjections` + 进程内领域事件日志（默认开）。
+   * 关掉后 `session.append` 与 `todo-plus` 这类插件回到「明确不支持」。
+   */
+  sessionProjections?: boolean;
 }
 
 /**
@@ -74,14 +91,14 @@ export const DSH_SERVICE_CAPABILITIES: readonly DshCapability[] = Object.freeze(
   {
     path: "session.events",
     tier: "adapt",
-    mappedTo: "projection.projectSessionEvents",
-    notes: "消息的有损投影；无 chunk/lifecycle/surfaceOp；seq 随追加位移",
+    mappedTo: "projection.projectSessionEvents + session-events.SessionEventLog",
+    notes: "消息的有损投影 + 进程内领域事件；无 chunk/lifecycle/surfaceOp；seq 随追加位移",
   },
   {
     path: "session.append",
-    tier: "unsupported",
-    mappedTo: "StorageService.saveMessage",
-    notes: "写路径是消息而非事件",
+    tier: "adapt",
+    mappedTo: "session-events.SessionEventLog.append",
+    notes: "进程内日志（不落盘）；追加即驱动 sessionProjections；重启丢失领域事件",
   },
   {
     path: "session.requestHeader",
@@ -201,13 +218,33 @@ export const DSH_SERVICE_CAPABILITIES: readonly DshCapability[] = Object.freeze(
     mappedTo: "scopeTarget（重导出）",
     notes: "事件载体可用；工具事件按 scope 路由留 P4",
   },
+  /* ---------------------- P3 收尾：systemPrompt / fs / 投影 ---------------------- */
+  {
+    path: "systemPrompt",
+    tier: "adapt",
+    mappedTo: "SystemPromptCompat（section/context/variable/tools/assemble）",
+    notes: "注册面与装配面同形；不按 scope 分层（同名引用计数覆盖）；complete 段落取最后一个",
+  },
+  {
+    path: "fs",
+    tier: "adapt",
+    mappedTo: "LocalFileSystemCompat（node:fs 本机后端）",
+    notes: "resolve/stat/read/write/edit 全量；不装沙箱（sandboxMode=undefined）；version=size:mtime",
+  },
+  {
+    path: "sessionProjections",
+    tier: "adapt",
+    mappedTo: "SessionProjectionsCompat（register/snapshot/checkpoint/restore）",
+    notes: "驱动来自进程内事件日志；restoreFloor 恒 0、无持久重放",
+  },
 ]);
 
 /**
- * 装配 `sessions` / `agents` / `agentDefaultModel` 三个服务。
+ * 装配 `sessions` / `agents` / `agentDefaultModel` / `llm` /
+ * `systemPrompt` / `fs` / `sessionProjections`。
  *
  * @param ctx - 已装配 `feng.storage` 的 Cordis 上下文
- * @param config - 可选 fallback 模型
+ * @param config - 可选 fallback 模型与三个 P3 服务面的开关
  */
 export function apply(ctx: unknown, config: DshServicesConfig = {}): void {
   const context = ctx as DshContextLike & { storage?: StorageService };
@@ -223,7 +260,14 @@ export function apply(ctx: unknown, config: DshServicesConfig = {}): void {
   const resolveModel = (): { provider?: string; model?: string } | undefined =>
     context.reflect.get?.("model") as { provider?: string; model?: string } | undefined;
   const defaultModel = (): string => resolveModel()?.model ?? config.model ?? "unknown";
-  const sessions = new SessionsCompat(storage, defaultModel);
+  // 投影 + 事件日志：`session.append` 写入日志后驱动投影（todo-plus 的面板状态源）
+  const withProjections = config.sessionProjections !== false;
+  const sessionEvents = withProjections ? new SessionEventLog() : undefined;
+  const sessionProjections = withProjections ? new SessionProjectionsCompat() : undefined;
+  const sessions = new SessionsCompat(storage, defaultModel, {
+    ...(sessionEvents === undefined ? {} : { events: sessionEvents }),
+    ...(sessionProjections === undefined ? {} : { projections: sessionProjections }),
+  });
   const agents = new AgentsCompat(context, sessions);
   const agentDefaultModel = new AgentDefaultModelCompat(context, {
     provider: config.provider ?? resolveModel()?.provider ?? "unknown",
@@ -245,6 +289,15 @@ export function apply(ctx: unknown, config: DshServicesConfig = {}): void {
   context.reflect.provide("agents", agents);
   context.reflect.provide("agentDefaultModel", agentDefaultModel);
   context.reflect.provide("llm", llm);
+  if (config.systemPrompt !== false) {
+    context.reflect.provide("systemPrompt", new SystemPromptCompat());
+  }
+  if (config.fs !== false) {
+    context.reflect.provide("fs", new LocalFileSystemCompat());
+  }
+  if (sessionProjections !== undefined) {
+    context.reflect.provide("sessionProjections", sessionProjections);
+  }
 }
 
 /** 组装好的插件对象（供 `ctx.plugin(dshServicesPlugin, config)` 使用） */

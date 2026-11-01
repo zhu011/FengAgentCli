@@ -174,3 +174,48 @@ export {
   type DshServiceInventoryEntry,
   type DshServiceTier,
 } from "./service-inventory.ts";
+
+/* ------------------- P3 收尾：systemPrompt / fs / sessionProjections ------------------- */
+
+export {
+  CONTEXT_ORDERS,
+  SECTION_ORDERS,
+  SystemPromptCompat,
+  renderContextSnapshot,
+  renderPrompt,
+  type AssembleContext,
+  type AssembledContext,
+  type AssembledSection,
+  type PromptAssembly,
+  type PromptContext,
+  type PromptContextOrderName,
+  type PromptSection,
+  type PromptSectionOrderName,
+  type ToolProviderResult,
+} from "./system-prompt.ts";
+export {
+  FsShimError,
+  LocalFileSystemCompat,
+  isWritable,
+  pathFromFileUrl,
+  type FsDirEntry,
+  type FsEditOutcome,
+  type FsEditRequest,
+  type FsErrorCode,
+  type FsInfo,
+  type FsPathInfo,
+  type FsTarget,
+  type FsWriteIntent,
+  type FsWriteOutcome,
+} from "./fs.ts";
+export { SessionEventLog } from "./session-events.ts";
+export {
+  SessionProjectionsCompat,
+  type ProjectionChangeListener,
+  type ProjectionCheckpoint,
+  type ProjectionCheckpointRow,
+  type ProjectionDefinitionLike,
+  type ProjectionSnapshot,
+  type SchemaLike,
+} from "./session-projections.ts";
+export type { SessionEventBridge, SessionsCompatOptions } from "./sessions.ts";

@@ -294,10 +294,76 @@ dsh 的 `llm` 是「适配器注册表 + 可被 `llm/stream` 瀑布拦截的流�
 preset 实际用 0.1.0-rc.8——不 pin 版本会读到错误的 inject 结构。
 
 市场插件现状：`writing-guard` / `notes` 只需 `tools`（现成可跑）；`todo-plus` 硬要
-`sessionProjections`；`better-edit` 要 `systemPrompt`+`fs`，并按 `systemPrompt.getSectionOrder`
-排段（shim 需实现该可选方法，否则回退编译期默认顺序）。
+`sessionProjections`、`better-edit` 要 `systemPrompt`+`fs`——三面已在 P3 收尾补齐，
+分级从 `trivial-shim` / `needs-design` 翻成 `mapped`，偏差与口径见 §10。
 
-## 10. 升级 dsh 版本时的复核清单
+## 10. `systemPrompt` / `fs` / `sessionProjections`（P3 收尾）
+
+三个服务面补在 `dsh-services` 里，与前面几节的装配口径一致
+（`ctx.reflect.provide`，随 fiber 卸载自动注销）。
+
+### 10.1 `ctx.systemPrompt`（`src/system-prompt.ts`）
+
+按 `@deepseek-ai/dsh-system-prompt@0.2.1` 的面实现注册 + 装配：
+
+| 成员 | 实现 | 分级 |
+|---|---|---|
+| `section(spec)` / `context(spec)` | 有序注册表 + disposer；`order` 升序、同序按 name 的 code-unit | adapt |
+| `getSectionOrder` / `getContextOrder` | 中心槽位表（与上游逐项一致），未知名字抛错 | direct |
+| `variable(name, fn)` | `[a-z][a-z0-9_]*` 校验；`{{name}}` 严格插值 | direct |
+| `tools(provider)` | 每次装配求值，schema 原样透传 | adapt |
+| `suppressRuntimeContext()` | 引用计数压制可选上下文（`required` 保留） | direct |
+| `assemble()` / `refreshContext()` | 段落/上下文/变量快照；`renderPrompt` 空段落丢弃、空行分隔 | adapt |
+
+偏差：
+
+1. **不按 scope 分层**：`ctx.reflect.provide` 只挂一个实例，拿不到「调用者所在
+   scope」。所有注册落在同一层，同名按**引用计数覆盖**——后注册者赢，最后一个
+   disposer 才移除。多 agent 同时装 `better-edit` 不会互相抛「重复段落」，
+   代价是「每 agent 各一份文案」退化成「最后安装者一份」。
+2. **`complete` 段落**取最后一个（上游多于一个即装配失败），避免把宿主整个提示
+   词打挂。
+3. 段落函数形式（`text: (ctx) => string`）每次装配求值一次，与上游一致。
+
+### 10.2 `ctx.fs`（`src/fs.ts`）
+
+本机后端，语义按 `dsh-fs@0.1.0-rc.6` 写并补了 0.2.x 的 `readByteRange`：
+`resolve` / `processPath` / `fileUrl` / `contains` / `stat` / `lstat` / `readText` /
+`streamText` / `readBytes` / `readByteRange` / `listDir` / `writeText` / `editText`。
+
+- 错误统一带 `code`（`FS_NOT_FOUND` / `FS_NOT_TEXT` / `FS_NOT_REGULAR_FILE` /
+  `FS_TOO_LARGE` / `FS_STALE_VERSION` / `FS_NOT_OBSERVED` / `FS_AMBIGUOUS_EDIT` /
+  `FS_EDIT_NOT_FOUND` / `FS_ABORTED`），工具层按 code 分支；
+- `writeText` 是**同目录 tmp + rename** 的原子写，`createIfAbsent` /
+  `replaceIfVersion` 两个守卫按契约抛错；
+- 偏差：**不装沙箱**（`sandboxMode` 恒 `undefined`，`sandboxPolicy` 接受但忽略）；
+  `version` 是 `size:mtimeMs` 的派生串而不是 inode 身份；`editText` 只做字面量
+  替换，不做行尾归一化。
+
+### 10.3 `ctx.sessionProjections` + 进程内事件日志（`src/session-projections.ts` / `src/session-events.ts`）
+
+`register` / `onChanged` / `stateOf` / `snapshot` / `cachedSnapshot` / `checkpoint` /
+`restoreFloor` / `viewCheckpoint` / `restore` / `hydrate` 全部按上游形状实现，
+驱动由宿主接线：`SessionsCompat.append()` 写 `SessionEventLog` 后调 `drive()`。
+
+- `register` 同名按引用计数（多 preset 装同一插件），disposer 归零即摘单元与缓存；
+- 折叠规则与上游一致：`apply` 返回**同一引用**视为「不关心」，`wire` 视图按
+  `Object.is` 推送变更；`apply`/`view`/监听器抛错都只记警告，不把会话写路径带崩；
+- `checkpoint()` 的 `val` 是 detached 克隆，`restore()` 在没有可用检查点且
+  `baseSeq > 0` 时按上游口径要求「从头折」；
+- **偏差**：事件日志只在**进程内**（不落盘），所以 `restoreFloor()` 恒为 `0`、
+  重启后领域事件丢失；`CompatSession.events` 是「消息投影 + 领域事件」的拼接视图，
+  领域事件的 `seq` 会随消息增长整体后移，**不能当稳定游标**（消息仍是 SQLite 里
+  的唯一持久事实源）。跨重启的事件溯源持久化仍属 P4。
+
+市场插件口径因此更新（见 `service-inventory.ts`）：
+
+| 插件 | inject | 现在 |
+|---|---|---|
+| `dsh-better-edit@1.2.0` | `tools` + `systemPrompt` + `fs` | 三个服务齐全，挂载门槛放行（Bun 侧仍需处理它自己依赖的 `node:sqlite`） |
+| `dsh-tool-todo-plus@0.7.4` | `tools` + `sessionProjections` | 预检通过、工具注册、`todo/write` 进投影；面板值随 append 实时更新 |
+
+## 11. 升级 dsh 版本时的复核清单
 
 1. `dsh-session` 的 `SessionStore` 方法集合是否变化（本文件 §2 表）；
 2. `dsh-agent` 的 `AgentRegistry` 方法集合是否变化（§3 表）；
@@ -307,5 +373,9 @@ preset 实际用 0.1.0-rc.8——不 pin 版本会读到错误的 inject 结构�
 6. `dsh-llm` 的 `StreamChunk` / `GenerateOptions` / `LlmRuntime` 方法集合是否变化（§7）；
 7. `dsh-scope` 的导出集与 `Context.filter` 口径是否变化（§8）；根级 peer 矩阵里
    `dsh-scope` 与 `dsh-llm` 是否同版本；
-8. 重跑服务面采样（`DSH_SERVICE_INVENTORY`），确认 `inject` 分级没有被新版翻转；
-9. 跑 `bun test packages/dsh-compat`，再跑全量 `bun test`。
+8. `dsh-system-prompt` 的 `SECTION_ORDERS` / `CONTEXT_ORDERS` 槽位值与
+   `SystemPrompt` 方法集合是否变化（§10.1）；`dsh-fs` 的 `FileSystem` 抽象方法
+   是否新增（§10.2）；`dsh-session-projection` 的 `ProjectionDefinition` 是否新增
+   必填字段（§10.3）；
+9. 重跑服务面采样（`DSH_SERVICE_INVENTORY`），确认 `inject` 分级没有被新版翻转；
+10. 跑 `bun test packages/dsh-compat`，再跑全量 `bun test`。
