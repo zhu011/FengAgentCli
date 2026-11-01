@@ -42,14 +42,13 @@ import {
   createHookRegistry,
   registerMcpTools,
   createDispatchTaskTool,
-  createGroupTools,
 } from "@fengagent/tools";
 import type { HookRegistry, McpRegistrationResult, ToolRegistry } from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
-import { AgentGroupService } from "./agent-group-service.ts";
-import { GroupOrchestrator } from "./group-orchestrator.ts";
+import type { AgentGroupService, GroupOrchestrator } from "@fengagent/groups";
+import { AgentGroupStore } from "@fengagent/agent";
 import {
   deepMerge,
   importMainData,
@@ -412,97 +411,10 @@ export async function createRuntimeAgent(
     }
   }
 
-  // 6.6 群聊（G1）：群聚合根 + 消息通道；群工具只注入本仓库的 fengagent 侧
-  //     （v1「协调者中转」：外部 runtime 没有群工具，它们的产出由服务端代写进群）。
-  if (enableStore) {
-    try {
-      agentGroupService = new AgentGroupService({
-        dataRoot: dataDir,
-        // 列表接口的成员选择器复用 runtime 卡片（与 Agents 页同一份数据）
-        runtimes: () => agentTaskService?.listRuntimes() ?? [],
-      });
+  // 6.6 群聊（G1-G3）：群域已抽为 @fengagent/group-plugin 插件（P4 合流）——
+  //     service/orchestrator/群工具的装配在插件内完成，此处只准备配置并在
+  //     section 8 的插件列表装载；实例经 onReady 回填（REST 路由用）。
 
-      // G3 编排器：轮次上限 / 静默超时 / 人类拍板都收敛到 conclude()（幂等 + 取消在跑任务）
-      agentGroupOrchestrator = new GroupOrchestrator({
-        groups: agentGroupService,
-        cancelGroupTasks: (groupId) => {
-          if (!agentTaskService) return [];
-          const running = agentTaskService.listTasks({
-            groupId,
-            status: ["created", "dispatched", "running"],
-            limit: 200,
-          }).tasks;
-          const cancelled: string[] = [];
-          for (const task of running) {
-            try {
-              agentTaskService.cancel(task.id);
-              cancelled.push(task.id);
-            } catch {
-              // 已终态/竞态：跳过
-            }
-          }
-          return cancelled;
-        },
-      });
-      agentGroupService.onMessage((groupId, message) =>
-        agentGroupOrchestrator!.onMessage(groupId, message),
-      );
-      agentGroupOrchestrator.start();
-
-      const selfName = process.env.FENG_GROUP_SELF_NAME?.trim() || "fengagent";
-      const groupTools = createGroupTools(
-        {
-          create: async (input) => {
-            const group = agentGroupService!.createGroup({
-              name: input.name,
-              ...(input.description === undefined
-                ? {}
-                : { description: input.description }),
-              members: input.members ?? [],
-              coordinator: input.coordinator ?? selfName,
-            });
-            return { id: group.id, name: group.name, members: group.members };
-          },
-          send: async (input) => {
-            const message = agentGroupService!.postAgentMessage(input.groupId, {
-              content: input.content,
-              fromName: input.from,
-            });
-            return { id: message.id, seq: message.seq };
-          },
-          history: async (input) => {
-            const group = agentGroupService!.getGroup(input.groupId);
-            if (!group) throw new Error(`群不存在: ${input.groupId}`);
-            const messages = agentGroupService!.listRecentMessages(
-              input.groupId,
-              input.limit ?? 50,
-            );
-            return {
-              groupId: group.id,
-              name: group.name,
-              lines: messages.map((m) => `#${m.seq} [${m.fromName}] ${m.content}`),
-            };
-          },
-          conclude: async (input) => {
-            const result = agentGroupOrchestrator!.conclude(input.groupId, {
-              by: "coordinator",
-              reason: "协调者收口",
-              conclusion: input.conclusion,
-            });
-            return { status: result.group.status, cancelledTasks: result.cancelledTasks.length };
-          },
-        },
-        { selfName: () => selfName },
-      );
-      for (const tool of groupTools) toolRegistry.register(tool);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`Warn: 群聊服务不可用（${dataDir}）：${message}\n`);
-      agentGroupOrchestrator?.dispose();
-      agentGroupService = null;
-      agentGroupOrchestrator = null;
-    }
-  }
   const storageBackend: SessionStoreLike = sessionStore ?? createMemorySessionStore();
   // Phase 2 生产双写：事件日志为事实源，旧存储（SQLite/内存）降级为读模型 —
   // 同一会话事实双写（saveSession/saveMessage/saveMessages 走 DualWriteSessionStore），
@@ -572,6 +484,42 @@ export async function createRuntimeAgent(
       // tools/pre-execute · tools/post-execute —— 审计类 dsh 插件（writing-guard
       // 等）才看得见执行，而不是「装上但钩子静默不触发」。
       { id: DSH_COMPAT_PLUGIN_ID, config: { hooks: hookRegistry } },
+      // 群能力插件（P4 合流）：工具进注册表；实例经 onReady 供 REST 路由
+      ...(enableStore
+        ? [
+            {
+              id: "@fengagent/group-plugin",
+              config: {
+                store: new AgentGroupStore(join(dataDir, "groups.db")),
+                // 列表接口的成员选择器复用 runtime 卡片（与 Agents 页同一份数据）
+                runtimes: () => agentTaskService?.listRuntimes() ?? [],
+                selfName: process.env.FENG_GROUP_SELF_NAME?.trim() || "fengagent",
+                cancelGroupTasks: (groupId: string) => {
+                  if (!agentTaskService) return [];
+                  const running = agentTaskService.listTasks({
+                    groupId,
+                    status: ["created", "dispatched", "running"],
+                    limit: 200,
+                  }).tasks;
+                  const cancelled: string[] = [];
+                  for (const task of running) {
+                    try {
+                      agentTaskService.cancel(task.id);
+                      cancelled.push(task.id);
+                    } catch {
+                      // 已终态/竞态：跳过
+                    }
+                  }
+                  return cancelled;
+                },
+                onReady: ({ service, orchestrator }: { service: AgentGroupService; orchestrator: GroupOrchestrator }) => {
+                  agentGroupService = service;
+                  agentGroupOrchestrator = orchestrator;
+                },
+              },
+            },
+          ]
+        : []),
       {
         id: BUILTIN_PLUGINS.STRATEGY,
         config: {

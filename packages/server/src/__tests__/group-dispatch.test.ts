@@ -12,11 +12,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentGroupStore } from "@fengagent/agent";
 import { createDispatchTaskTool } from "@fengagent/tools";
 import { AgentRuntimeRegistry } from "../agent-runtimes.ts";
-import { AgentGroupService } from "../agent-group-service.ts";
+import { AgentGroupService } from "@fengagent/groups";
 import { AgentTaskService } from "../agent-task-service.ts";
-import { GroupOrchestrator } from "../group-orchestrator.ts";
+import { GroupOrchestrator } from "@fengagent/groups";
 import { createAgentTaskRoutes } from "../routes/agent-tasks.ts";
 import { createGroupRoutes } from "../routes/groups.ts";
 import type { RuntimeInfo } from "../agent-runtimes.ts";
@@ -54,7 +55,7 @@ function makeFixture(): {
 } {
   const dir = mkdtempSync(join(tmpdir(), "feng-group-dispatch-"));
   const groups = new AgentGroupService({
-    dataRoot: dir,
+    store: new AgentGroupStore(join(dir, "groups.db")),
     runtimes: () => [runtimeCard("fake"), runtimeCard("fengagent")],
   });
   const registry = new AgentRuntimeRegistry({

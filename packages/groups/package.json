@@ -1,0 +1,17 @@
+{
+  "name": "@fengagent/groups",
+  "version": "0.1.0",
+  "description": "群聊域（G1-G3）：AgentGroupService + GroupOrchestrator，存储注入（server 传 SQLite store，插件侧用便携 store）",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/**/*.ts"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@fengagent/agent": "workspace:*",
+    "@fengagent/shared": "workspace:*"
+  }
+}

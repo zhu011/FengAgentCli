@@ -13,9 +13,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentGroupStore } from "@fengagent/agent";
 import { createGroupTools } from "@fengagent/tools";
-import { AgentGroupService } from "../agent-group-service.ts";
-import { GroupOrchestrator } from "../group-orchestrator.ts";
+import { AgentGroupService } from "@fengagent/groups";
+import { GroupOrchestrator } from "@fengagent/groups";
 import { createGroupRoutes } from "../routes/groups.ts";
 import type { RuntimeInfo } from "../agent-runtimes.ts";
 
@@ -44,7 +45,7 @@ interface Fixture {
 function makeFixture(options: { cancelTasks?: string[] } = {}): Fixture {
   const dir = mkdtempSync(join(tmpdir(), "feng-g3-"));
   const groups = new AgentGroupService({
-    dataRoot: dir,
+    store: new AgentGroupStore(join(dir, "groups.db")),
     runtimes: () => [runtimeCard("kimi"), runtimeCard("fengagent")],
   });
   const cancelled: string[] = [];

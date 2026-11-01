@@ -1,0 +1,21 @@
+{
+  "name": "@fengagent/group-plugin",
+  "version": "0.1.0",
+  "description": "群能力 Cordis 插件（P4 合流）：AgentGroupService + GroupOrchestrator + 群工具，feng 形状——FengAgentCli 与 dsh（经 fengagent-compat）两端装载",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/**/*.ts"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@fengagent/agent": "workspace:*",
+    "@fengagent/groups": "workspace:*",
+    "@fengagent/tools": "workspace:*"
+  },
+  "scripts": {
+    "build": "bun build src/bundle.ts --target=node --outfile=bundle/feng-group-plugin.mjs"
+  }
+}

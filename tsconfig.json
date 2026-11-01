@@ -44,6 +44,8 @@
       "@fengagent/server/*": ["./packages/server/src/*"],
       "@fengagent/web-ui": ["./packages/web-ui/src/app.tsx"],
       "@fengagent/web-ui/*": ["./packages/web-ui/src/*"],
+      "@fengagent/groups": ["./packages/groups/src/index.ts"],
+      "@fengagent/group-plugin": ["./packages/group-plugin/src/index.ts"],
       "@fengagent/cordis": ["./packages/cordis/src/index.ts"],
       "@fengagent/cordis/*": ["./packages/cordis/src/*"],
       "@fengagent/graph": ["./packages/graph/src/index.ts"],

@@ -28,8 +28,8 @@ import { createEvalRoutes } from "./routes/eval.ts";
 import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks.ts";
 import { createGroupRoutes } from "./routes/groups.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
-import type { AgentGroupService } from "./agent-group-service.ts";
-import type { GroupOrchestrator } from "./group-orchestrator.ts";
+import type { AgentGroupService } from "@fengagent/groups";
+import type { GroupOrchestrator } from "@fengagent/groups";
 
 /** Server 构造选项 */
 export interface ServerOptions {

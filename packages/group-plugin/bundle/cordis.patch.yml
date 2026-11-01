@@ -1,0 +1,6 @@
+# feng-group-plugin（经 fengagent-compat 装载时无需本 patch 条目——compat 的
+# config.plugins 路径直接 import；本文件仅为独立挂 profile 的备用形态）。
+- insert:
+    - id: feng-group-plugin
+      name: 'feng-group-plugin'
+      inject: [tools]

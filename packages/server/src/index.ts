@@ -32,7 +32,7 @@ export {
 export type { SSEFrame } from "./sse.ts";
 
 // 群聊（G1）：群聚合根 + 消息通道 + 群 SSE
-export { AgentGroupService, toMessageDto, GroupError } from "./agent-group-service.ts";
+export { AgentGroupService, toMessageDto, GroupError } from "@fengagent/groups";
 export type {
   GroupInfoDto,
   GroupMessageDto,
@@ -43,15 +43,15 @@ export type {
   PostAgentMessageRequest,
   GroupErrorCode,
   AgentGroupServiceOptions,
-} from "./agent-group-service.ts";
+} from "@fengagent/groups";
 export { createGroupRoutes, mountGroupRoutes } from "./routes/groups.ts";
 // 群编排器（G3：轮次上限 / 静默超时 / 人类拍板 / 关停）
-export { GroupOrchestrator } from "./group-orchestrator.ts";
+export { GroupOrchestrator } from "@fengagent/groups";
 export type {
   ConcludeBy,
   ConcludeResult,
   GroupOrchestratorOptions,
-} from "./group-orchestrator.ts";
+} from "@fengagent/groups";
 
 // 路由
 export { createSessionRoutes } from "./routes/sessions.ts";

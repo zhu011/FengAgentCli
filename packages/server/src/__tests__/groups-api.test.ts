@@ -16,7 +16,8 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentGroupService } from "../agent-group-service.ts";
+import { AgentGroupStore } from "@fengagent/agent";
+import { AgentGroupService } from "@fengagent/groups";
 import { createGroupRoutes } from "../routes/groups.ts";
 import { createGroupTools } from "@fengagent/tools";
 import type { RuntimeInfo } from "../agent-runtimes.ts";
@@ -42,7 +43,7 @@ function makeService(): {
 } {
   const dir = mkdtempSync(join(tmpdir(), "feng-groups-api-"));
   const service = new AgentGroupService({
-    dataRoot: dir,
+    store: new AgentGroupStore(join(dir, "groups.db")),
     runtimes: () => [runtimeCard("kimi"), runtimeCard("dsh"), runtimeCard("fengagent")],
   });
   return { service, dir, app: createGroupRoutes(service) };

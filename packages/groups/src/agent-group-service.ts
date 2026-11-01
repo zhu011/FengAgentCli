@@ -1,5 +1,5 @@
 /**
- * @fengagent/server — 群聊服务（G1，对齐 KG 冻结契约 v1.0）
+ * @fengagent/groups — 群聊服务（G1，对齐 KG 冻结契约 v1.0；自 server 抽出，存储注入）
  *
  * 路由 / 群工具 / 前端三边共用的一层：
  * - 把存储的毫秒时间戳翻成 API 的 RFC3339 字符串；
@@ -15,19 +15,42 @@
  *   G2 的「结果回群」走它，不暴露 REST）。
  */
 
-import { join } from "node:path";
-import {
-  AgentGroupStore,
-  type AgentGroupRecord,
-  type AgentGroupStatus,
-  type GroupMessageFromKind,
-  type GroupMessageKind,
-  type GroupMessageRecord,
+import type {
+  AgentGroupRecord,
+  AgentGroupStatus,
+  AppendGroupMessageInput,
+  CreateAgentGroupInput,
+  GroupMessageFromKind,
+  GroupMessageKind,
+  GroupMessageRecord,
+  ListAgentGroupsFilter,
+  ListGroupMessagesOptions,
+  UpdateAgentGroupInput,
 } from "@fengagent/agent";
 import { createLogger } from "@fengagent/shared";
-import type { RuntimeInfo } from "./agent-runtimes.ts";
 
 const log = createLogger("agent-groups");
+
+/** 群存储的结构接口——SQLite AgentGroupStore 与插件的便携 JSON store 都满足 */
+export interface GroupStore {
+  create(input: CreateAgentGroupInput): AgentGroupRecord;
+  get(id: string): AgentGroupRecord | null;
+  list(filter?: ListAgentGroupsFilter): AgentGroupRecord[];
+  update(id: string, patch: UpdateAgentGroupInput): AgentGroupRecord;
+  appendMessage(input: AppendGroupMessageInput): GroupMessageRecord;
+  messages(groupId: string, options?: ListGroupMessagesOptions): GroupMessageRecord[];
+  allMessages(groupId: string): GroupMessageRecord[];
+  recentMessages(groupId: string, limit?: number): GroupMessageRecord[];
+  lastMessage(groupId: string): GroupMessageRecord | null;
+  lastSeq(groupId: string): number;
+  close(): void;
+}
+
+/** runtime 卡片的结构子集（server 传完整 GroupRuntimeCard，插件侧可只给 name/enabled） */
+export interface GroupRuntimeCard {
+  name: string;
+  enabled: boolean;
+}
 
 /** 群服务的错误码（路由据此映射 HTTP 状态） */
 export type GroupErrorCode = "bad_request" | "not_found" | "forbidden" | "conflict";
@@ -115,15 +138,13 @@ export interface PostAgentMessageRequest {
 
 /** 群服务选项 */
 export interface AgentGroupServiceOptions {
-  /** 数据根（默认 `<数据根>/groups.db`） */
-  dataRoot: string;
-  /** 复用/自建存储 */
-  store?: AgentGroupStore;
+  /** 存储注入（server 传 SQLite AgentGroupStore；插件侧传便携 store） */
+  store: GroupStore;
   /**
    * runtime 卡片提供者（列表接口的成员选择器 + 建群成员校验）。
    * 由 server 装配注入 `agentTaskService.listRuntimes`；缺省返回空数组（不校验）。
    */
-  runtimes?: () => RuntimeInfo[];
+  runtimes?: () => GroupRuntimeCard[];
   /** 协调者默认名（缺省 `fengagent`） */
   defaultCoordinator?: string;
   now?: () => number;
@@ -131,16 +152,16 @@ export interface AgentGroupServiceOptions {
 
 /** 群聊服务 */
 export class AgentGroupService {
-  readonly store: AgentGroupStore;
+  readonly store: GroupStore;
   private readonly subscribers = new Map<string, Set<(event: GroupStreamEvent) => void>>();
   private readonly messageHooks = new Set<(groupId: string, message: GroupMessageDto) => void>();
-  private readonly runtimes: () => RuntimeInfo[];
+  private readonly runtimes: () => GroupRuntimeCard[];
   private readonly defaultCoordinator: string;
 
   constructor(options: AgentGroupServiceOptions) {
     this.runtimes = options.runtimes ?? (() => []);
     this.defaultCoordinator = options.defaultCoordinator?.trim() || "fengagent";
-    this.store = options.store ?? new AgentGroupStore(join(options.dataRoot, "groups.db"));
+    this.store = options.store;
   }
 
   // ──────────────────────────────────────────────
@@ -189,7 +210,7 @@ export class AgentGroupService {
   }
 
   /** runtime 卡片（列表接口的成员选择器） */
-  listRuntimes(): RuntimeInfo[] {
+  listRuntimes(): GroupRuntimeCard[] {
     return this.runtimes();
   }
 

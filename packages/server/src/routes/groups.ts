@@ -25,8 +25,8 @@ import {
   type AgentGroupService,
   type GroupMessageDto,
   type GroupStreamEvent,
-} from "../agent-group-service.ts";
-import type { GroupOrchestrator } from "../group-orchestrator.ts";
+} from "@fengagent/groups";
+import type { GroupOrchestrator } from "@fengagent/groups";
 
 const log = createLogger("group-routes");
 

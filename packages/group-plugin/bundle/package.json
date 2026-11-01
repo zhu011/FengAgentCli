@@ -1,0 +1,16 @@
+{
+  "name": "feng-group-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FengAgentCli group capability as a dsh-loadable plugin (bundled, Node-portable).",
+  "type": "module",
+  "main": "./feng-group-plugin.mjs",
+  "exports": {
+    ".": "./feng-group-plugin.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["feng-group-plugin.mjs", "cordis.patch.yml"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}
