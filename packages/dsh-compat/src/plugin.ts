@@ -53,6 +53,11 @@ export interface DshCompatConfig {
   onConcludeTurn?: (exec: DshToolExec) => void;
   /** 事件桥诊断输出（缺省 console.warn） */
   onWarning?: (message: string, error?: unknown) => void;
+  /**
+   * 原生工具名 → dsh 工具名映射（在缺省 `file-write→write` / `file-edit→edit`
+   * 之上合并）。仅影响原生工具走钩子路径时发出的事件。
+   */
+  toolAliases?: Readonly<Record<string, string>>;
   /** 关闭 dsh 事件桥（默认开启：ctx 有 `waterfall` 就启用） */
   events?: boolean;
 }
@@ -128,6 +133,7 @@ export function apply(
     bridge = new DshToolEventBridge(ctx as unknown as DshEventContextLike, {
       resolveAgent,
       ...(config.onWarning === undefined ? {} : { onWarning: config.onWarning }),
+      ...(config.toolAliases === undefined ? {} : { toolAliases: config.toolAliases }),
     });
     const hooks = config.hooks ?? (serviceOf("hooks") as DshHookRegistryLike | undefined);
     if (hooks) bridge.attach(hooks);

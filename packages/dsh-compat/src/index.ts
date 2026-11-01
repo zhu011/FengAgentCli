@@ -41,6 +41,7 @@ export {
 
 export {
   DshToolEventBridge,
+  DEFAULT_NATIVE_TOOL_ALIASES,
   type DshEventContextLike,
   type DshEventExec,
   type DshEventResult,

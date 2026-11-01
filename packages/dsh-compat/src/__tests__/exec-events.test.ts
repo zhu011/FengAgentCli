@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import type { ToolContext } from "@fengagent/core";
 import { createRuntime } from "@fengagent/cordis";
@@ -356,6 +357,91 @@ describe("事件桥 attach(HookRegistry)（原生工具也发 dsh 事件）", ()
       const afterUnmark = await hooks.triggerPreToolUse("demo_probe", {}, fakeHookContext());
       expect(afterUnmark.allowed).toBe(false);
       expect(calls).toBe(1);
+    });
+  });
+});
+
+/* ------------------------------ 原生工具名称映射 ------------------------------ */
+
+describe("原生工具名称映射（dsh 语义别名）", () => {
+  test("file-write → write、file-edit → edit；相对路径按 workdir 归一", async () => {
+    await withEvents(async (ctx) => {
+      const hooks = createHookRegistry();
+      const bridge = new DshToolEventBridge(ctx, { onWarning: () => {} });
+      const dispose = bridge.attach(hooks as unknown as DshHookRegistryLike);
+
+      const seen: DshEventExec[] = [];
+      ctx.on("tools/pre-execute", (exec) => {
+        seen.push(exec as DshEventExec);
+        return { kind: "allow" };
+      });
+      ctx.on("tools/post-execute", (exec) => {
+        seen.push(exec as DshEventExec);
+        return { kind: "accept" };
+      });
+
+      const workdir = resolve("tmp", "paper-workspace");
+      const hookCtx = fakeHookContext({ workdir });
+      const input = { filePath: "manuscript/draft.md", content: "text" };
+      await hooks.triggerPreToolUse("file-write", input, hookCtx);
+      await hooks.triggerPostToolUse("file-write", input, { content: "ok" }, hookCtx);
+
+      expect(seen.map((e) => e.name)).toEqual(["write", "write"]);
+      const args = seen[0]!.arguments as { filePath: string; content: string };
+      expect(args.filePath).toBe(resolve(workdir, "manuscript/draft.md"));
+      expect(args.content).toBe("text");
+      // pre/post 仍是同一份 exec（writing-guard 的 preimage 按 token/path 配对）
+      expect(seen[0]!.token).toBe(seen[1]!.token);
+
+      dispose();
+    });
+  });
+
+  test("绝对路径与未映射工具保持原样", async () => {
+    await withEvents(async (ctx) => {
+      const hooks = createHookRegistry();
+      const bridge = new DshToolEventBridge(ctx, { onWarning: () => {} });
+      const dispose = bridge.attach(hooks as unknown as DshHookRegistryLike);
+
+      const seen: DshEventExec[] = [];
+      ctx.on("tools/pre-execute", (exec) => {
+        seen.push(exec as DshEventExec);
+        return { kind: "allow" };
+      });
+
+      const absolute = resolve("tmp", "elsewhere", "draft.md");
+      await hooks.triggerPreToolUse("file-edit", { filePath: absolute, oldString: "a", newString: "b" }, fakeHookContext());
+      await hooks.triggerPreToolUse("bash", { cmd: "ls" }, fakeHookContext());
+
+      expect(seen.map((e) => e.name)).toEqual(["edit", "bash"]);
+      expect((seen[0]!.arguments as { filePath: string }).filePath).toBe(absolute);
+      expect(seen[1]!.arguments).toEqual({ cmd: "ls" });
+
+      dispose();
+    });
+  });
+
+  test("toolAliases 覆盖缺省映射并可追加新别名（缺省映射仍生效）", async () => {
+    await withEvents(async (ctx) => {
+      const hooks = createHookRegistry();
+      const bridge = new DshToolEventBridge(ctx, {
+        onWarning: () => {},
+        toolAliases: { "file-write": "write_file", "apply-patch": "edit" },
+      });
+      const dispose = bridge.attach(hooks as unknown as DshHookRegistryLike);
+
+      const names: string[] = [];
+      ctx.on("tools/pre-execute", (exec) => {
+        names.push((exec as DshEventExec).name);
+        return { kind: "allow" };
+      });
+
+      await hooks.triggerPreToolUse("file-write", {}, fakeHookContext());
+      await hooks.triggerPreToolUse("file-edit", {}, fakeHookContext());
+      await hooks.triggerPreToolUse("apply-patch", {}, fakeHookContext());
+
+      expect(names).toEqual(["write_file", "edit", "edit"]);
+      dispose();
     });
   });
 });

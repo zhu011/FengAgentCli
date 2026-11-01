@@ -102,7 +102,7 @@ system 消息                            → 跳过（dsh 走 request/header）
 | `dsh-session-title` | `sessions` | ⚠️ 只读部分可用 | `get()` 能读投影；`rename/refresh` 走 `session.append('session/title')`，必抛 |
 | `dsh-session-persistence-jsonl` | `sessions` | ❌ 不可用 | 监听 `session/event` / `session/flush` 并写事件日志——事实源冲突 |
 | `dsh-session-query*` / `-telemetry-otel` | `sessions` | ❌ 不可用 | 读 `session.events` 的稳定 seq 与 surface |
-| `dsh-plugin-writing-guard` | `tools` | ✅ 工具 + 审计都可用 | 工具走 P1；`tools/pre-execute`/`post-execute` 审计经 §5.5 事件桥触发（宿主需把 `HookRegistry` 传给插件 `hooks`） |
+| `dsh-plugin-writing-guard` | `tools` | ✅ 工具 + 审计都可用 | 工具走 P1；`tools/pre-execute`/`post-execute` 审计经 §5.5 事件桥触发（宿主需把 `HookRegistry` 传给插件 `hooks`）；原生 `file-write`/`file-edit` 经名称映射（§5.5.2）也进自动审计 |
 | `dsh-tool-todo-plus` | `tools` + `sessionProjections` | ❌ 仍不可用 | ① `sessionProjections` 不在 rc.6 契约（该插件面向 dsh 0.2.x）；② 工具写会话走 `exec.agent.session.append`，仍是 unsupported——但现在报 `dsh_contract_unsupported`，不再是 `TypeError` |
 | `dsh-better-edit` | `tools` + `systemPrompt` + `fs` | ❌ 仍不可用 | npm 包漏声明 `@deepseek-ai/dsh-fs` peer；`systemPrompt`/`fs` 服务面属 P3 |
 | tools-only 插件（P1） | `tools` | ✅ 可用 | 见 `packages/dsh-compat/README.md` |
@@ -159,6 +159,26 @@ dsh 工具体签名是 `execute(args, exec)`；P1 只传了 `{ signal }`，于�
   并把 dsh 侧决策映射回 `{allowed, reason}` / 错误结果；
 - 适配器接管的工具名在钩子路径上被跳过（`markDshTool`），**同一次调用不会发两遍**；
 - 原生工具的 `exec.signal` 是永不 abort 的信号（feng 执行器不把取消面暴露给 hook）。
+
+#### 名称映射（原生文件工具）
+
+dsh 生态插件按 dsh 的工具名识别语义：`dsh-plugin-writing-guard` 的 `targetPathOf`
+只认 `exec.name === "write" | "edit"`，而 FengAgentCli 原生工具叫
+`file-write` / `file-edit`。桥在**原生工具**的钩子路径上按
+`DEFAULT_NATIVE_TOOL_ALIASES` 映射名字，并把相对 `filePath` 按 hook 的 `workdir`
+归一成绝对路径（writing-guard 直接 `fs.readFile(target)`，相对路径会按进程 cwd
+解释，preimage 会读空、审计被静默跳过）：
+
+| 原生工具 | 事件里的 `exec.name` | `exec.arguments.filePath` |
+|---|---|---|
+| `file-write` | `write` | 相对路径 → `resolve(workdir, filePath)` |
+| `file-edit` | `edit` | 同上 |
+| 其他原生工具 | 原名字 | 原样 |
+
+- `callId` 里仍保留原生工具名（`feng-hook:<messageId>:file-write:<seq>`），便于回溯；
+- 映射只影响事件面，FengAgentCli 内部注册/审批/展示仍用原生名；
+- 需要覆盖或追加别名时给 `dshCompatPlugin` 传 `toolAliases`（在缺省映射之上合并），
+  所以 `toolAliases: {}` 不会关掉缺省两条。
 
 ## 6. 装配与 preflight
 

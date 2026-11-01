@@ -27,6 +27,11 @@
  * （见 `adapter.ts`），因为只有适配器手里有那次调用的真实 `exec`（身份/token/
  * agent 同一份）。桥在钩子路径上跳过这些工具名，避免同一次调用发两遍。
  *
+ * 原生文件工具在事件里用 dsh 的名字（`file-write` → `write`、`file-edit` → `edit`，
+ * 见 `DEFAULT_NATIVE_TOOL_ALIASES`），相对 `filePath` 按 hook 的 `workdir` 归一成
+ * 绝对路径——`dsh-plugin-writing-guard` 这类审计插件按 `exec.name === "write"|"edit"`
+ * 识别目标文件，不映射就「事件发了但审计不认」。
+ *
  * 已知偏差（`docs/DSH-CONTRACT-MAP.md` 同步）：
  * - 原生工具的 `exec.signal` 是永不 abort 的信号：feng 执行器不把取消面暴露给 hook；
  * - 原生工具的 `result.value` 用结果文本兜底（feng 的 `ToolResult` 没有 canonical
@@ -36,6 +41,7 @@
  *   包含语义一致，避免审计插件把工具执行带崩。
  */
 
+import { isAbsolute, resolve } from "node:path";
 import type { DshAgentResolver } from "./exec-context.ts";
 
 /** Cordis 事件面（结构类型：不把 cordis 版本绑进本包） */
@@ -102,11 +108,30 @@ export interface DshHookToolResultLike {
   readonly metadata?: Record<string, unknown>;
 }
 
+/**
+ * 原生工具名 → dsh 工具名的缺省映射。
+ *
+ * dsh 生态插件按 dsh 的工具名识别语义（writing-guard 只认 `write` / `edit`），
+ * 而 FengAgentCli 原生写文件工具叫 `file-write` / `file-edit`；不映射时事件照样
+ * 发出，但审计插件会把它们当无关工具跳过。
+ */
+export const DEFAULT_NATIVE_TOOL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  "file-write": "write",
+  "file-edit": "edit",
+});
+
 export interface DshToolEventBridgeOptions {
   /** 解析原生工具事件的 `exec.agent`（缺省 undefined） */
   resolveAgent?: DshAgentResolver;
   /** 诊断输出（缺省 console.warn） */
   onWarning?: (message: string, error?: unknown) => void;
+  /**
+   * 原生工具名 → dsh 工具名映射，在 `DEFAULT_NATIVE_TOOL_ALIASES` 之上合并。
+   *
+   * 只影响原生工具走钩子路径时发出的 `exec.name`（dsh 工具由适配器按自己的名字发），
+   * 可用来覆盖缺省映射或给别的原生工具起 dsh 别名。
+   */
+  toolAliases?: Readonly<Record<string, string>>;
 }
 
 /** 永不 abort 的取消信号（原生工具在 hook 阶段拿不到 feng 的取消面） */
@@ -129,12 +154,16 @@ export class DshToolEventBridge implements DshToolEventSink {
   private readonly adapted = new Set<string>();
   /** pre/post 之间共享同一个 exec（原生工具路径） */
   private readonly pending = new WeakMap<object, DshEventExec>();
+  /** 生效的工具名映射（缺省映射 + 调用方覆盖） */
+  private readonly aliases: Readonly<Record<string, string>>;
   private sequence = 0;
 
   constructor(
     private readonly ctx: DshEventContextLike,
     private readonly options: DshToolEventBridgeOptions = {},
-  ) {}
+  ) {
+    this.aliases = { ...DEFAULT_NATIVE_TOOL_ALIASES, ...(options.toolAliases ?? {}) };
+  }
 
   /** 标记「该工具由适配器发事件」 */
   markDshTool(toolName: string): void {
@@ -321,12 +350,39 @@ export class DshToolEventBridge implements DshToolEventSink {
     return {
       callId,
       rootCallId: callId,
-      name: toolName,
-      arguments: input,
+      name: this.aliases[toolName] ?? toolName,
+      arguments: this.normalizeArguments(toolName, input, hookCtx),
       ...(agent === undefined ? {} : { agent }),
       signal: NEVER_ABORT.signal,
       token: Symbol(`dsh-hook-exec:${callId}`),
     };
+  }
+
+  /**
+   * 被映射的文件工具把相对路径归一成绝对路径。
+   *
+   * 原生 `filePath` 是相对 `hookCtx.workdir` 的；dsh 的 `write`/`edit` 和
+   * writing-guard 的 `fs.readFile(target)` 都按进程 cwd 解释相对路径，
+   * 两者不一致时 preimage 会读空、审计被静默跳过。
+   */
+  private normalizeArguments(
+    toolName: string,
+    input: unknown,
+    hookCtx: DshHookContextLike,
+  ): unknown {
+    if (this.aliases[toolName] === undefined) return input;
+    if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
+    const record = input as Record<string, unknown>;
+    const key =
+      typeof record.filePath === "string"
+        ? "filePath"
+        : typeof record.file_path === "string"
+          ? "file_path"
+          : undefined;
+    if (key === undefined) return input;
+    const value = record[key];
+    if (typeof value !== "string" || value.length === 0 || isAbsolute(value)) return input;
+    return { ...record, [key]: resolve(hookCtx.workdir, value) };
   }
 
   private warn(message: string, error?: unknown): void {
