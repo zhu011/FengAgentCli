@@ -45,7 +45,22 @@ export type DshContractPath =
   | "agents.currentInitiator"
   | "agents.requireInitiator"
   | "agentDefaultModel.currentSelection"
-  | "agentDefaultModel.saveSelection";
+  | "agentDefaultModel.saveSelection"
+  | "llm.stream"
+  | "llm.registerAdapter"
+  | "llm.listProviders"
+  | "llm.providerRetryPolicy"
+  | "llm.listModels"
+  | "llm.resolveModelInfo"
+  | "llm.prepareCall"
+  | "llm.registerConfigurableProviders"
+  | "llm.registerModelDiscovery"
+  | "message.toDsh"
+  | "message.fromDsh"
+  | "scope.of"
+  | "scope.create"
+  | "scope.bindParent"
+  | "scope.target";
 
 /** 能力分级 */
 export type DshCapabilityTier = "direct" | "adapt" | "unsupported";
@@ -244,4 +259,176 @@ export interface DshModelSelection {
 export interface DshAgentDefaultModelLike {
   currentSelection(): DshModelSelection;
   saveSelection(next: DshModelSelection): Promise<void>;
+}
+
+/* ------------------------------ llm（P3） ------------------------------ */
+
+/** dsh 文本块 */
+export interface DshTextBlock {
+  readonly type: "text";
+  readonly text: string;
+}
+
+/** dsh 推理/思考块（与可见文本分离） */
+export interface DshReasoningBlock {
+  readonly type: "reasoning";
+  readonly text: string;
+}
+
+/** dsh 工具调用块（`arguments` 是模型产出的原始 JSON 字符串） */
+export interface DshToolCallBlock {
+  readonly type: "tool-call";
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: string;
+}
+
+/** dsh 工具结果块（内容本身也是块数组） */
+export interface DshToolResultBlock {
+  readonly type: "tool-result";
+  readonly toolCallId: string;
+  readonly content: readonly DshContentBlock[];
+  readonly isError?: boolean;
+}
+
+/** dsh 内容块：核心五类 + 任意扩展块（结构透传，未知类型由调用方裁决） */
+export type DshContentBlock =
+  | DshTextBlock
+  | DshReasoningBlock
+  | DshToolCallBlock
+  | DshToolResultBlock
+  | { readonly type: string; readonly [key: string]: unknown };
+
+/** dsh `Message` 的映射面（身份 `id` 必填且跨边界保留） */
+export interface DshMessage {
+  readonly id: string;
+  readonly role: "system" | "user" | "assistant";
+  readonly content: readonly DshContentBlock[];
+  /** 产生者（dsh `MessageSource`；本包只读有损保留，不参与路由） */
+  readonly source?: Readonly<Record<string, unknown>>;
+}
+
+/** dsh `TokenUsage`（缓存字段与输入输出是**不相交**计数） */
+export interface DshTokenUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly reasoningTokens?: number;
+}
+
+/** dsh `FinishReason`（可合并扩展；本包只产出核心五种） */
+export type DshFinishReason =
+  | { readonly kind: "stop" }
+  | { readonly kind: "tool-calls" }
+  | { readonly kind: "max-tokens" }
+  | { readonly kind: "aborted"; readonly failure?: unknown }
+  | { readonly kind: "error"; readonly failure?: unknown };
+
+/** dsh `StreamChunk`：适配器原始流协议（usage 在 finish 之前，tool 参数保持原始 JSON） */
+export type DshStreamChunk =
+  | { readonly type: "block-start"; readonly index: number; readonly blockType: string }
+  | { readonly type: "text-delta"; readonly index: number; readonly text: string }
+  | { readonly type: "reasoning-delta"; readonly index: number; readonly text: string }
+  | {
+      readonly type: "tool-call-delta";
+      readonly index: number;
+      readonly id: string;
+      readonly name?: string;
+      readonly argumentsDelta: string;
+    }
+  | { readonly type: "block-end"; readonly index: number; readonly block: DshContentBlock }
+  | { readonly type: "usage"; readonly usage: DshTokenUsage }
+  | { readonly type: "finish"; readonly reason: DshFinishReason; readonly replayState?: unknown };
+
+/** dsh 工具 schema（`GenerateOptions.tools` 的元素） */
+export interface DshToolSchema {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Record<string, unknown>;
+}
+
+/** dsh `GenerateOptions`：一次完整模型请求 */
+export interface DshGenerateOptions {
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEffort?: string;
+  readonly messages: readonly DshMessage[];
+  readonly system?: string;
+  readonly tools?: readonly DshToolSchema[];
+  readonly temperature?: number;
+  readonly maxTokens?: number;
+  readonly stop?: readonly string[];
+  readonly signal?: AbortSignal;
+  readonly sessionId?: string;
+  readonly purpose?: string;
+}
+
+/** dsh `LlmProviderInfo` */
+export interface DshProviderInfo {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** dsh `LlmModelInfo`（目录是建议性的，不是请求白名单） */
+export interface DshModelInfo {
+  readonly provider: string;
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+}
+
+/** dsh `LlmResolvedModelInfo` */
+export interface DshResolvedModelInfo extends DshModelInfo {
+  readonly context?: { readonly contextWindow: number };
+  readonly defaultMaxTokens?: number;
+}
+
+/** dsh `ResolvedRetryPolicy`（本包只产出 normal 模式的完整解析值） */
+export interface DshRetryPolicy {
+  readonly mode: "normal" | "always";
+  readonly initialDelayMs: number;
+  readonly maxDelayMs: number;
+  readonly jitterRatio: number;
+  readonly maxRetries?: number;
+  readonly retryableCodes?: readonly string[];
+}
+
+/** dsh `LlmAdapter` 的结构面（插件注册进来的 provider 适配器） */
+export interface DshLlmAdapterLike {
+  stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>;
+  providerInfo?(provider: string): DshProviderInfo;
+  providerRetryPolicy?(provider: string): DshRetryPolicy | undefined;
+  listModels?(provider: string): Promise<readonly DshModelInfo[]>;
+  resolveModel?(provider: string, model: string, signal?: AbortSignal): Promise<DshResolvedModelInfo>;
+}
+
+/** dsh `PreparedLlmCall`：配置与适配器注册一起解析后的单次调用句柄 */
+export interface DshPreparedCall {
+  readonly config: {
+    readonly provider: string;
+    readonly model: string;
+    readonly temperature?: number;
+    readonly maxTokens?: number;
+  };
+  stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>;
+}
+
+/** `ctx.llm.registerAdapter()` 的返回值（disposer + 原子路由替换） */
+export interface DshAdapterRegistrationHandle {
+  (): void;
+  replace(providers: string[]): void;
+}
+
+/** dsh `ctx.llm` 服务面（本包映射的子集） */
+export interface DshLlmLike {
+  registerAdapter(providers: string[], adapter: DshLlmAdapterLike): DshAdapterRegistrationHandle;
+  listProviders(): DshProviderInfo[];
+  providerRetryPolicy(provider: string): DshRetryPolicy;
+  listModels(provider: string): Promise<readonly DshModelInfo[]>;
+  resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<DshResolvedModelInfo>;
+  stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>;
+  prepareCall(options: DshGenerateOptions): DshPreparedCall;
+  registerConfigurableProviders(entries: readonly unknown[]): never;
+  registerModelDiscovery(settingsNs: string, discover: unknown): never;
 }

@@ -1,4 +1,4 @@
-# dsh ↔ FengAgentCli 服务契约映射（P2）
+# dsh ↔ FengAgentCli 服务契约映射（P2–P3）
 
 > 适用版本：`@deepseek-ai/dsh-*@0.1.0-rc.6`（与本机 dsh CLI 同版）。
 > 实现：`packages/dsh-compat/src/{projection,sessions,agents,agent-default-model,services-plugin}.ts`；
@@ -213,11 +213,99 @@ const blocked = DSH_SERVICE_CAPABILITIES.filter((c) => c.tier === "unsupported")
 // 按插件实际调用的成员判断是否放行；不要在装配期假装全绿。
 ```
 
-## 7. 升级 dsh 版本时的复核清单
+## 7. `ctx.llm`（P3，`src/llm.ts`）
+
+dsh 的 `llm` 是「适配器注册表 + 可被 `llm/stream` 瀑布拦截的流式调用」；FengAgentCli
+侧是 `ctx.model`（`@fengagent/llm` 的 `ModelService`，单条活跃路由 + `LLMEvent` 流）。
+映射为 **adapt**：
+
+| dsh 成员 | FengAgentCli | 分级 | 说明 |
+|---|---|---|---|
+| `stream(options)` | 注册适配器直通 / 回落 `ModelService.stream` | adapt | 失败统一收敛为终态 `finish{kind:'error'|'aborted'}` |
+| `registerAdapter` | 路由表（独占 + disposer + `replace` 原子换路） | direct | 与 dsh 的 all-or-nothing 语义一致 |
+| `listProviders` | 当前模型路由 + 已注册路由 | direct | 适配器 `providerInfo` 生效 |
+| `providerRetryPolicy` | 默认 normal 策略 / 适配器覆盖 | adapt | 只保存与回报；重试执行仍由 `dsh-llm-retry` |
+| `listModels` / `resolveModelInfo` | 适配器委托；回落只报当前 model 身份 | adapt | 无 context/reasoning 元数据 |
+| `prepareCall` | config 冻结 + 单次派发 | adapt | `INVALID_PREPARED_CALL` 语义；不物化 adapterDefaults |
+| `registerConfigurableProviders` / `registerModelDiscovery` | — | unsupported | 需要 settings 命名空间与配置 UI 面 |
+
+**消息与内容块**（`src/messages.ts`）：`text ↔ text`、`reasoning ↔ thinking`、
+`tool-call(args 原始 JSON) ↔ tool-use(input 已解析)`、`tool-result(块数组) ↔ tool-result(文本)`；
+消息 **id 跨边界保留**（dsh `MessageId` 稳定身份 = 我们的 `messages.id` 主键）。
+图片块两个方向都没有等价物（dsh 是 attachment 引用、我们是 base64 inline），严格模式抛
+`DshContractError`、宽松模式返回 loss 清单，不塞假文本。
+
+已知偏差：
+
+- `GenerateOptions.tools` 是 JSON Schema，`ToolDefinition` 要 zod schema →
+  宿主必须注入 `LlmCompatOptions.toolSchemaConverter`；没注入时带 tools 的请求直接
+  以 `dsh_contract_unsupported` 终态失败（不静默丢工具让模型「看不见工具」）；
+- `stop` 序列无对等字段（`LLMRequest` 不含 stop），接受但忽略；
+- `reasoningEffort` 仅在注册适配器路径透传；回落路径忽略；
+- `tool-result` 事件（loop 内部回填）在 dsh 流协议里没有对应 chunk，桥不发。
+
+装配：`dsh-services` 在 `ctx.model` 可用时 `provide("llm", LlmCompat)`；模型缺失时
+`llm` 仍在位，调用期以 `NO_ADAPTER` 终态失败（装载期不炸）。
+
+## 8. `scope`（P3，`src/scope.ts`）
+
+**结论：direct，零翻译。** `scope` 不是 Cordis 服务——它是 `@deepseek-ai/dsh-scope`
+的库级原语（`createScope` / `scopeOf` / `scopeTarget` / `bindScopeParent` / `ScopedLayers`），
+跑在同一条 Cordis 4 运行时上。兼容层**直接重导出上游模块**：
+
+- 保证与 dsh 插件内部 `import { scopeOf } from "@deepseek-ai/dsh-scope"` 是**同一份模块
+  实例、同一套标签 symbol**——自己再实现一份会让两边互相看不见标签，是最容易「假装
+  兼容、实际静默失效」的地方；
+- 额外提供接线：`scopeKeyForSession(sessionId)`（进程内稳定同一把 key）、
+  `createAgentScope(ctx, { sessionId, parent })`、`scopeKeyOf` / `isScopedContext`。
+
+已验证（真 `createRuntime` 根上下文，非 stub）：标签随 `extend()` 继承、`dispose()`
+幂等且真释放其下 effect、父子链顺序与循环拒绝、`scopeTarget` 的准入方向（祖先监听器
+收后代事件，祖先事件不下发给后代）。
+
+**留 P4**：把 `tools/pre-execute` / `tools/post-execute` 发到 scope 载体上，让每个 agent
+的审计插件只看到自己 agent 的事件（当前事件桥发全局事件，单 agent 场景等价，多 agent
+并存时会串台）。
+
+## 9. 服务面清单（P3 采样，`src/service-inventory.ts`）
+
+对 4 个 agent preset 去重出的 29 个插件包 + 25 个宿主/核心包 + 4 个市场插件逐包读
+`inject` 后聚合（`DSH_SERVICE_INVENTORY`，可按分级做 preflight 诊断）：
+
+| 服务 | 必需 | 可选 | 软读 | 分级 |
+|---|---|---|---|---|
+| `tools` | 23 | 0 | 1 | mapped |
+| `systemPrompt` | 15 | 2 | 0 | trivial-shim（下一批最高性价比） |
+| `sandboxPolicy` | 2 | 0 | 6 | out-of-scope（宿主沙箱） |
+| `agents` | 4 | 1 | 2 | mapped |
+| `fs` | 3 | 0 | 3 | trivial-shim |
+| `sessionProjections` | 1 | 5 | 0 | needs-design（todo-plus 硬门槛） |
+| `sessions` | 2 | 0 | 2 | mapped |
+| `subagents` | 4 | 0 | 0 | needs-design |
+| `jobs` / `skills` / `tokenMeter` / `workflowEngine` / `terminals` | 1–2 | 0 | 0–3 | needs-design |
+| `llm` | 1 | 0 | 1 | **p3（本轮）** |
+| `commands` / `settings` / `attachments` | 0–1 | 0–1 | 0–2 | trivial-shim |
+| `shell` / `shellEnv` / `subprocess` / `web` / `approval` / `userQuestions` / `typert` | 0–2 | 0 | 0–7 | out-of-scope（宿主面） |
+
+排期建议：`systemPrompt → fs → settings → skills → sessionProjections → llm 的消费者`
+（`llm` 唯一硬依赖 `compaction-basic` 同时要 `tokenMeter`+`sessions`，先把投影面补上更划算）。
+
+采样注意：npm 的 `latest` tag 对多数 `@deepseek-ai/dsh-*` 陈旧（停在 0.0.1-rc.1），
+preset 实际用 0.1.0-rc.8——不 pin 版本会读到错误的 inject 结构。
+
+市场插件现状：`writing-guard` / `notes` 只需 `tools`（现成可跑）；`todo-plus` 硬要
+`sessionProjections`；`better-edit` 要 `systemPrompt`+`fs`，并按 `systemPrompt.getSectionOrder`
+排段（shim 需实现该可选方法，否则回退编译期默认顺序）。
+
+## 10. 升级 dsh 版本时的复核清单
 
 1. `dsh-session` 的 `SessionStore` 方法集合是否变化（本文件 §2 表）；
 2. `dsh-agent` 的 `AgentRegistry` 方法集合是否变化（§3 表）；
 3. `SessionEventMap` 的 surface 事件类型是否仍是 `user/message | assistant/message | tool/result`（§4）；
 4. `dsh-agent-default-model` 的 `ModelSelection` 是否新增必填字段（§5）；
 5. `dsh-tools` 的 `ToolRunContext` / `PreToolDecision` / `PostToolDecision` 是否变化（§5.5）；
-6. 跑 `bun test packages/dsh-compat`，再跑全量 `bun test`。
+6. `dsh-llm` 的 `StreamChunk` / `GenerateOptions` / `LlmRuntime` 方法集合是否变化（§7）；
+7. `dsh-scope` 的导出集与 `Context.filter` 口径是否变化（§8）；根级 peer 矩阵里
+   `dsh-scope` 与 `dsh-llm` 是否同版本；
+8. 重跑服务面采样（`DSH_SERVICE_INVENTORY`），确认 `inject` 分级没有被新版翻转；
+9. 跑 `bun test packages/dsh-compat`，再跑全量 `bun test`。

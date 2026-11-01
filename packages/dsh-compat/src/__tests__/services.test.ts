@@ -26,6 +26,7 @@ import {
 } from "../contracts.ts";
 import { AgentsCompat, CompatAgent, createCompatAgent } from "../agents.ts";
 import { AgentDefaultModelCompat } from "../agent-default-model.ts";
+import { LlmCompat } from "../llm.ts";
 import { projectSessionEvents } from "../projection.ts";
 import { CompatSession, SessionsCompat } from "../sessions.ts";
 
@@ -434,7 +435,7 @@ describe("ctx.agentDefaultModel 映射", () => {
 });
 
 describe("dsh-services 插件装配", () => {
-  test("挂上 sessions/agents/agentDefaultModel，且 inject 可解析", async () => {
+  test("挂上 sessions/agents/agentDefaultModel/llm，且 inject 可解析", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dsh-services-runtime-"));
     try {
       const runtime = createRuntime({
@@ -451,10 +452,14 @@ describe("dsh-services 插件装配", () => {
           sessions: SessionsCompat;
           agents: AgentsCompat;
           agentDefaultModel: AgentDefaultModelCompat;
+          llm: LlmCompat;
         };
         expect(ctx.sessions).toBeInstanceOf(SessionsCompat);
         expect(ctx.agents).toBeInstanceOf(AgentsCompat);
         expect(ctx.agentDefaultModel).toBeInstanceOf(AgentDefaultModelCompat);
+        expect(ctx.llm).toBeInstanceOf(LlmCompat);
+        // 没有 feng.model 时 llm 仍在位（调用期以 NO_ADAPTER 终态失败，而不是装载期抛错）
+        expect(ctx.llm.listProviders()).toEqual([]);
 
         const session = ctx.sessions.create("plugin-created");
         expect(ctx.sessions.get(session.id)?.events).toEqual([]);

@@ -1,7 +1,7 @@
 {
   "name": "@fengagent/dsh-compat",
   "version": "0.1.0",
-  "description": "dsh 插件兼容层（P1/P2）：tools-only dsh 插件直装 + sessions/agents/agentDefaultModel 服务契约映射",
+  "description": "dsh 插件兼容层（P1/P2/P3）：tools-only dsh 插件直装 + sessions/agents/agentDefaultModel 服务契约映射 + llm/scope 映射",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -12,8 +12,10 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/dsh-scope": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
     "@fengagent/core": "workspace:*",
-    "@fengagent/cordis": "workspace:*"
+    "@fengagent/cordis": "workspace:*",
+    "@fengagent/llm": "workspace:*"
   }
 }

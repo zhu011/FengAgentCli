@@ -21,9 +21,11 @@
  */
 
 import type { StorageService } from "@fengagent/cordis";
-import type { DshCapability, DshContextLike } from "./contracts.ts";
+import type { ToolDefinition } from "@fengagent/core";
+import type { DshCapability, DshContextLike, DshToolSchema } from "./contracts.ts";
 import { AgentDefaultModelCompat } from "./agent-default-model.ts";
 import { AgentsCompat } from "./agents.ts";
+import { LlmCompat, type DshModelLike } from "./llm.ts";
 import { SessionsCompat } from "./sessions.ts";
 
 export const name = "dsh-services";
@@ -35,6 +37,8 @@ export interface DshServicesConfig {
   provider?: string;
   /** 模型服务缺失时的默认 model */
   model?: string;
+  /** dsh JSON-Schema → FengAgentCli ToolDefinition 的转换器（`ctx.llm` 带 tools 时必需） */
+  toolSchemaConverter?: (schema: DshToolSchema) => ToolDefinition;
 }
 
 /**
@@ -116,6 +120,87 @@ export const DSH_SERVICE_CAPABILITIES: readonly DshCapability[] = Object.freeze(
     mappedTo: "ModelService.switchProvider",
     notes: "不写 settings 层；reasoningEffort 忽略",
   },
+  /* ------------------------------ P3：llm ------------------------------ */
+  {
+    path: "llm.stream",
+    tier: "adapt",
+    mappedTo: "LlmCompat.stream → ModelService.stream",
+    notes: "注册适配器直通；未注册 provider 回落 ctx.model；失败收敛为终态 finish",
+  },
+  {
+    path: "llm.registerAdapter",
+    tier: "direct",
+    mappedTo: "LlmCompat.registerAdapter",
+    notes: "路由独占 + disposer.replace 原子换路",
+  },
+  { path: "llm.listProviders", tier: "direct", mappedTo: "LlmCompat.listProviders" },
+  {
+    path: "llm.providerRetryPolicy",
+    tier: "adapt",
+    mappedTo: "LlmCompat.providerRetryPolicy",
+    notes: "只保存/回报策略；重试执行仍由 dsh-llm-retry 负责",
+  },
+  {
+    path: "llm.listModels",
+    tier: "adapt",
+    mappedTo: "LlmCompat.listModels",
+    notes: "注册适配器委托；回落路由只报当前 model，无目录",
+  },
+  {
+    path: "llm.resolveModelInfo",
+    tier: "adapt",
+    mappedTo: "LlmCompat.resolveModelInfo",
+    notes: "回落路由只保证 provider/model 身份，无 context/reasoning 元数据",
+  },
+  {
+    path: "llm.prepareCall",
+    tier: "adapt",
+    mappedTo: "LlmCompat.prepareCall",
+    notes: "冻结 config + 单次派发；adapterDefaults 不物化",
+  },
+  {
+    path: "llm.registerConfigurableProviders",
+    tier: "unsupported",
+    mappedTo: "—",
+    notes: "需要 settings 命名空间 + 配置 UI 面",
+  },
+  {
+    path: "llm.registerModelDiscovery",
+    tier: "unsupported",
+    mappedTo: "—",
+    notes: "同上（端点探测属配置面）",
+  },
+  {
+    path: "message.fromDsh",
+    tier: "adapt",
+    mappedTo: "messages.fromDshMessage",
+    notes: "保留 id；图片/扩展块无等价物（严格模式抛错）",
+  },
+  {
+    path: "message.toDsh",
+    tier: "adapt",
+    mappedTo: "messages.toDshMessage",
+    notes: "base64 图片没有 attachment 身份（严格模式抛错）",
+  },
+  /* ------------------------------ P3：scope ------------------------------ */
+  {
+    path: "scope.of",
+    tier: "direct",
+    mappedTo: "@deepseek-ai/dsh-scope scopeOf（重导出同一模块实例）",
+  },
+  {
+    path: "scope.create",
+    tier: "direct",
+    mappedTo: "createAgentScope → dsh-scope createScope",
+    notes: "同一 Cordis 4 运行时；sessionId 稳定映射同一把 key",
+  },
+  { path: "scope.bindParent", tier: "direct", mappedTo: "bindScopeParent（重导出）" },
+  {
+    path: "scope.target",
+    tier: "direct",
+    mappedTo: "scopeTarget（重导出）",
+    notes: "事件载体可用；工具事件按 scope 路由留 P4",
+  },
 ]);
 
 /**
@@ -144,10 +229,22 @@ export function apply(ctx: unknown, config: DshServicesConfig = {}): void {
     provider: config.provider ?? resolveModel()?.provider ?? "unknown",
     model: config.model ?? defaultModel(),
   });
+  // ctx.llm：模型服务可选（缺失时 stream 以 NO_ADAPTER 终态失败，而不是装载期抛错）
+  const llm = new LlmCompat(
+    context.reflect.get?.("model") as DshModelLike | undefined,
+    {
+      ...(config.provider === undefined ? {} : { provider: config.provider }),
+      ...(config.model === undefined ? {} : { model: config.model }),
+      ...(config.toolSchemaConverter === undefined
+        ? {}
+        : { toolSchemaConverter: config.toolSchemaConverter }),
+    },
+  );
 
   context.reflect.provide("sessions", sessions);
   context.reflect.provide("agents", agents);
   context.reflect.provide("agentDefaultModel", agentDefaultModel);
+  context.reflect.provide("llm", llm);
 }
 
 /** 组装好的插件对象（供 `ctx.plugin(dshServicesPlugin, config)` 使用） */

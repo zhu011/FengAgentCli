@@ -1,8 +1,8 @@
-# @fengagent/dsh-compat（P1/M1 + P2/M2）
+# @fengagent/dsh-compat（P1/M1 + P2/M2 + P3/M3）
 
 dsh 插件兼容层：让 **tools-only dsh 插件**直接装进 FengAgentCli 运行时，
-并把 dsh 的 `sessions` / `agents` / `agentDefaultModel` 服务面映射到现有能力。
-双向插件互通方案的方向 A（见 AGE-35 讨论）。
+并把 dsh 的 `sessions` / `agents` / `agentDefaultModel` / `llm` 服务面与 `scope`
+原语映射到现有能力。双向插件互通方案的方向 A（见 AGE-35 讨论）。
 
 ## 原理
 
@@ -60,7 +60,7 @@ dshmarket 公共插件常**漏声明 peer**（实测：`dsh-plugin-writing-guard
 `@deepseek-ai/dsh-llm`、`dsh-better-edit` import `@deepseek-ai/dsh-fs` 却未声明）。
 插件模块装在仓库根 `node_modules`，其裸导入也从根解析——因此兜底做法是把常用
 dsh peer 矩阵**钉版本装在根 devDependencies**（当前：`dsh-tools` / `dsh-llm` /
-`dsh-fs`，全部 `0.1.0-rc.6` 线）。新插件报 `Cannot find module '@deepseek-ai/…'`
+`dsh-fs` / `dsh-scope`，全部 `0.1.0-rc.6` 线）。新插件报 `Cannot find module '@deepseek-ai/…'`
 时，同法补进根矩阵即可（装完重跑 `bun test packages/dsh-compat`）。
 
 ## P2/M2 范围与限制
@@ -78,6 +78,24 @@ dsh peer 矩阵**钉版本装在根 devDependencies**（当前：`dsh-tools` / `
   `DshContractUnsupportedError`（带 `contract` 路径），不静默降级；
 - 事件溯源型 dsh 插件（session-persistence / session-query / llm-retry 等）
   仍**不能**真正工作——等 P3（llm/scope）与 P4（事件桥）。
+
+## P3/M3 范围与限制（llm / scope / 服务面清单）
+
+- **`ctx.llm`**：`registerAdapter` 路由表直通 dsh 适配器；未注册路由回落 `ctx.model`，
+  把 dsh 消息/内容块翻成 `LLMRequest`、把 `LLMEvent` 翻回 `StreamChunk`；失败统一收敛为
+  终态 `finish{kind:'error'|'aborted'}`。带 `tools` 的请求需要宿主注入
+  `toolSchemaConverter`（dsh 是 JSON Schema、`ToolDefinition` 要 zod），没注入就明确拒绝。
+- **`scope`**：不是 ctx 服务，而是 `@deepseek-ai/dsh-scope` 的库级原语；本包**直接重导出
+  上游模块**（同一 Cordis 4 运行时，标签 symbol 必须一致），并补
+  `scopeKeyForSession` / `createAgentScope` / `isScopedContext` 接线。
+  按 scope 路由工具事件留 P4。
+- **服务面清单**：`DSH_SERVICE_INVENTORY` 是 58 个包的 `inject` 聚合（tools 23 必需、
+  systemPrompt 15 必需、…），可按分级做 preflight 诊断；排期建议见
+  `docs/DSH-CONTRACT-MAP.md` §9。
+
+仍不能真正工作的插件：`sessionProjections` 型（todo-plus）、`systemPrompt`+`fs` 型
+（better-edit）——属下一批 `trivial-shim`/`needs-design`；`session.append` 等事件溯源
+写路径继续显式 unsupported。
 
 ## M1 范围与限制
 

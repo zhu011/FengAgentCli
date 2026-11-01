@@ -90,3 +90,87 @@ export {
   projectSessionEvents,
   type ProjectedSessionEvent,
 } from "./projection.ts";
+
+/* ------------------------------ P3：llm / 消息互转 ------------------------------ */
+
+export {
+  DEFAULT_DSH_RETRY_POLICY,
+  LlmCompat,
+  toLlmRequest,
+  type DshModelLike,
+  type LlmCompatOptions,
+} from "./llm.ts";
+export {
+  dshMessageText,
+  fromDshContent,
+  fromDshMessage,
+  parseToolCallArguments,
+  requireFengMessage,
+  toDshContent,
+  toDshMessage,
+  toDshUserMessage,
+  toFengToolDefinition,
+  type DshMessageLoss,
+  type FromDshMessageResult,
+} from "./messages.ts";
+export type {
+  DshAdapterRegistrationHandle,
+  DshContentBlock,
+  DshFinishReason,
+  DshGenerateOptions,
+  DshLlmAdapterLike,
+  DshLlmLike,
+  DshMessage,
+  DshModelInfo,
+  DshPreparedCall,
+  DshProviderInfo,
+  DshReasoningBlock,
+  DshResolvedModelInfo,
+  DshRetryPolicy,
+  DshStreamChunk,
+  DshTextBlock,
+  DshTokenUsage,
+  DshToolCallBlock,
+  DshToolResultBlock,
+  DshToolSchema,
+} from "./contracts.ts";
+
+/* ------------------------------ P3：scope ------------------------------ */
+
+export {
+  AnonymousEntries,
+  NamedEntries,
+  ScopedLayers,
+  bindScopeParent,
+  carrierKeyOf,
+  createAgentScope,
+  createScope,
+  forgetSessionScopeKey,
+  isScopeCarrier,
+  isScopedContext,
+  scopeChainOf,
+  scopeKeyForSession,
+  scopeKeyOf,
+  scopeOf,
+  scopeParentOf,
+  scopeTarget,
+  type AgentScope,
+  type AgentScopeOptions,
+  type CreateScopeOptions,
+  type DshScopeContextLike,
+  type Scope,
+  type ScopeKey,
+  type ScopeLayer,
+  type ScopeParentBinding,
+  type Scoped,
+} from "./scope.ts";
+
+/* ------------------------------ P3：服务面清单 ------------------------------ */
+
+export {
+  DSH_SCOPE_NOTE,
+  DSH_SERVICE_INVENTORY,
+  summarizeServiceInventory,
+  type DshServiceInventoryEntry,
+  type DshServiceTier,
+} from "./service-inventory.ts";
