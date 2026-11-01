@@ -16,8 +16,7 @@
     "./adapters/events": "./src/adapters/events.ts"
   },
   "files": [
-    "src/**/*.ts",
-    "vendor/**/*"
+    "src/**/*.ts"
   ],
   "license": "MIT",
   "repository": {
@@ -34,8 +33,8 @@
     "@fengagent/context": "workspace:*",
     "@fengagent/agent": "workspace:*",
     "@fengagent/graph": "workspace:*",
-    "@deepseek-ai/cordis": "file:./vendor/cordis",
-    "@deepseek-ai/cosmokit": "file:./vendor/cosmokit",
-    "@standard-schema/spec": "file:./vendor/standard-schema-spec"
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cosmokit": "1.8.2",
+    "@standard-schema/spec": "1.1.0"
   }
 }

@@ -53,8 +53,8 @@ packages/
 ├── graph/    — Graph Engineering 机制：对话即节点 / 可溯源 / 可回退（零运行时依赖）
 ```
 
-`packages/cordis/vendor/` 内置（vendored）`@deepseek-ai/cordis` + `@deepseek-ai/cosmokit` +
-`@standard-schema/spec`（离线可用，tsconfig `paths` 指向 vendor；未来网络可用后可直接改回 npm 依赖）。
+`@deepseek-ai/cordis` + `@deepseek-ai/cosmokit` + `@standard-schema/spec` 走 npm 依赖
+（4.0.1 / 1.8.2 / 1.1.0）；早期为离线可用内置在 `packages/cordis/vendor/`，P0 起已删除 vendor 目录。
 
 ### 2.2 插件域（挂到 ctx 上的服务）
 

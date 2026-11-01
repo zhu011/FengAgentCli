@@ -123,12 +123,12 @@ FengAgentCli/
 ├── scripts/             # 构建、开发、事件迁移（events-migrate.ts）脚本
 ├── .fengagent-cordis/   # 分支级数据根（运行时生成，已 gitignore）
 ├── package.json         # Workspace 根配置
-├── tsconfig.json        # TS 配置（路径映射，含 cordis vendor paths）
+├── tsconfig.json        # TS 配置（workspace 包路径映射）
 └── README.md
 ```
 
-> `packages/cordis/vendor/` 内置（vendored）`@deepseek-ai/cordis` + `@deepseek-ai/cosmokit` +
-> `@standard-schema/spec`，离线可用（tsconfig `paths` 指向 vendor）。
+> `@deepseek-ai/cordis` / `@deepseek-ai/cosmokit` / `@standard-schema/spec` 走 npm 依赖
+> （4.0.1 / 1.8.2 / 1.1.0）；早期内置在 `packages/cordis/vendor/`，P0 起已移除 vendor 目录。
 
 ---
 
