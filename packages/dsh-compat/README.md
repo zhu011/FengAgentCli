@@ -45,6 +45,24 @@ import { loadDshPlugin, defineTool } from "@fengagent/dsh-compat";
 await loadDshPlugin(ctx, "some-dsh-plugin", { ...config });
 ```
 
+`loadDshPlugin` 带**三道硬门**（市场插件实测教训：缺服务的插件装载会「快速返回、
+零工具、无报错」，用户误以为装上了）：
+
+1. **inject 预检**：插件声明 inject 的服务必须已在线（经 `ctx.reflect.get` 免
+   inject 查询），缺失即拒绝装载并点名缺谁（如 `sessionProjections`）；
+2. **装载超时**：fiber 默认 15s 未就绪即失败并尽力卸载（`timeoutMs` 可调，`0` 不限）；
+3. **工具增量门**：装载成功后要求至少注册 1 个工具（`requireTools` 默认开，
+   服务型插件传 `{ requireTools: false }` 关闭）。
+
+## dsh peer 版本矩阵（漏声明 peer 的兜底）
+
+dshmarket 公共插件常**漏声明 peer**（实测：`dsh-plugin-writing-guard` 未声明
+`@deepseek-ai/dsh-llm`、`dsh-better-edit` import `@deepseek-ai/dsh-fs` 却未声明）。
+插件模块装在仓库根 `node_modules`，其裸导入也从根解析——因此兜底做法是把常用
+dsh peer 矩阵**钉版本装在根 devDependencies**（当前：`dsh-tools` / `dsh-llm` /
+`dsh-fs`，全部 `0.1.0-rc.6` 线）。新插件报 `Cannot find module '@deepseek-ai/…'`
+时，同法补进根矩阵即可（装完重跑 `bun test packages/dsh-compat`）。
+
 ## P2/M2 范围与限制
 
 服务面插件 `dsh-services` 提供 `ctx.sessions` / `ctx.agents` / `ctx.agentDefaultModel`

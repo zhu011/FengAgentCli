@@ -20,7 +20,10 @@ import {
   type FengRuntime,
   type RuntimePluginEntry,
 } from "@fengagent/cordis";
-import { loadDshPlugin } from "../loader.ts";
+import {
+  loadDshPlugin,
+  type DshLoadContext,
+} from "../loader.ts";
 
 /** 相对 packages/cordis/src/（runtime.ts 动态 import 的解析基准） */
 const COMPAT_ID = "../../dsh-compat/src/index.ts";
@@ -118,8 +121,8 @@ describe("P1/M1 — tools-only dsh 插件装进 FengAgentCli", () => {
       };
       expect(duck.toJSONSchema()["type"]).toBe("object");
 
-      // 程序化装载器：同一 runtime 再装夹具插件（config 透传）
-      await loadDshPlugin(runtime.ctx as never, FIXTURE_ID, { greeting: "salut" });
+      // 程序化装载器：同一 runtime 再装夹具插件（config 透传；工具增量门默认开）
+      await loadDshPlugin(runtime.ctx as unknown as DshLoadContext, FIXTURE_ID, { greeting: "salut" });
       expect(runtime.ctx.tools.get("demo_greet")).toBeDefined();
     } finally {
       await runtime.stop();
