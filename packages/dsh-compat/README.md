@@ -16,7 +16,7 @@ dsh 插件兼容层：让 **tools-only dsh 插件**直接装进 FengAgentCli 运
   后进入 ToolRegistry，走与原生工具**完全相同**的注册/物化/执行管道；
 - FengAgentCli 原生工具定义照旧直通，判别式不误伤；
 - LLM 可见参数 = dsh 编译后的 JSON Schema **零转换直通**（providers 的
-  `zodToJsonSchemaCompat` 以 `_def` + `toJSONSchema()` 鸭子类型读取）；
+  `zodToJsonSchemaCompat` 优先读 `toJSONSchema()`，zod v3 走 `zod-to-json-schema`）；
 - 参数校验 = dsh 工具自带（`defineTool` 包裹），feng 侧 `parse` 直通；
 - 取消语义：dsh `timeoutMs` → `AbortSignal.timeout`。
 

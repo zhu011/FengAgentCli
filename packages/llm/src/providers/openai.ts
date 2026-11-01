@@ -12,6 +12,7 @@ import type {
   FinishReason,
 } from "@fengagent/core";
 import type { ToolDefinition } from "@fengagent/core";
+import { toOpenAIToolParameters } from "./schema.ts";
 
 function toOpenAIMessages(
   system: string | ContentBlock[],
@@ -107,23 +108,9 @@ function toOpenAITools(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: convertZodToJsonSchema(tool.inputSchema) as Record<string, unknown>,
+      parameters: toOpenAIToolParameters(tool.inputSchema),
     },
   }));
-}
-
-function convertZodToJsonSchema(schema: unknown): Record<string, unknown> {
-  if (schema && typeof schema === "object" && "_def" in (schema as Record<string, unknown>)) {
-    try {
-      const zodToJsonSchema = (
-        schema as { toJSONSchema?: () => Record<string, unknown> }
-      ).toJSONSchema?.();
-      if (zodToJsonSchema) return zodToJsonSchema;
-    } catch {
-      // fall through
-    }
-  }
-  return { type: "object", properties: {} };
 }
 
 function mapFinishReason(

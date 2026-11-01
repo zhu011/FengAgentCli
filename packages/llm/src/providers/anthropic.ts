@@ -13,6 +13,7 @@ import type {
   FinishReason,
 } from "@fengagent/core";
 import type { ToolDefinition } from "@fengagent/core";
+import { toAnthropicInputSchema } from "./schema.ts";
 
 function toAnthropicContent(
   blocks: ContentBlock[],
@@ -79,32 +80,11 @@ function toAnthropicSystem(
 function toAnthropicTools(
   tools: ToolDefinition[],
 ): Anthropic.Messages.Tool[] {
-  return tools.map((tool) => {
-    const schema = convertZodToJsonSchema(tool.inputSchema);
-    return {
-      name: tool.name,
-      description: tool.description,
-      input_schema: {
-        type: "object" as const,
-        properties: schema.properties ?? {},
-        ...(schema.description ? { description: schema.description as string } : {}),
-      },
-    };
-  });
-}
-
-function convertZodToJsonSchema(schema: unknown): Record<string, unknown> {
-  if (schema && typeof schema === "object" && "_def" in (schema as Record<string, unknown>)) {
-    try {
-      const zodToJsonSchema = (
-        schema as { toJSONSchema?: () => Record<string, unknown> }
-      ).toJSONSchema?.();
-      if (zodToJsonSchema) return zodToJsonSchema;
-    } catch {
-      // fall through
-    }
-  }
-  return { type: "object", properties: {} };
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: toAnthropicInputSchema(tool.inputSchema) as Anthropic.Messages.Tool.InputSchema,
+  }));
 }
 
 function mapFinishReason(

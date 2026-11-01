@@ -7,9 +7,9 @@
  * - `execute(args, exec)`：exec 携带 `signal`（取消），参数校验由 defineTool 包裹。
  *
  * FengAgentCli 侧契约（`@fengagent/core` 的 `ToolDefinition`）：
- * - `inputSchema`：Zod schema —— 但 LLM providers 的转换层是鸭子类型的：
- *   `zodToJsonSchemaCompat` 以 `_def` 判 Zod、再调 `toJSONSchema()`（见
- *   `packages/llm/src/providers/openai-compatible.ts` / `anthropic.ts`）；
+ * - `inputSchema`：Zod schema —— LLM providers 的转换层是鸭子类型的：
+ *   `zodToJsonSchemaCompat` 先试实例自带的 `toJSONSchema()`，zod v3（带 `_def`）
+ *   再走 `zod-to-json-schema`（见 `packages/llm/src/providers/schema.ts`）；
  *   执行侧仅调 `inputSchema.parse(input)`（`packages/tools/src/executor.ts`）。
  *   因此这里用一个**直通 schema 对象**同时满足三点：带 `_def` 标记、
  *   `toJSONSchema()` 返回 dsh 编译参数、`parse` 直通（dsh 工具自校验）。

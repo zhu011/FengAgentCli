@@ -51,11 +51,11 @@ profile 用户层 `cordis.patch.yml` 配置装载列表：
 
 ## 已知问题（记录在案）
 
-- **feng providers 的 zod v3 空洞**：`zodToJsonSchemaCompat` 只调
-  `schema.toJSONSchema?.()`，zod v3 实例没有该方法 → feng 原生工具的
-  LLM 可见参数一直是 `{type:"object", properties:{}}`（模型靠 description
-  推断）。本插件用 `zod-to-json-schema` 补上了 dsh 侧；feng 侧建议同法修
-  （或升 zod v4）。
+- ~~**feng providers 的 zod v3 空洞**~~（已修）：`zodToJsonSchemaCompat` 现在先试
+  实例自带的 `toJSONSchema()`，zod v3（带 `_def`）走 `zod-to-json-schema`
+  （`packages/llm/src/providers/schema.ts` 共享实现，三个 provider 统一）——
+  feng 原生工具的 LLM 可见参数不再是空 schema。本插件 dsh 侧的转换保留，
+  两条路径行为一致。
 - dsh 侧更高阶 feng 服务面（model/storage/context…）不在本版——feng 插件
   目前限「注册工具」型。
 

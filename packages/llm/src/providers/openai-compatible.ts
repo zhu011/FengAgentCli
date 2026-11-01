@@ -6,6 +6,7 @@
 
 import type { LLMClient, LLMRequest, LLMEvent, LLMResponse } from "../client.ts";
 import type { ContentBlock, FinishReason } from "@fengagent/core";
+import { toOpenAIToolParameters } from "./schema.ts";
 
 export interface OpenAICompatibleOptions {
   apiKey: string;
@@ -377,24 +378,10 @@ function buildRequestBody(
       function: {
         name: t.name,
         description: t.description,
-        parameters: zodToJsonSchemaCompat(t.inputSchema),
+        parameters: toOpenAIToolParameters(t.inputSchema),
       },
     })),
     max_tokens: request.maxTokens,
     temperature: request.temperature,
   };
-}
-
-function zodToJsonSchemaCompat(schema: unknown): Record<string, unknown> {
-  if (schema && typeof schema === "object" && "_def" in (schema as Record<string, unknown>)) {
-    try {
-      const zodToJsonSchema = (
-        schema as { toJSONSchema?: () => Record<string, unknown> }
-      ).toJSONSchema?.();
-      if (zodToJsonSchema) return zodToJsonSchema;
-    } catch {
-      // fall through
-    }
-  }
-  return { type: "object", properties: {} };
 }
