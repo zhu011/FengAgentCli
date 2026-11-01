@@ -122,6 +122,23 @@
         "@fengagent/shared": "workspace:*",
       },
     },
+    "packages/group-plugin": {
+      "name": "@fengagent/group-plugin",
+      "version": "0.1.0",
+      "dependencies": {
+        "@fengagent/agent": "workspace:*",
+        "@fengagent/groups": "workspace:*",
+        "@fengagent/tools": "workspace:*",
+      },
+    },
+    "packages/groups": {
+      "name": "@fengagent/groups",
+      "version": "0.1.0",
+      "dependencies": {
+        "@fengagent/agent": "workspace:*",
+        "@fengagent/shared": "workspace:*",
+      },
+    },
     "packages/llm": {
       "name": "@fengagent/llm",
       "version": "0.1.0",
@@ -144,6 +161,8 @@
         "@fengagent/core": "workspace:*",
         "@fengagent/eval": "workspace:*",
         "@fengagent/graph": "workspace:*",
+        "@fengagent/group-plugin": "workspace:*",
+        "@fengagent/groups": "workspace:*",
         "@fengagent/llm": "workspace:*",
         "@fengagent/shared": "workspace:*",
         "@fengagent/tools": "workspace:*",
@@ -337,6 +356,10 @@
     "@fengagent/events": ["@fengagent/events@workspace:packages/events"],
 
     "@fengagent/graph": ["@fengagent/graph@workspace:packages/graph"],
+
+    "@fengagent/group-plugin": ["@fengagent/group-plugin@workspace:packages/group-plugin"],
+
+    "@fengagent/groups": ["@fengagent/groups@workspace:packages/groups"],
 
     "@fengagent/llm": ["@fengagent/llm@workspace:packages/llm"],
 
