@@ -6021,3 +6021,49 @@ body {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* ── WebUI 插件面（S1）── */
+
+.webui-toast-viewport {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  max-width: 340px;
+}
+
+.webui-toast {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  box-shadow: var(--shadow-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  animation: webui-toast-in 0.18s ease;
+}
+
+.webui-toast--error {
+  border-left: 3px solid var(--danger);
+}
+
+.webui-toast--info {
+  border-left: 3px solid var(--accent);
+}
+
+@keyframes webui-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.webui-slot-error {
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: var(--danger);
+  border: 1px dashed var(--danger);
+  border-radius: 8px;
+  opacity: 0.85;
+}

@@ -18,6 +18,12 @@
  */
 
 import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
+// WebUI 插件宿主（S1）：react 共享单例 + Provider；后端未装配时零影响
+import * as __ReactShared from "react";
+import { WebUiProvider, SlotHost } from "./webui/index.tsx";
+
+// react 外部共享：插件 bundle 的 react 作 external，运行时从这里取（单例）
+(window as unknown as Record<string, unknown>).__FENG_REACT__ = __ReactShared;
 import { createRoot } from "react-dom/client";
 import { createApiClient } from "./api/client.ts";
 import { ChatPage } from "./pages/chat.tsx";
@@ -149,6 +155,7 @@ function App() {
   );
 
   return (
+    <WebUiProvider>
     <div className="app-shell">
       <nav className="app-nav" aria-label="主导航">
         <div className="app-nav__brand">
@@ -236,7 +243,10 @@ function App() {
           </div>
         )}
       </div>
+      {/* WebUI 插件 slot（S1 首挂点：导航扩展；后端未装配时渲染 null） */}
+      <SlotHost slotId="nav-extension" />
     </div>
+    </WebUiProvider>
   );
 }
 
