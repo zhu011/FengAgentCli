@@ -226,6 +226,19 @@ function createMemorySessionStore(): SessionStoreLike {
 }
 
 /**
+ * dsh 兼容层（P2）装配面 — 模块 id 经 runtime.ts 的 `import(entry.id)` 解析，
+ * 基准目录是 `packages/cordis/src/`（与 cordis/graph/events 的相对引用同一原因：
+ * 这里传的是「用户插件路径」，不是包名解析）。
+ *
+ * - tools 面（`dshCompatPlugin`）：给 ctx.tools 长出 dsh 接口面，并把 feng 原生
+ *   工具的执行翻译成 dsh 的 `tools/pre-execute` / `tools/post-execute`；
+ * - 服务面（`dsh-services`）：`ctx.sessions` / `ctx.agents` / `ctx.agentDefaultModel`
+ *   的契约映射（分级与偏差见 docs/DSH-CONTRACT-MAP.md）。
+ */
+const DSH_COMPAT_PLUGIN_ID = "../../dsh-compat/src/plugin.ts";
+const DSH_SERVICES_PLUGIN_ID = "../../dsh-compat/src/services-plugin.ts";
+
+/**
  * 经 createRuntime 装配完整 Agent（模型/工具/上下文/存储/图/loop 全部走插件）。
  */
 export async function createRuntimeAgent(
@@ -554,6 +567,11 @@ export async function createRuntimeAgent(
         },
       },
       { id: BUILTIN_PLUGINS.TOOLS, config: { registry: toolRegistry } },
+      // P2 dsh 兼容层（tools 面）：装 dsh 接口面 + 事件桥。hooks 传的是真实
+      // HookRegistry，因此 feng 原生工具的每次执行都会发出 dsh 的
+      // tools/pre-execute · tools/post-execute —— 审计类 dsh 插件（writing-guard
+      // 等）才看得见执行，而不是「装上但钩子静默不触发」。
+      { id: DSH_COMPAT_PLUGIN_ID, config: { hooks: hookRegistry } },
       {
         id: BUILTIN_PLUGINS.STRATEGY,
         config: {
@@ -566,6 +584,9 @@ export async function createRuntimeAgent(
         id: BUILTIN_PLUGINS.STORAGE,
         config: { sessionStore: dualWrite, graph: graphStore },
       },
+      // P2 dsh 服务面：ctx.sessions / ctx.agents / ctx.agentDefaultModel，
+      // 事实源是 feng.storage，故必须排在 STORAGE 之后（缺 storage 会显式报错）。
+      { id: DSH_SERVICES_PLUGIN_ID },
       { id: BUILTIN_PLUGINS.GRAPH, config: { store: graphStore } },
       // Phase 2：事件服务（写路径/重放/自愈 + 运行时注册表），与双写/图共享同一 EventStore
       { id: BUILTIN_PLUGINS.EVENTS, config: { store: eventStore } },
