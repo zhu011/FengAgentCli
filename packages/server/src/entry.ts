@@ -78,6 +78,10 @@ async function main() {
     ...(runtimeResult.runtime.ctx.webui
       ? { webui: runtimeResult.runtime.ctx.webui }
       : {}),
+    // S2：插件管理面（ctx.plugins）→ /api/plugins（列表/安装/启停/卸载）
+    ...(runtimeResult.runtime.ctx.plugins
+      ? { plugins: runtimeResult.runtime.ctx.plugins }
+      : {}),
   });
 }
 

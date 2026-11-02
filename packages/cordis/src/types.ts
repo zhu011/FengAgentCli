@@ -18,6 +18,13 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { WebuiAsset, WebuiManifest, WebuiRegistry } from "./webui.ts";
 import type {
+  PluginInstallRequest,
+  PluginListResult,
+  PluginManager,
+  PluginMutationResult,
+  PluginRemoveResult,
+} from "./plugin-manager.ts";
+import type {
   LLMClient,
   LLMRequest,
   LLMResponse,
@@ -360,6 +367,27 @@ export interface WebuiService {
   resolveAsset(pluginId: string, relativePath: string): WebuiAsset | null;
 }
 
+/**
+ * 插件管理面服务（S2）— `/api/plugins` 的装/卸/启停。
+ *
+ * 插件本体在 `<dataRoot>/plugins`，启用状态与安装来源在
+ * `<dataRoot>/plugins.json`；带 `webui` 声明的插件同时进 `/api/webui/manifest`。
+ */
+export interface PluginsService {
+  /** 底层管理器（route 层与测试直接复用） */
+  readonly manager: PluginManager;
+  /** `GET /api/plugins` 响应 */
+  list(): PluginListResult;
+  /** 安装本地插件（目录 / .tgz） */
+  install(request: PluginInstallRequest): Promise<PluginMutationResult>;
+  /** 启用/停用 */
+  setEnabled(id: string, enabled: boolean): PluginMutationResult;
+  /** 卸载 */
+  remove(id: string): PluginRemoveResult;
+  /** 插件面是否需要重启才完全生效（工具/服务面） */
+  restartRequired(): boolean;
+}
+
 /** 插件注册项 — config 驱动加载（可插拔积木） */
 export interface RuntimePluginEntry {
   /** 插件 id（内置注册表或用户插件路径） */
@@ -400,6 +428,7 @@ export const BUILTIN_PLUGINS = {
   EVENTS: "feng.events",
   REBUILD: "feng.rebuild",
   WEBUI: "feng.webui",
+  PLUGINS: "feng.plugins",
 } as const;
 
 /* ------------------------------ Context 服务增强 ------------------------------ */
@@ -431,5 +460,12 @@ declare module "@deepseek-ai/cordis" {
      * 声明，提供 manifest 与 assets 解析（白名单 + 防目录穿越）。
      */
     webui: WebuiService;
+    /**
+     * 插件管理面（S2）— 本地插件安装/卸载/启停 + 重启提示。
+     *
+     * 与 `ctx.webui` 共用插件目录与状态文件：停用插件会立即从 UI manifest 消失，
+     * 工具/服务面则需要重启宿主才重新装载。
+     */
+    plugins: PluginsService;
   }
 }

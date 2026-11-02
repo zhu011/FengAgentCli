@@ -62,10 +62,18 @@ import type {
   StrategyService,
   ToolChoiceStrategy,
   ToolService,
+  PluginsService,
   WebuiService,
 } from "./types.ts";
 import { join } from "node:path";
 import type { WebuiAsset, WebuiManifest, WebuiRegistry } from "./webui.ts";
+import type {
+  PluginInstallRequest,
+  PluginListResult,
+  PluginManager,
+  PluginMutationResult,
+  PluginRemoveResult,
+} from "./plugin-manager.ts";
 
 /* ------------------------------ 事件服务（Phase 1） ------------------------------ */
 
@@ -763,5 +771,47 @@ export class WebuiServiceImpl extends Service implements WebuiService {
 
   resolveAsset(pluginId: string, relativePath: string): WebuiAsset | null {
     return this.webuiRegistry.resolveAsset(pluginId, relativePath);
+  }
+}
+
+/* ------------------------------ 插件管理面（S2） ------------------------------ */
+
+/**
+ * 插件管理面服务实现 — 提供 `ctx.plugins`。
+ *
+ * 装/卸/启停全在 `<dataRoot>/plugins` + `plugins.json` 上做；与 `feng.webui`
+ * 共享同一份插件目录，所以「停用」在 UI manifest 上立即生效，工具/服务面
+ * 由 `restartRequired()` 提示需要重启宿主。
+ */
+export class PluginsServiceImpl extends Service implements PluginsService {
+  constructor(
+    ctx: Context,
+    private readonly pluginManager: PluginManager,
+  ) {
+    super(ctx, "plugins");
+  }
+
+  get manager(): PluginManager {
+    return this.pluginManager;
+  }
+
+  list(): PluginListResult {
+    return this.pluginManager.list();
+  }
+
+  install(request: PluginInstallRequest): Promise<PluginMutationResult> {
+    return this.pluginManager.install(request);
+  }
+
+  setEnabled(id: string, enabled: boolean): PluginMutationResult {
+    return this.pluginManager.setEnabled(id, enabled);
+  }
+
+  remove(id: string): PluginRemoveResult {
+    return this.pluginManager.remove(id);
+  }
+
+  restartRequired(): boolean {
+    return this.pluginManager.restartRequired();
   }
 }

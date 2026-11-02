@@ -16,6 +16,7 @@ import { graphPlugin } from "./adapters/graph.ts";
 import { eventsPlugin } from "./adapters/events.ts";
 import { rebuildPlugin } from "./adapters/rebuild.ts";
 import { webuiPlugin } from "./adapters/webui.ts";
+import { pluginsPlugin } from "./adapters/plugins.ts";
 import { BUILTIN_PLUGINS, type FengRuntime, type FengRuntimeConfig, type RuntimePluginEntry } from "./types.ts";
 
 /** 内置插件注册表 — 插件 id → 插件工厂（config 驱动） */
@@ -72,7 +73,18 @@ export const BUILTIN_PLUGIN_REGISTRY: Record<string, BuiltinPluginFactory> = {
       sessionStore: config.sessionStore as never,
     }),
   [BUILTIN_PLUGINS.WEBUI]: (config) =>
-    webuiPlugin({ pluginsRoot: config.pluginsRoot as string | undefined }),
+    webuiPlugin({
+      dataRoot: config.dataRoot as string | undefined,
+      pluginsRoot: config.pluginsRoot as string | undefined,
+      stateFile: config.stateFile as string | undefined,
+    }),
+  [BUILTIN_PLUGINS.PLUGINS]: (config) =>
+    pluginsPlugin({
+      dataRoot: config.dataRoot as string | undefined,
+      pluginsRoot: config.pluginsRoot as string | undefined,
+      stateFile: config.stateFile as string | undefined,
+      installDepsCommand: config.installDepsCommand as string | null | undefined,
+    }),
 };
 
 /** 创建 Cordis 运行时 */

@@ -544,11 +544,17 @@ export async function createRuntimeAgent(
         id: BUILTIN_PLUGINS.REBUILD,
         config: { store: eventStore, sessionStore: storageBackend },
       },
-      // S1：WebUI 插件注册表（`/api/webui/manifest` + assets），
-      // 扫描 `<dataRoot>/plugins/*` 的 `fengagent.webui` 声明
+      // S1：WebUI 插件注册表（`/api/webui/manifest` + assets）——
+      // 扫描 `<dataRoot>/plugins/*` 的 `fengagent.webui` 声明；
+      // 状态文件 `plugins.json` 决定停用插件是否参与 manifest
       {
         id: BUILTIN_PLUGINS.WEBUI,
-        config: { pluginsRoot: join(resolveDataRoot({ workdir }), "plugins") },
+        config: { dataRoot: dataDir },
+      },
+      // S2：插件管理面（`/api/plugins`）—— 与 webui 共用同一份插件目录与状态文件
+      {
+        id: BUILTIN_PLUGINS.PLUGINS,
+        config: { dataRoot: dataDir },
       },
       {
         id: BUILTIN_PLUGINS.LOOP,

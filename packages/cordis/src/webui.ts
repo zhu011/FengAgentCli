@@ -18,6 +18,7 @@
 
 import { extname, isAbsolute, resolve, sep } from "node:path";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import type { PluginStore } from "./plugin-store.ts";
 
 /** 单个可装载插件的 manifest 条目 */
 export interface WebuiPluginInfo {
@@ -29,6 +30,13 @@ export interface WebuiPluginInfo {
   version: string;
   /** 入口 URL（浏览器侧 `import()` 用） */
   entry: string;
+  /**
+   * 入口 URL 的前端字段名（与 `entry` 同值）。
+   *
+   * WebUI 的 ModuleLoader 按 `bundleUrl` 取入口；两个名字同时给，避免宿主与
+   * 装载器对字段名的理解漂移（客户端契约以 `bundleUrl` 为兼容名）。
+   */
+  bundleUrl: string;
   /** 插件声明的 slot（`settings-section` 等） */
   slots: string[];
   /** assets 前缀 URL（相对资源在此之下） */
@@ -57,7 +65,7 @@ export interface WebuiAsset {
 }
 
 /** 插件声明的 WebUI 入口 */
-interface WebuiDeclaration {
+export interface WebuiDeclaration {
   entry: string;
   slots: string[];
 }
@@ -83,7 +91,7 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 /** 插件 id 合法性：单个目录名，不允许路径分隔符与 `..` */
-function isSafePluginId(id: string): boolean {
+export function isSafePluginId(id: string): boolean {
   return id.length > 0 && id !== "." && id !== ".." && /^[A-Za-z0-9._@-]+$/.test(id);
 }
 
@@ -104,11 +112,24 @@ function normalizeRelativePath(input: string): string | null {
   return parts.length > 0 ? parts.join("/") : null;
 }
 
-/** 读取 package.json 的 `fengagent.webui` 声明（未声明返回 null，非法声明抛错） */
-function readDeclaration(pluginDir: string): WebuiDeclaration | null {
+/**
+ * 读取插件 package.json（容忍 UTF-8 BOM：Windows 上不少工具会带 BOM 写文件）。
+ */
+export function readPluginPackageJson(pluginDir: string): Record<string, unknown> {
+  const raw = readFileSync(resolve(pluginDir, "package.json"), "utf8").replace(/^\uFEFF/, "");
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+/**
+ * 读取 package.json 的 `fengagent.webui` 声明（未声明返回 null，非法声明抛错）。
+ *
+ * 插件管理面（S2）复用它做「这个插件有没有 UI 面」的判定，保证 manifest 与
+ * `/api/plugins` 对同一份声明给出一致结论。
+ */
+export function readWebuiDeclaration(pluginDir: string): WebuiDeclaration | null {
   const pkgPath = resolve(pluginDir, "package.json");
   if (!existsSync(pkgPath)) return null;
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as Record<string, unknown>;
+  const pkg = readPluginPackageJson(pluginDir);
   const fengagent = pkg.fengagent;
   if (!fengagent || typeof fengagent !== "object") return null;
   const webui = (fengagent as Record<string, unknown>).webui;
@@ -130,9 +151,14 @@ function readDeclaration(pluginDir: string): WebuiDeclaration | null {
   return { entry, slots };
 }
 
-/** assets URL 前缀 */
-function assetsBaseFor(id: string): string {
+/** assets URL 前缀（manifest 与插件管理面共用，保证两处 URL 完全一致） */
+export function webuiAssetsBase(id: string): string {
   return `/api/webui/assets/${encodeURIComponent(id)}`;
+}
+
+/** 插件 manifest 条目的入口 URL（`<assetsBase>/<entry>`） */
+export function webuiEntryUrl(id: string, entry: string): string {
+  return `${webuiAssetsBase(id)}/${entry}`;
 }
 
 /**
@@ -140,13 +166,19 @@ function assetsBaseFor(id: string): string {
  *
  * 无状态：每次 `manifest()` / `resolveAsset()` 都按磁盘现况读取，
  * 因此「装完插件刷新页面即可」——不需要重启宿主。
+ *
+ * 传入 `store` 时以 `plugins.json` 的启用状态为准：停用的插件既不出现在
+ * manifest 里，其 assets 也不再对外服务（S2 插件管理面）。
  */
 export class WebuiRegistry {
   /** 插件根目录（`<dataRoot>/plugins`） */
   readonly pluginsRoot: string;
+  /** 可选状态存储（缺省 = 全部插件均启用） */
+  private readonly store: PluginStore | undefined;
 
-  constructor(pluginsRoot: string) {
+  constructor(pluginsRoot: string, options: { store?: PluginStore } = {}) {
     this.pluginsRoot = resolve(pluginsRoot);
+    this.store = options.store;
   }
 
   /** 扫描插件根目录，返回可装载条目与坏包错误 */
@@ -166,21 +198,24 @@ export class WebuiRegistry {
 
     for (const id of entries) {
       if (!isSafePluginId(id)) continue;
+      if (this.store && !this.store.isEnabled(id)) continue; // 停用 = 不装载
       try {
         const pluginDir = resolve(this.pluginsRoot, id);
-        const declaration = readDeclaration(pluginDir);
+        const declaration = readWebuiDeclaration(pluginDir);
         if (!declaration) continue; // 未声明 webui 的插件不参与 UI 装载
         const entryPath = resolve(pluginDir, declaration.entry);
         if (!entryPath.startsWith(pluginDir + sep) || !existsSync(entryPath)) {
           throw new Error(`webui entry 不存在或越界: ${declaration.entry}`);
         }
-        const pkg = JSON.parse(readFileSync(resolve(pluginDir, "package.json"), "utf8")) as Record<string, unknown>;
-        const assetsBase = assetsBaseFor(id);
+        const pkg = readPluginPackageJson(pluginDir);
+        const assetsBase = webuiAssetsBase(id);
+        const entryUrl = webuiEntryUrl(id, declaration.entry);
         plugins.push({
           id,
           name: typeof pkg.name === "string" && pkg.name ? pkg.name : id,
           version: typeof pkg.version === "string" && pkg.version ? pkg.version : "0.0.0",
-          entry: `${assetsBase}/${declaration.entry}`,
+          entry: entryUrl,
+          bundleUrl: entryUrl,
           slots: declaration.slots,
           assetsBase,
         });
@@ -201,17 +236,25 @@ export class WebuiRegistry {
   /**
    * 把插件内相对路径解析为可读取的绝对路径。
    *
-   * 返回 null 表示：插件 id 非法 / 插件未声明 webui / 路径越界 / 文件不存在。
-   * 任何情况下都不会返回 `pluginsRoot` 之外的文件。
+   * 返回 null 表示：插件 id 非法 / 插件被停用 / 插件未声明 webui / 路径越界 /
+   * 文件不存在。任何情况下都不会返回 `pluginsRoot` 之外的文件。
    */
   resolveAsset(pluginId: string, relativePath: string): WebuiAsset | null {
     if (!isSafePluginId(pluginId)) return null;
+    if (this.store && !this.store.isEnabled(pluginId)) return null;
     const normalized = normalizeRelativePath(relativePath);
     if (!normalized) return null;
 
     const pluginDir = resolve(this.pluginsRoot, pluginId);
     if (!pluginDir.startsWith(this.pluginsRoot + sep)) return null;
-    if (!readDeclaration(pluginDir)) return null;
+    // 坏包（package.json 不存在/非法）对 assets 一律 404，不把解析错误变成 500
+    let declaration: WebuiDeclaration | null = null;
+    try {
+      declaration = readWebuiDeclaration(pluginDir);
+    } catch {
+      return null;
+    }
+    if (!declaration) return null;
 
     const candidate = resolve(pluginDir, normalized);
     if (!candidate.startsWith(pluginDir + sep)) return null;

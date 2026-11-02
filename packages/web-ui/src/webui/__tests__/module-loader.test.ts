@@ -7,6 +7,7 @@
 
 import { describe, expect, test, beforeEach } from "bun:test";
 import { loadWebUiPlugins, resetWebUiLoaderForTest } from "../module-loader.ts";
+import type { WebUiPluginContext } from "../plugin-context.ts";
 
 beforeEach(() => {
   resetWebUiLoaderForTest();
@@ -18,7 +19,7 @@ function makeHarness() {
   return {
     registered,
     toasts,
-    registerSlot: (slotId: string, component: unknown, pluginId: string) => {
+    registerSlot: (slotId: string, _component: unknown, pluginId: string) => {
       registered.push({ slotId, pluginId });
     },
     toast: (text: string, kind: "info" | "error" = "info") => {
@@ -101,7 +102,9 @@ describe("loadWebUiPlugins", () => {
     const h = makeHarness();
     const opts = {
       fetchImpl: manifestFetch([{ id: "once", name: "O", version: "1", bundleUrl: "http://x/1.mjs" }]),
-      importImpl: async () => ({ setup: (ctx) => void ctx.registerSlot("nav-extension", function N() {}) }),
+      importImpl: async () => ({
+        setup: (ctx: WebUiPluginContext) => void ctx.registerSlot("nav-extension", function N() {}),
+      }),
       registerSlot: h.registerSlot,
       toast: h.toast,
     } as const;

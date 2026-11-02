@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWebuiRoutes } from "../routes/webui.ts";
 import { WebuiRegistry } from "../../../cordis/src/webui.ts";
+import { loadWebUiPlugins, resetWebUiLoaderForTest } from "../../../web-ui/src/webui/module-loader.ts";
 
 let root: string;
 let pluginsRoot: string;
@@ -67,8 +68,38 @@ describe("GET /api/webui/manifest", () => {
       id: "demo",
       version: "0.2.0",
       entry: "/api/webui/assets/demo/client.mjs",
+      // 前端 ModuleLoader 按 bundleUrl 取入口：两个字段必须同值
+      bundleUrl: "/api/webui/assets/demo/client.mjs",
       slots: ["settings-section", "nav-extension"],
     });
+  });
+
+  test("manifest → ModuleLoader → slot 注册（前后端契约对齐）", async () => {
+    resetWebUiLoaderForTest();
+    const slots: string[] = [];
+    const toasts: string[] = [];
+    let importedFrom: string | undefined;
+
+    const result = await loadWebUiPlugins({
+      fetchImpl: ((url: string, init?: RequestInit) => app.request(url, init)) as unknown as typeof fetch,
+      importImpl: async (url: string) => {
+        importedFrom = url;
+        return {
+          setup: (ctx) => {
+            ctx.registerSlot("nav-extension", () => null);
+            ctx.toast("来自插件");
+          },
+        };
+      },
+      registerSlot: (slotId, _component, pluginId) => slots.push(`${pluginId}:${slotId}`),
+      toast: (text) => toasts.push(text),
+    });
+
+    expect(result.loaded).toEqual(["demo"]);
+    expect(result.failed).toEqual([]);
+    expect(importedFrom).toBe("/api/webui/assets/demo/client.mjs");
+    expect(slots).toEqual(["demo:nav-extension"]);
+    expect(toasts).toEqual(["来自插件"]);
   });
 });
 

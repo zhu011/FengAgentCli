@@ -12,6 +12,9 @@
 export * from "./types.ts";
 export * from "./services.ts";
 export * from "./runtime.ts";
+export * from "./webui.ts";
+export * from "./plugin-store.ts";
+export * from "./plugin-manager.ts";
 export { modelPlugin } from "./adapters/model.ts";
 export { toolPlugin } from "./adapters/tool.ts";
 export { contextPlugin } from "./adapters/context.ts";

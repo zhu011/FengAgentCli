@@ -29,6 +29,7 @@ import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks
 import { createGroupRoutes } from "./routes/groups.ts";
 import { createGroupMcpRoutes } from "./mcp-groups.ts";
 import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
+import { createPluginRoutes, type PluginRouteSource } from "./routes/plugins.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
 import type { GroupOrchestrator } from "@fengagent/groups";
@@ -76,6 +77,13 @@ export interface ServerOptions {
    * （测试/无插件场景），前端据此回退「无插件」。
    */
   webui?: WebuiRouteSource;
+  /**
+   * 插件管理面（S2：`ctx.plugins`）。
+   *
+   * 提供时挂 `/api/plugins`（列表/安装/启停/卸载）；缺省不挂，
+   * 前端据此把「插件」tab 显示为不可用。
+   */
+  plugins?: PluginRouteSource;
 }
 
 /**
@@ -166,6 +174,11 @@ export function createApp(options: ServerOptions): {
   // S1：WebUI 插件装载链 —— 插件清单 + 插件静态资源（白名单 dataRoot/plugins）
   if (options.webui) {
     app.route("/api/webui", createWebuiRoutes(options.webui));
+  }
+
+  // S2：插件管理面 —— 列表/安装/启停/卸载（只接受本地源，重启提示随响应返回）
+  if (options.plugins) {
+    app.route("/api/plugins", createPluginRoutes(options.plugins));
   }
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）

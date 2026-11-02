@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebuiRegistry } from "../webui.ts";
+import { PluginStore } from "../plugin-store.ts";
 
 let root: string;
 let pluginsRoot: string;
@@ -58,6 +59,7 @@ describe("WebuiRegistry.list", () => {
       name: "@acme/plugin-demo",
       version: "0.1.0",
       entry: "/api/webui/assets/demo/client.mjs",
+      bundleUrl: "/api/webui/assets/demo/client.mjs",
       slots: ["settings-section"],
       assetsBase: "/api/webui/assets/demo",
     });
@@ -169,5 +171,58 @@ describe("WebuiRegistry.resolveAsset", () => {
 
   test("目录不是文件 → null", () => {
     expect(new WebuiRegistry(pluginsRoot).resolveAsset("demo", "assets")).toBeNull();
+  });
+
+  test("坏包（package.json 非法）→ null，不抛错（HTTP 面不会变 500）", () => {
+    const dir = join(pluginsRoot, "broken");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), "{ not json");
+    expect(new WebuiRegistry(pluginsRoot).resolveAsset("broken", "client.mjs")).toBeNull();
+  });
+
+  test("package.json 带 UTF-8 BOM 仍可解析（Windows 工具常见）", () => {
+    const dir = join(pluginsRoot, "bom");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      `\uFEFF${JSON.stringify({ name: "bom", version: "1.0.0", fengagent: { webui: "./client.mjs" } })}`,
+    );
+    writeFileSync(join(dir, "client.mjs"), "export {};");
+
+    const { plugins, errors } = new WebuiRegistry(pluginsRoot).list();
+    expect(errors).toEqual([]);
+    expect(plugins.map((plugin) => plugin.id)).toContain("bom");
+  });
+});
+
+describe("WebuiRegistry + plugins.json（S2 启停）", () => {
+  beforeEach(() => {
+    writePlugin("demo", { fengagent: { webui: "./client.mjs" } }, { "client.mjs": "export default 1;" });
+  });
+
+  test("停用插件：manifest 不返回、assets 一律 404", () => {
+    const store = new PluginStore(join(root, "plugins.json"));
+    store.setEnabled("demo", false);
+
+    const registry = new WebuiRegistry(pluginsRoot, { store });
+    expect(registry.manifest().plugins).toEqual([]);
+    expect(registry.resolveAsset("demo", "client.mjs")).toBeNull();
+  });
+
+  test("重新启用后立即恢复（无需重建注册表）", () => {
+    const store = new PluginStore(join(root, "plugins.json"));
+    store.setEnabled("demo", false);
+    const registry = new WebuiRegistry(pluginsRoot, { store });
+
+    store.setEnabled("demo", true);
+
+    expect(registry.manifest().plugins.map((p) => p.id)).toEqual(["demo"]);
+    expect(registry.resolveAsset("demo", "client.mjs")).not.toBeNull();
+  });
+
+  test("未登记状态 = 默认启用（手工放目录仍可用）", () => {
+    const store = new PluginStore(join(root, "plugins.json"));
+    const registry = new WebuiRegistry(pluginsRoot, { store });
+    expect(registry.manifest().plugins.map((p) => p.id)).toEqual(["demo"]);
   });
 });
