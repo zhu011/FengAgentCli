@@ -80,7 +80,7 @@ export function SettingsPage({ theme, onSelectTheme }: SettingsPageProps): React
 
       {tab === "plugins" ? <PluginsTab /> : null}
       {tab === "general" ? <GeneralTab theme={theme} onSelectTheme={onSelectTheme} /> : null}
-      {tab === "model" ? <ModelTabPlaceholder /> : null}
+      {tab === "model" ? <ModelTab /> : null}
       {tab === "about" ? <AboutTab /> : null}
     </section>
   );
@@ -309,15 +309,239 @@ function GeneralTab({ theme, onSelectTheme }: { theme: Theme; onSelectTheme: (t:
   );
 }
 
-/* ------------------------------ 模型 tab（S3 占位） ------------------------------ */
+/* ------------------------------ 模型 tab（S3） ------------------------------ */
 
-function ModelTabPlaceholder(): ReactNode {
+interface ProviderField {
+  key: string;
+  label: string;
+  type: string;
+  env?: string;
+  required?: boolean;
+  locked?: boolean;
+  configured?: boolean;
+  value?: string;
+}
+
+interface ProviderInfo {
+  id: string;
+  label: string;
+  description?: string;
+  active?: boolean;
+  configured?: boolean;
+  models?: string[];
+  fields?: ProviderField[];
+}
+
+interface ModelSettingsSnapshot {
+  settings: Record<string, unknown>;
+  sources: Record<string, string>;
+  envLocked: string[];
+  overridden?: string[];
+  applyError?: string | null;
+  active?: Record<string, unknown>;
+}
+
+function ModelTab(): ReactNode {
+  const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
+  const [snap, setSnap] = useState<ModelSettingsSnapshot | null>(null);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const applySnapshot = useCallback((body: ModelSettingsSnapshot) => {
+    setSnap(body);
+    setForm((prev) => {
+      const next: Record<string, string> = { ...prev };
+      for (const [k, v] of Object.entries(body.settings)) {
+        if (typeof v === "string" || typeof v === "number") next[k] = String(v);
+      }
+      return next;
+    });
+  }, []);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const [pRes, mRes] = await Promise.all([
+        fetch("/api/settings/providers"),
+        fetch("/api/settings/model"),
+      ]);
+      if (pRes.ok) {
+        const body = (await pRes.json()) as { providers?: ProviderInfo[] };
+        setProviders(body.providers ?? []);
+      }
+      if (mRes.ok) {
+        applySnapshot((await mRes.json()) as ModelSettingsSnapshot);
+      }
+      if (!pRes.ok && !mRes.ok) throw new Error("模型设置 API 未装配（settings/model 路由缺失？）");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [applySnapshot]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const selectedProvider = form["provider"] ?? snap?.active?.["provider"] ?? "";
+  const providerInfo = providers?.find((p) => p.id === selectedProvider);
+
+  const save = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const patch: Record<string, unknown> = {};
+      for (const key of ["provider", "model", "smallModel", "fallbackModel", "maxTokens", "temperature", "contextWindow", "compactThreshold"]) {
+        const v = form[key];
+        if (v === undefined || v === "") continue;
+        if (["maxTokens", "contextWindow", "compactThreshold"].includes(key)) {
+          const n = Number(v);
+          if (Number.isFinite(n) && n > 0) patch[key] = n;
+        } else {
+          patch[key] = v;
+        }
+      }
+      for (const f of providerInfo?.fields ?? []) {
+        const v = form[f.key];
+        if (v !== undefined && v !== "" && !f.locked) patch[f.key] = v;
+      }
+      const res = await fetch("/api/settings/model", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string } | string;
+        snapshot?: ModelSettingsSnapshot;
+      };
+      if (!res.ok) {
+        const msg = typeof body.error === "string" ? body.error : body.error?.message ?? `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      if (body.snapshot) applySnapshot(body.snapshot);
+      if (body.snapshot?.applyError) {
+        setNotice("已保存，重启后生效（当前进程应用失败）");
+      } else if (body.snapshot?.overridden && body.snapshot.overridden.length > 0) {
+        const keys = body.snapshot.overridden.join("、");
+        setNotice(`已保存（${keys} 被环境变量覆盖，实际仍用环境变量值）`);
+      } else {
+        setNotice("已保存并热切换（下一轮对话即用新模型）");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [saving, form, providerInfo, applySnapshot]);
+
+  const sourceBadge = (key: string): ReactNode => {
+    if (snap?.envLocked?.includes(key)) {
+      return <span className="ag-badge ag-badge--muted" title="环境变量锁定，改 UI 不生效">env 锁定</span>;
+    }
+    if (snap?.sources?.[key] === "settings") {
+      return <span className="ag-badge ag-badge--ok" title="来自 settings.json">已保存</span>;
+    }
+    return null;
+  };
+
   return (
     <div className="ag-section">
       <h2 className="ag-section__title">模型</h2>
-      <div className="ag-page__empty">
-        模型参数 / provider 配置面在 S3 落地（`GET/PATCH /api/settings/model`），
-        当前请用 TUI 的 /model、/provider 命令或 FENG_* 环境变量。
+      {error ? <div className="ag-page__hint ag-page__hint--error">{error}</div> : null}
+      {notice ? <div className="ag-page__hint">{notice}</div> : null}
+
+      <div className="ag-form">
+        <div className="ag-form__row">
+          <label className="ag-form__label" htmlFor="tm-set-provider">Provider</label>
+          <select
+            id="tm-set-provider"
+            className="ag-form__select"
+            value={form["provider"] ?? ""}
+            disabled={snap?.envLocked?.includes("provider")}
+            onChange={(e) => setForm((p) => ({ ...p, provider: e.target.value }))}
+          >
+            {(providers ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}{p.configured ? "" : "（未配置）"}
+              </option>
+            ))}
+          </select>
+          {sourceBadge("provider")}
+        </div>
+
+        <div className="ag-form__row">
+          <label className="ag-form__label" htmlFor="tm-set-model">模型</label>
+          <input
+            id="tm-set-model"
+            className="ag-form__select"
+            list="tm-set-model-suggestions"
+            value={form["model"] ?? ""}
+            disabled={snap?.envLocked?.includes("model")}
+            onChange={(e) => setForm((p) => ({ ...p, model: e.target.value }))}
+          />
+          <datalist id="tm-set-model-suggestions">
+            {(providerInfo?.models ?? []).map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          {sourceBadge("model")}
+        </div>
+
+        <div className="ag-form__row">
+          <label className="ag-form__label" htmlFor="tm-set-max-tokens">maxTokens</label>
+          <input
+            id="tm-set-max-tokens"
+            className="ag-form__select"
+            type="number"
+            value={form["maxTokens"] ?? ""}
+            disabled={snap?.envLocked?.includes("maxTokens")}
+            onChange={(e) => setForm((p) => ({ ...p, maxTokens: e.target.value }))}
+          />
+        </div>
+
+        <div className="ag-form__row">
+          <label className="ag-form__label" htmlFor="tm-set-temperature">temperature</label>
+          <input
+            id="tm-set-temperature"
+            className="ag-form__select"
+            type="number"
+            step="0.1"
+            min="0"
+            max="2"
+            value={form["temperature"] ?? ""}
+            disabled={snap?.envLocked?.includes("temperature")}
+            onChange={(e) => setForm((p) => ({ ...p, temperature: e.target.value }))}
+          />
+        </div>
+
+        {(providerInfo?.fields ?? []).map((f) => (
+          <div className="ag-form__row" key={f.key}>
+            <label className="ag-form__label" htmlFor={`tm-set-${f.key}`}>
+              {f.label}
+              {f.required ? " *" : ""}
+            </label>
+            <input
+              id={`tm-set-${f.key}`}
+              className="ag-form__select"
+              type={f.type === "secret" ? "password" : "text"}
+              value={form[f.key] ?? ""}
+              disabled={f.locked}
+              placeholder={f.locked ? "由环境变量提供" : f.configured ? "已配置（留空保持不变）" : f.env ? `env: ${f.env}` : ""}
+              onChange={(e) => setForm((p) => ({ ...p, [f.key]: e.target.value }))}
+            />
+            {f.locked ? <span className="ag-badge ag-badge--muted">env 锁定</span> : null}
+          </div>
+        ))}
+
+        <div className="ag-form__actions">
+          <button type="button" className="ag-btn ag-btn--primary" disabled={saving} onClick={() => void save()}>
+            {saving ? <Loader2 className="ag-page__spin" size={14} aria-hidden="true" /> : null}
+            保存（热切换）
+          </button>
+        </div>
       </div>
     </div>
   );
