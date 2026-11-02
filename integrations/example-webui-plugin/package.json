@@ -1,0 +1,11 @@
+{
+  "name": "example-webui-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "S1 端到端示例 WebUI 插件：nav-extension slot 渲染 + toast + assets 引用",
+  "type": "module",
+  "fengagent": {
+    "webui": { "entry": "./client.mjs", "slots": ["nav-extension"] }
+  },
+  "license": "MIT"
+}
