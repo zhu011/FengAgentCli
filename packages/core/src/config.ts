@@ -13,6 +13,7 @@ import {
   deepMerge,
   expandTilde,
 } from "@fengagent/shared";
+import { applySettingsLayer, readSettings } from "./settings.ts";
 import {
   BASH_TIMEOUT,
   COMPACT_BUFFER,
@@ -344,21 +345,10 @@ export function readConfigFileSync(filePath: string): PartialConfig {
 /**
  * 将 API Key 打码显示：只保留前 4 位 + "****"。
  *
- * 安全约定：任何 UI / 日志输出中展示 API Key 时都必须经过本函数，
- * 禁止输出明文 Key。
- *
- * @param key - API Key（未配置时为 undefined / 空串）
- * @returns 打码后的展示文本；未配置时返回 "未配置"
+ * 实现落在 `@fengagent/shared`（设置面与配置面共用同一份打码逻辑），
+ * 此处转出以保持既有引用路径（`@fengagent/core`）不变。
  */
-export function maskApiKey(key: string | undefined | null): string {
-  if (!key || key.length === 0) {
-    return "未配置";
-  }
-  if (key.length <= 4) {
-    return "****";
-  }
-  return `${key.slice(0, 4)}****`;
-}
+export { maskApiKey } from "@fengagent/shared";
 
 // ──────────────────────────────────────────────
 // 配置持久化（/provider 命令用）
@@ -427,6 +417,8 @@ export async function loadConfig(
     cordisConfigPath?: string;
     /** 显式配置文件路径（未传时读取 FENG_CONFIG_FILE 环境变量） */
     configFilePath?: string;
+    /** WebUI 设置文件路径（未传时读取 FENG_SETTINGS_FILE / ~/.fengagent/settings.json） */
+    settingsPath?: string;
     env?: Record<string, string | undefined>;
   },
 ): Promise<Config> {
@@ -459,6 +451,13 @@ export async function loadConfig(
     const explicitConfig = await readConfigFile(explicitPath);
     merged = deepMerge(merged, explicitConfig);
   }
+
+  // 6. 环境变量
+  // 5.5（插在文件层之后、环境变量之前）：WebUI 设置层 `settings.json`。
+  //     UI 显式选择的配置要压过磁盘上的旧配置文件，但环境变量永远赢
+  //     （部署方锁定 provider/model 时 UI 不会偷偷改掉运行时行为）。
+  const settingsLayer = readSettings(options?.settingsPath, env).settings;
+  merged = applySettingsLayer(merged, settingsLayer);
 
   // 6. 环境变量
   const withEnv = applyEnvVars(merged, env);

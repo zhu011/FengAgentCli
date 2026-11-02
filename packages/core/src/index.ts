@@ -137,6 +137,30 @@ export type {
   PortableCredentialKey,
 } from "./config.ts";
 
+// WebUI 设置面（S3：模型 / Provider 配置持久化）
+export {
+  SECRET_SETTINGS_KEYS,
+  SETTINGS_KEYS,
+  SETTINGS_ENV_KEYS,
+  SettingsError,
+  SettingsPatchSchema,
+  applySettingsLayer,
+  envLockedKeys,
+  isLockedByEnv,
+  maskSettings,
+  readSettings,
+  resolveSettingsPath,
+  sanitizeSettings,
+  settingsViewOf,
+  writeSettings,
+} from "./settings.ts";
+export type {
+  SettingsKey,
+  SettingsPatch,
+  ReadSettingsResult,
+  WriteSettingsResult,
+} from "./settings.ts";
+
 export type {
   SquadMemberStatus,
   SquadTaskStatus,

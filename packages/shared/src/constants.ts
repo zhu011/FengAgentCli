@@ -85,6 +85,19 @@ export const GLOBAL_CONFIG_PATH = "~/.fengagent/config.json" as const;
  */
 export const CONFIG_FILE_ENV = "FENG_CONFIG_FILE" as const;
 
+/**
+ * WebUI 设置文件路径（S3：模型 / Provider 配置）。
+ *
+ * 与 `GLOBAL_CONFIG_PATH` 分开：`config.json` 由 CLI（`/model`、`/provider`）与
+ * 项目配置维护，`settings.json` 只由 WebUI Settings 写入，语义是「UI 显式选择的
+ * 运行配置」，跨工作目录共享（宿主每次对话都会在新的空 cwd 里拉起运行时）。
+ * 优先级：环境变量 > settings.json > 配置文件 > 默认值。
+ */
+export const GLOBAL_SETTINGS_PATH = "~/.fengagent/settings.json" as const;
+
+/** 覆盖设置文件路径的环境变量名（测试 / 多实例隔离用） */
+export const SETTINGS_FILE_ENV = "FENG_SETTINGS_FILE" as const;
+
 /** Token 估算系数（字符数 / 4） */
 export const TOKEN_ESTIMATE_RATIO = 4 as const;
 

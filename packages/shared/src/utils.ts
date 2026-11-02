@@ -146,3 +146,23 @@ export function truncate(text: string, maxLength: number): string {
 export function toSingleLine(text: string): string {
   return text.replace(/\r\n|\r|\n/g, "⏎");
 }
+
+/**
+ * 将 API Key 打码显示：只保留前 4 位 + "****"。
+ *
+ * 安全约定：任何 UI / 日志输出中展示 API Key 时都必须经过本函数，
+ * 禁止输出明文 Key。放在 `shared` 是为了让配置层与设置层各自引用同一实现
+ * （不复制打码逻辑，也不引入 core ⇄ settings 的模块循环）。
+ *
+ * @param key - API Key（未配置时为 undefined / 空串）
+ * @returns 打码后的展示文本；未配置时返回 "未配置"
+ */
+export function maskApiKey(key: string | undefined | null): string {
+  if (!key || key.length === 0) {
+    return "未配置";
+  }
+  if (key.length <= 4) {
+    return "****";
+  }
+  return `${key.slice(0, 4)}****`;
+}

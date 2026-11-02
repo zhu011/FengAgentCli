@@ -30,6 +30,7 @@ import { createGroupRoutes } from "./routes/groups.ts";
 import { createGroupMcpRoutes } from "./mcp-groups.ts";
 import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
 import { createPluginRoutes, type PluginRouteSource } from "./routes/plugins.ts";
+import { createSettingsRoutes, type SettingsRouteSource } from "./routes/settings.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
 import type { GroupOrchestrator } from "@fengagent/groups";
@@ -84,6 +85,13 @@ export interface ServerOptions {
    * 前端据此把「插件」tab 显示为不可用。
    */
   plugins?: PluginRouteSource;
+  /**
+   * 模型设置面（S3：`/api/settings/model` + `/api/settings/providers`）。
+   *
+   * 提供时挂 `/api/settings`；缺省不挂（测试 / 无 runtime 场景），
+   * 前端据此把「模型」tab 显示为不可用。
+   */
+  settings?: SettingsRouteSource;
 }
 
 /**
@@ -116,7 +124,7 @@ export function createApp(options: ServerOptions): {
     "*",
     cors({
       origin: config.corsOrigin,
-      allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowHeaders: ["Content-Type", "Authorization"],
     }),
   );
@@ -179,6 +187,11 @@ export function createApp(options: ServerOptions): {
   // S2：插件管理面 —— 列表/安装/启停/卸载（只接受本地源，重启提示随响应返回）
   if (options.plugins) {
     app.route("/api/plugins", createPluginRoutes(options.plugins));
+  }
+
+  // S3：模型设置面 —— 生效值 / 来源 / 环境变量锁定 + PATCH 落盘并热切换
+  if (options.settings) {
+    app.route("/api/settings", createSettingsRoutes(options.settings));
   }
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）

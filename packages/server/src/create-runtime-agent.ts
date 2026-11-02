@@ -31,7 +31,7 @@ import type {
   ToolInputOverride,
   SubagentRunner,
 } from "@fengagent/core";
-import { createSession, createUserMessage, loadConfig, ConfigSchema } from "@fengagent/core";
+import { createSession, createUserMessage, loadConfig, resolveSettingsPath, ConfigSchema } from "@fengagent/core";
 import type { LLMClient } from "@fengagent/llm";
 import { createClientFromEnv, ReloadableLLMClient } from "@fengagent/llm";
 import {
@@ -47,6 +47,7 @@ import type { HookRegistry, McpRegistrationResult, ToolRegistry } from "@fengage
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
+import { createModelSettingsService, type ModelSettingsService } from "./model-settings.ts";
 import type { AgentGroupService, GroupOrchestrator } from "@fengagent/groups";
 import { AgentGroupStore } from "@fengagent/agent";
 import {
@@ -203,6 +204,13 @@ export interface CreateRuntimeAgentResult {
   mcpResult: McpRegistrationResult | null;
   /** Cordis 运行时（Phase 3/4：server/WebUI 经 ctx.storage / ctx.graph 取数） */
   runtime: FengRuntime;
+  /**
+   * WebUI Settings 模型面（S3）：`/api/settings/model` + `/api/settings/providers`。
+   *
+   * 读生效配置 / 写 `settings.json` / 热切换 client，三件事收在同一服务里，
+   * server 路由只做 HTTP 适配。
+   */
+  modelSettings: ModelSettingsService;
 }
 
 /** 简易内存会话存储（enableSessionStore=false 时兜底，避免插件落到磁盘） */
@@ -582,6 +590,23 @@ export async function createRuntimeAgent(
   // 记录 reload 状态（供 reloadProvider / onSwitch 使用）
   reloadState = { client: llmClient, config, env: options.env, runtime };
 
+  // S3：WebUI 设置面（模型 / Provider）—— 写 settings.json 后按「与重启一致」的
+  // 生效值热切换 client（provider / model / 凭据改动即时生效，无需重启宿主）
+  const settingsPath = resolveSettingsPath(options.env);
+  const modelSettings = createModelSettingsService({
+    getConfig: () => reloadState?.config ?? config,
+    settingsPath,
+    ...(options.env ? { env: options.env } : {}),
+    reload: () =>
+      loadConfig(options.cliArgs, {
+        settingsPath,
+        ...(options.env ? { env: options.env } : {}),
+      }),
+    apply: (patch) => {
+      reloadProvider(patch);
+    },
+  });
+
   function makeAgent(): Agent {
     return new RuntimeAgent(runtime, config, {
       llmClient,
@@ -611,6 +636,7 @@ export async function createRuntimeAgent(
     hookRegistry,
     mcpResult,
     runtime,
+    modelSettings,
   };
 }
 

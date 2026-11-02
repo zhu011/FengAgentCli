@@ -45,6 +45,18 @@ export type {
 // 可热替换的 LLM Client（/provider 运行时切换用）
 export { ReloadableLLMClient } from "./reloadable.ts";
 
+// Provider 目录（WebUI Settings 的只读元数据）
+export {
+  PROVIDER_CATALOG,
+  findProvider,
+  isProviderConfigured,
+} from "./catalog.ts";
+export type {
+  ProviderDescriptor,
+  ProviderField,
+  ProviderFieldType,
+} from "./catalog.ts";
+
 // LLM 追踪日志
 export { createLlmTracer } from "./trace.ts";
 export type { LlmTraceRecord, LlmTracer } from "./trace.ts";

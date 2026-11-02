@@ -82,6 +82,8 @@ async function main() {
     ...(runtimeResult.runtime.ctx.plugins
       ? { plugins: runtimeResult.runtime.ctx.plugins }
       : {}),
+    // S3：模型设置面 → /api/settings/model + /api/settings/providers
+    settings: runtimeResult.modelSettings,
   });
 }
 
