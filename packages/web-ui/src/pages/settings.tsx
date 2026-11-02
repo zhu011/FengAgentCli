@@ -341,6 +341,9 @@ interface ModelSettingsSnapshot {
   active?: Record<string, unknown>;
 }
 
+/** 掩码 secret（后端打码格式，如 `sk-a****`）——不回填 form、不提交 */
+const MASKED_SECRET = /\*{3,}$/;
+
 function ModelTab(): ReactNode {
   const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
   const [snap, setSnap] = useState<ModelSettingsSnapshot | null>(null);
@@ -354,7 +357,10 @@ function ModelTab(): ReactNode {
     setForm((prev) => {
       const next: Record<string, string> = { ...prev };
       for (const [k, v] of Object.entries(body.settings)) {
-        if (typeof v === "string" || typeof v === "number") next[k] = String(v);
+        if (typeof v !== "string" && typeof v !== "number") continue;
+        // 掩码 secret 不回填 form——防止保存时把 `sk-a****` 覆盖真实 Key
+        if (typeof v === "string" && MASKED_SECRET.test(v)) continue;
+        next[k] = String(v);
       }
       return next;
     });
@@ -400,13 +406,19 @@ function ModelTab(): ReactNode {
         if (["maxTokens", "contextWindow", "compactThreshold"].includes(key)) {
           const n = Number(v);
           if (Number.isFinite(n) && n > 0) patch[key] = n;
+        } else if (key === "temperature") {
+          const n = Number(v);
+          if (Number.isFinite(n) && n >= 0 && n <= 2) patch[key] = n;
         } else {
           patch[key] = v;
         }
       }
       for (const f of providerInfo?.fields ?? []) {
         const v = form[f.key];
-        if (v !== undefined && v !== "" && !f.locked) patch[f.key] = v;
+        if (v === undefined || v === "" || f.locked) continue;
+        // 掩码值不提交（后端打码的 `****` 不是真实 Key）
+        if (typeof v === "string" && MASKED_SECRET.test(v)) continue;
+        patch[f.key] = v;
       }
       const res = await fetch("/api/settings/model", {
         method: "PATCH",
