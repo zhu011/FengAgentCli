@@ -270,7 +270,7 @@ describe("PluginManager.install（.tgz）", () => {
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(join(pluginDir, "package.json"), JSON.stringify({ name: "real-tar", version: "3.0.0" }));
     const tarball = join(sources, "real-tar.tgz");
-    const tar = spawnSync("tar", ["-czf", tarball, "-C", staging, "package"], { encoding: "utf8" });
+    const tar = spawnSync("tar", ["--force-local", "-czf", tarball, "-C", staging, "package"], { encoding: "utf8" });
     expect(tar.status).toBe(0);
 
     const result = await makeManager().install({ source: tarball });

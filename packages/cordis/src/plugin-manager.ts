@@ -488,7 +488,12 @@ export class PluginManager {
         // 临时目录清理失败不影响安装结果
       }
     };
-    const result = spawnSync("tar", ["-xzf", source, "-C", dir], { encoding: "utf8", timeout: 60_000 });
+    // GNU tar on Windows：盘符冒号要 --force-local，反斜杠会被吞——统一转正斜杠
+    const result = spawnSync(
+      "tar",
+      ["--force-local", "-xzf", source.replace(/\\/g, "/"), "-C", dir.replace(/\\/g, "/")],
+      { encoding: "utf8", timeout: 60_000 },
+    );
     if (result.error || result.status !== 0) {
       cleanup();
       const detail = result.error?.message ?? (result.stderr || "").trim();
