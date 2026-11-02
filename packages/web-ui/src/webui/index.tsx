@@ -14,6 +14,7 @@
  */
 
 export { WebUiProvider, SlotHost } from "./slot-registry.tsx";
+export { Menu, Tooltip, DisclosureRow, webUiPrimitives } from "./primitives.tsx";
 export { loadWebUiPlugins, resetWebUiLoaderForTest } from "./module-loader.ts";
 export type { WebUiLoadResult, LoadWebUiPluginsOptions } from "./module-loader.ts";
 export type { WebUiPluginContext, WebUiClientModule, WebUiManifest, WebUiManifestEntry, WebUiSlotId } from "./plugin-context.ts";

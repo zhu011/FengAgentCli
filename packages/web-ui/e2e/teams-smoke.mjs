@@ -66,7 +66,7 @@ await check("四页导航 + 团队子视图控件 + mock 团队列表", async ()
   await page.getByRole("tab", { name: "团队" }).click();
   await page.locator(".tm-subnav__chip", { hasText: "团队" }).waitFor();
   const tabs = await page.locator(".app-nav__tab").allTextContents();
-  if (tabs.length !== 4) throw new Error(`导航 tab 数 = ${tabs.length}，期望 4`);
+  if (tabs.length !== 5) throw new Error(`导航 tab 数 = ${tabs.length}，期望 5（含设置）`);
   if (!tabs.some((t) => t.includes("团队")) || tabs.some((t) => t.includes("Agents") || t.includes("群聊"))) {
     throw new Error(`导航内容异常: ${tabs.join("|")}`);
   }

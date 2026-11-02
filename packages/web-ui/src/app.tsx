@@ -30,13 +30,14 @@ import { ChatPage } from "./pages/chat.tsx";
 import { ObservabilityPage } from "./pages/observability.tsx";
 import { EvalPage } from "./pages/eval.tsx";
 import { TeamsPage } from "./pages/teams.tsx";
+import { SettingsPage } from "./pages/settings.tsx";
 import { SessionSidebar } from "./components/session-sidebar.tsx";
 import { useSession } from "./hooks/use-session.ts";
 import { type Theme } from "./lib/theme.ts";
 import "./index.css";
 
 /** 应用视图（agents/groups 已并入 teams，旧 URL 走别名重定向） */
-export type AppView = "chat" | "observability" | "eval" | "teams";
+export type AppView = "chat" | "observability" | "eval" | "teams" | "settings";
 
 /** 团队页子视图（?sub= 参数） */
 export type TeamsSubViewParam = "tasks" | "members";
@@ -54,7 +55,7 @@ export interface DeepLinkTarget {
 }
 
 /** URL 里的合法 view 值（含旧别名，解析时归一） */
-const KNOWN_VIEWS = new Set(["chat", "observability", "eval", "teams", "agents", "groups"]);
+const KNOWN_VIEWS = new Set(["chat", "observability", "eval", "teams", "settings", "agents", "groups"]);
 
 function App() {
   const client = useMemo(() => createApiClient(), []);
@@ -199,6 +200,15 @@ function App() {
           >
             <span aria-hidden="true">👥</span> 团队
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "settings"}
+            className={`app-nav__tab ${view === "settings" ? "app-nav__tab--active" : ""}`}
+            onClick={() => setView("settings")}
+          >
+            <span aria-hidden="true">⚙️</span> 设置
+          </button>
         </div>
       </nav>
 
@@ -236,6 +246,10 @@ function App() {
         ) : view === "teams" ? (
           <div className="app-shell__main">
             <TeamsPage client={client} deepLink={deepLink} onNavigate={navigate} />
+          </div>
+        ) : view === "settings" ? (
+          <div className="app-shell__main">
+            <SettingsPage theme={theme} onSelectTheme={selectTheme} />
           </div>
         ) : (
           <div className="app-shell__main">

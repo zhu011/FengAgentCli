@@ -12,6 +12,7 @@
  */
 
 import type { WebUiClientModule, WebUiManifest, WebUiManifestEntry, WebUiPluginContext } from "./plugin-context.ts";
+import { webUiPrimitives } from "./primitives.tsx";
 
 /** 装载结果（供诊断/测试） */
 export interface WebUiLoadResult {
@@ -83,6 +84,7 @@ export async function loadWebUiPlugins(options: LoadWebUiPluginsOptions): Promis
         registerSlot: (slotId, component) => registerSlot(slotId, component, entry.id),
         toast,
         api: (path, init) => fetch(path, init),
+        primitives: webUiPrimitives,
         plugin: { id: entry.id, name: entry.name ?? entry.id, version: entry.version ?? "0" },
       };
       setup(ctx);

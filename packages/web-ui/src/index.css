@@ -6067,3 +6067,86 @@ body {
   border-radius: 8px;
   opacity: 0.85;
 }
+
+/* ── WebUI primitives（S2：Menu / Tooltip / DisclosureRow）── */
+
+.webui-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.webui-menu__trigger {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.webui-menu__content {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 160px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  z-index: 500;
+}
+
+.webui-tooltip {
+  position: relative;
+  cursor: help;
+}
+
+.webui-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 500;
+}
+
+.webui-tooltip:hover::after {
+  opacity: 1;
+}
+
+.webui-disclosure__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 12.5px;
+  padding: 6px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.webui-disclosure__chevron {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.webui-disclosure__body {
+  padding: 4px 0 8px 16px;
+  border-left: 2px solid var(--border-color);
+  margin-left: 4px;
+}

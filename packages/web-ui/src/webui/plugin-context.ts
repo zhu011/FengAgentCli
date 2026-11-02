@@ -29,6 +29,8 @@ export interface WebUiPluginContext {
   api(path: string, init?: RequestInit): Promise<Response>;
   /** 插件自身信息（来自 manifest） */
   plugin: { id: string; name: string; version: string };
+  /** 宿主 UI 原语（S2：Menu / Tooltip / DisclosureRow，与宿主同源样式） */
+  primitives: { Menu: unknown; Tooltip: unknown; DisclosureRow: unknown };
 }
 
 /** 插件 client.mjs 模块形状 */
