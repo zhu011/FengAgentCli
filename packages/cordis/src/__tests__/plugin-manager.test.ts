@@ -270,7 +270,12 @@ describe("PluginManager.install（.tgz）", () => {
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(join(pluginDir, "package.json"), JSON.stringify({ name: "real-tar", version: "3.0.0" }));
     const tarball = join(sources, "real-tar.tgz");
-    const tar = spawnSync("tar", ["--force-local", "-czf", tarball, "-C", staging, "package"], { encoding: "utf8" });
+    // 相对路径 + cwd 建包：绝对路径带盘符冒号时 GNU tar 需要 --force-local，
+    // 而 Windows 自带 bsdtar 不认这个选项——绕开冒号两种 tar 都能跑。
+    const tar = spawnSync("tar", ["-czf", "real-tar.tgz", "-C", "real-tar-staging", "package"], {
+      cwd: sources,
+      encoding: "utf8",
+    });
     expect(tar.status).toBe(0);
 
     const result = await makeManager().install({ source: tarball });

@@ -478,7 +478,15 @@ export class PluginManager {
     };
   }
 
-  /** 解包 `.tgz` 到临时目录（Windows 自带 bsdtar；缺失时给出可读错误） */
+  /**
+   * 解包 `.tgz` 到临时目录（系统 tar；缺失时给出可读错误）。
+   *
+   * Windows 上 PATH 里的 tar 可能是两种实现，对盘符冒号的处理相反：
+   * - GNU tar（Git for Windows 自带）把 `D:/...` 当远端主机，必须 `--force-local`；
+   * - Windows 自带的 bsdtar 不认这个选项，直接以「Option --force-local is not
+   *   supported」失败退出。
+   * 因此按「先带标记、再不带标记」的顺序尝试，两种 tar 都能装上插件。
+   */
   private extractTarballWithTar(source: string): { dir: string; cleanup: () => void } {
     const dir = mkdtempSync(join(tmpdir(), "feng-plugin-"));
     const cleanup = (): void => {
@@ -488,18 +496,23 @@ export class PluginManager {
         // 临时目录清理失败不影响安装结果
       }
     };
-    // GNU tar on Windows：盘符冒号要 --force-local，反斜杠会被吞——统一转正斜杠
-    const result = spawnSync(
-      "tar",
-      ["--force-local", "-xzf", source.replace(/\\/g, "/"), "-C", dir.replace(/\\/g, "/")],
-      { encoding: "utf8", timeout: 60_000 },
-    );
-    if (result.error || result.status !== 0) {
-      cleanup();
-      const detail = result.error?.message ?? (result.stderr || "").trim();
-      throw new PluginError(`解包失败（需要系统 tar 命令）: ${detail || "unknown error"}`);
+    // 反斜杠会被 tar 当转义吞掉——统一转正斜杠
+    const archive = source.replace(/\\/g, "/");
+    const target = dir.replace(/\\/g, "/");
+    const plain = ["-xzf", archive, "-C", target];
+    const attempts = process.platform === "win32" ? [["--force-local", ...plain], plain] : [plain];
+
+    let detail = "unknown error";
+    for (const args of attempts) {
+      const result = spawnSync("tar", args, { encoding: "utf8", timeout: 60_000 });
+      if (!result.error && result.status === 0) {
+        return { dir, cleanup };
+      }
+      const stderr = (result.stderr || "").trim();
+      detail = result.error?.message ?? (stderr || detail);
     }
-    return { dir, cleanup };
+    cleanup();
+    throw new PluginError(`解包失败（需要系统 tar 命令）: ${detail}`);
   }
 
   /**

@@ -33,12 +33,19 @@ function writeJson(filePath: string, data: Record<string, unknown>): void {
   writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
 }
 
-/** 所有路径都显式指定，避免读到真实用户主目录 */
+/**
+ * 所有路径都显式指定，避免读到真实用户主目录。
+ *
+ * 必须包含 `settingsPath`：WebUI 设置层（`~/.fengagent/settings.json`）在文件层
+ * 之后、环境变量之前合并，漏掉它就会读到本机真实设置（provider/baseUrl/model），
+ * 让「文件层优先级」类断言随本机环境而红。
+ */
 function isolatedPaths(dir: string) {
   return {
     globalConfigPath: join(dir, "global", "config.json"),
     projectConfigPath: join(dir, "project", "config.json"),
     cordisConfigPath: join(dir, "cordis", "config.json"),
+    settingsPath: join(dir, "settings", "settings.json"),
   };
 }
 
