@@ -45,8 +45,8 @@ export interface MarketPluginEntry {
   compat: MarketCompat;
   /** 档位说明（市场页徽标 tooltip） */
   compatReason: string;
-  /** 档位依据：catalog 只有包名/分类（hint） → registry 元数据（确认） */
-  compatSource: "catalog" | "registry";
+  /** 档位依据：catalog 只有包名/分类（hint） → registry 元数据 → 本地已装 package.json */
+  compatSource: "catalog" | "registry" | "local";
   /** 能否一键安装（C 档 false：装上也渲染不出来，只作对照） */
   installable: boolean;
 }
@@ -126,6 +126,17 @@ export interface MarketCatalogOptions {
   registry?: string;
   /** 列表分档探测（catalog 无协议字段时的 registry 确认） */
   compatProbe?: MarketCompatProbeOptions;
+  /**
+   * 已装插件的 package.json 索引（按包名 / 目录 id）。
+   *
+   * 市场分类优先读本地包：已装插件离线也能给出准确档位，不必为了一个徽标
+   * 逐个回 registry 探测；registry 只给未装条目做 hint。
+   */
+  installedManifests?: () => Map<string, Record<string, unknown>>;
+  /** 本地已装索引缓存 TTL（毫秒，默认 5s；安装/卸载后最迟 5s 生效） */
+  installedTtlMs?: number;
+  /** registry packument 进程内缓存 TTL（毫秒，默认 5 分钟） */
+  packumentTtlMs?: number;
 }
 
 /** 市场详情（`GET /api/plugins/market/:name`） */
@@ -141,8 +152,8 @@ export interface MarketDetail {
   latestVersion?: string;
   compat: MarketCompat;
   compatReason: string;
-  /** 档位依据（详情页通常已用 registry 元数据确认） */
-  compatSource: "catalog" | "registry";
+  /** 档位依据（详情页通常已用 registry 元数据确认；已装插件用本地包元数据） */
+  compatSource: "catalog" | "registry" | "local";
   installable: boolean;
   /** registry 拉取失败原因（详情页仍可展示 catalog 信息） */
   error?: string;
@@ -266,8 +277,16 @@ export function classifyCompat(meta: {
   return { compat: "B", reason: "未声明 dsh 形态，按 host 侧插件试装（失败会显示原因）" };
 }
 
-/** 把源站条目投影成市场条目（无法归一的条目丢弃） */
-export function projectEntry(raw: RawEntry): MarketPluginEntry | null {
+/**
+ * 把源站条目投影成市场条目（无法归一的条目丢弃）。
+ *
+ * 传入 `localManifest`（已装插件的 package.json）时，档位以本地包为准：
+ * 市场 catalog 的字段只是 hint，本地包才是「这台机器上实际会怎么装」。
+ */
+export function projectEntry(
+  raw: RawEntry,
+  localManifest?: Record<string, unknown> | null,
+): MarketPluginEntry | null {
   const name = nameOf(raw);
   if (!name) return null;
   const meta = metadataOf(raw);
@@ -300,12 +319,14 @@ export function projectEntry(raw: RawEntry): MarketPluginEntry | null {
       : undefined;
   const keywords = meta?.keywords ?? raw.keywords;
 
-  const { compat, reason } = classifyCompat({
+  const localClassified = localManifest ? classifyCompat(localManifest) : null;
+  const catalogClassified = classifyCompat({
     fengagent: raw.fengagent,
     dsh: raw.dsh,
     keywords,
     engines: enginesRaw,
   });
+  const { compat, reason } = localClassified ?? catalogClassified;
 
   return {
     name,
@@ -320,9 +341,13 @@ export function projectEntry(raw: RawEntry): MarketPluginEntry | null {
     ...(engines && Object.keys(engines).length > 0 ? { engines } : {}),
     compat,
     compatReason: reason,
-    // catalog 只给包名/描述/分类，没有 package.json 的 dsh/fengagent 字段：
+    // 已装插件读本地 package.json（离线也准）；否则 catalog 只给包名/描述/分类，
     // 列表徽标是 hint，安装时 assertInstallable 再用 registry 元数据确认。
-    compatSource: raw.fengagent !== undefined || raw.dsh !== undefined || raw.keywords !== undefined ? "registry" : "catalog",
+    compatSource: localClassified
+      ? "local"
+      : raw.fengagent !== undefined || raw.dsh !== undefined || raw.keywords !== undefined
+        ? "registry"
+        : "catalog",
     installable: compat !== "C",
   };
 }
@@ -451,9 +476,18 @@ export class MarketCatalog {
   private readonly probeCache = new Map<string, { at: number; compat: MarketCompat; reason: string }>();
   /** 探测熔断截止时间（registry 不可达时不把市场页拖死） */
   private probeCooldownUntil = 0;
+  private readonly installedManifests: (() => Map<string, Record<string, unknown>>) | null;
+  private readonly installedTtlMs: number;
+  private readonly packumentTtlMs: number;
   private memory: CatalogCache | null = null;
   /** 避免并发请求打爆源站：进行中的抓取共享同一个 Promise */
   private inflight: Promise<CatalogCache | null> | null = null;
+  /** 本地已装插件索引（短 TTL：安装/卸载后最多几秒生效） */
+  private installedCache: { at: number; value: Map<string, Record<string, unknown>> } | null = null;
+  /** registry packument 进程内缓存（详情/安装校验复用，避免重复探测） */
+  private readonly packuments = new Map<string, { at: number; value: NpmPackument }>();
+  /** 同一个包的并发 packument 请求共享一次网络往返 */
+  private readonly packumentInflight = new Map<string, Promise<NpmPackument>>();
 
   constructor(options: MarketCatalogOptions) {
     this.dataRoot = resolve(options.dataRoot);
@@ -477,6 +511,53 @@ export class MarketCatalog {
       failureThreshold: Math.max(1, Math.floor(probe.failureThreshold ?? 6)),
       cooldownMs: probe.cooldownMs ?? 5 * 60 * 1000,
     };
+    this.installedManifests = options.installedManifests ?? null;
+    this.installedTtlMs = options.installedTtlMs ?? 5_000;
+    this.packumentTtlMs = options.packumentTtlMs ?? 5 * 60 * 1000;
+  }
+
+  /**
+   * 已装插件索引（`package.json` 按包名/id）。
+   *
+   * 短 TTL 缓存：市场列表每次请求都投影 24 条，不值得每次都扫盘；安装/卸载
+   * 后最长 5s 内自然失效。
+   */
+  private localManifests(): Map<string, Record<string, unknown>> {
+    if (!this.installedManifests) return new Map();
+    const now = this.now();
+    if (this.installedCache && now - this.installedCache.at <= this.installedTtlMs) {
+      return this.installedCache.value;
+    }
+    let value: Map<string, Record<string, unknown>>;
+    try {
+      value = this.installedManifests();
+    } catch {
+      value = new Map();
+    }
+    this.installedCache = { at: now, value };
+    return value;
+  }
+
+  /** 取 registry packument（内存缓存 + 并发合并；失败不写缓存） */
+  private async packumentOf(name: string): Promise<NpmPackument> {
+    const cached = this.packuments.get(name);
+    if (cached && this.now() - cached.at <= this.packumentTtlMs) return cached.value;
+    const running = this.packumentInflight.get(name);
+    if (running) return running;
+
+    const request = fetchNpmPackument(name, {
+      ...(this.registryUrl ? { registry: this.registryUrl } : {}),
+      fetchImpl: this.fetchImpl,
+    })
+      .then((value) => {
+        this.packuments.set(name, { at: this.now(), value });
+        return value;
+      })
+      .finally(() => {
+        this.packumentInflight.delete(name);
+      });
+    this.packumentInflight.set(name, request);
+    return request;
   }
 
   /** 目录查询（搜索 + 分类 + 分页都在服务端） */
@@ -484,8 +565,12 @@ export class MarketCatalog {
     const limit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(query.limit ?? DEFAULT_LIMIT)));
     const offset = Math.max(0, Math.floor(query.offset ?? 0));
     const { cache, stale, error, retryable } = await this.load();
+    const local = this.localManifests();
     const entries = (cache?.entries ?? [])
-      .map((raw) => projectEntry(raw))
+      .map((raw) => {
+        const name = nameOf(raw);
+        return projectEntry(raw, name ? local.get(name) : undefined);
+      })
       .filter((entry): entry is MarketPluginEntry => entry !== null)
       .sort(compare);
 
@@ -579,7 +664,7 @@ export class MarketCatalog {
   async find(name: string): Promise<MarketPluginEntry | null> {
     const { cache } = await this.load();
     const raw = (cache?.entries ?? []).find((entry) => nameOf(entry) === name);
-    return raw ? projectEntry(raw) : null;
+    return raw ? projectEntry(raw, this.localManifests().get(name)) : null;
   }
 
   /**
@@ -590,18 +675,18 @@ export class MarketCatalog {
    */
   async detail(name: string): Promise<MarketDetail> {
     const entry = await this.find(name);
+    const local = this.localManifests().get(name);
+    const localClassified = local ? classifyCompat(local) : null;
     let packument: NpmPackument | null = null;
     let error: string | undefined;
     try {
-      packument = await fetchNpmPackument(name, {
-        ...(this.registryUrl ? { registry: this.registryUrl } : {}),
-        fetchImpl: this.fetchImpl,
-      });
+      packument = await this.packumentOf(name);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
     const manifest = packument?.latestManifest;
-    const classified = manifest ? classifyCompat(manifest) : null;
+    // 已装插件的本地 package.json 优先：离线也能给出准确档位
+    const classified = localClassified ?? (manifest ? classifyCompat(manifest) : null);
     const compat = classified?.compat ?? entry?.compat ?? "B";
     const compatReason = classified?.reason ?? entry?.compatReason ?? "未知形态：按 host 侧插件试装";
     return {
@@ -615,7 +700,7 @@ export class MarketCatalog {
       latestVersion: packument?.distTags.latest ?? entry?.latestVersion,
       compat,
       compatReason,
-      compatSource: classified ? "registry" : (entry?.compatSource ?? "catalog"),
+      compatSource: localClassified ? "local" : classified ? "registry" : (entry?.compatSource ?? "catalog"),
       installable: compat !== "C",
       ...(error ? { error } : {}),
     };
@@ -639,10 +724,7 @@ export class MarketCatalog {
     }
     let packument: NpmPackument;
     try {
-      packument = await fetchNpmPackument(name, {
-        ...(this.registryUrl ? { registry: this.registryUrl } : {}),
-        fetchImpl: this.fetchImpl,
-      });
+      packument = await this.packumentOf(name);
     } catch (error) {
       throw new Error(
         `无法校验 ${name}（registry 查询失败）：${error instanceof Error ? error.message : String(error)}`,

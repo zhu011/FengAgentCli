@@ -24,7 +24,43 @@
 ```
 
 `revision` 每次写回 +1。宿主启动时记下基线，之后任何装/卸/启停都会让它偏离基线 →
-`restartRequired: true`（工具/服务面要重启宿主才重新装载；WebUI manifest 刷新即生效）。
+`restartRequired: true`。重启后新基线等于当前 `revision`，`restartRequired` 回落
+`false` —— 此时
+工具/服务面已按新目录重新装载（见下节），WebUI manifest 则是刷新即生效。
+
+> `protocol` 是包元数据，不是「插件面变更」：安装时写一次、启动装载时补写，
+> 都**不递增 revision**，否则单是启动写协议就会把 `restartRequired` 误报成 true。
+
+## 启动装载（host 侧插件）
+
+宿主启动时（`runtime.start()` 之后）会扫描 `<dataRoot>/plugins/<id>`，按包内
+`package.json` 把 host 侧插件真正装进 `ctx`：
+
+| package.json 形态 | 路由 |
+|---|---|
+| `fengagent.webui` | 跳过（由 `/api/webui/manifest` 交给浏览器侧装载） |
+| `dsh` / `engines.dsh` / `dsh.*` 关键字 | `loadDshPlugin(ctx, <插件入口绝对路径>)`（inject 预检 / 15s 超时 / 工具增量三道门） |
+| 有 `main` / `exports` / `module` | 同上（Cordis 形状） |
+| 都没有 | 不装载，条目 `error` 写「未识别插件协议」，`protocol: "unknown"` |
+
+- **启用状态**以 `plugins.json` 为准；停用插件不装载，重启后工具消失。
+- **顺序**按 `plugins.json` 的记录顺序稳定排序，未登记的手工插件排在后面按 id；
+  同一 id 只装载一次。
+- **入口解析**：`exports["."]` → `module` → `main` → `index.js/mjs/cjs`，只接受插件
+  目录内的真实文件（`../`、盘符、绝对路径一律拒绝）；用入口文件的绝对路径
+  `import()`，插件缺 peer 依赖时自然上溯到仓库根 pin 住的 dsh peers。
+- **失败隔离**：单插件坏包 / 缺 inject 服务 / `apply` 抛错 / 超时 → 只写该条目的
+  `error`（`GET /api/plugins` 可见），其它插件与宿主照常启动。
+- **staging 清理**：启动时删掉 `<pluginsRoot>/.staging-*` 残留，不碰正式插件目录。
+- **关闸**：`FENG_PLUGIN_BOOT=0`（也认 `false`/`off`/`no`）跳过全部启动装载，
+  用于排障或临时回到「只装不跑」。
+
+```bash
+# 装完 → 重启宿主 → 工具真的出现在工具面；停用/卸载 → 再重启 → 工具消失
+curl -X POST localhost:3000/api/plugins/install -d '{"marketName":"dsh-better-edit","marketVersion":"1.2.0"}'
+# 重启后
+curl localhost:3000/api/plugins        # 该条目无 error，restartRequired=false
+```
 
 ## HTTP 面
 
@@ -95,6 +131,11 @@ sha512 → 解包 → `<pluginsRoot>/.staging-*` → `bun install --production`�
   `resolvedVersion`、`integrity`、`registry`（配置了镜像时）、`protocol`。
 - `protocol` 由 package.json 探测：`webui`（`fengagent.webui`）/ `dsh`（`dsh`、
   `engines.dsh`、dsh 关键字）/ `cordis`（有 `main`/`exports`）/ `unknown`。
+  **本地 package.json 是事实源**：`plugins.json` 里的旧探测结果只在包读不出来时兜底；
+  启动装载时会把最新探测结果补写回状态文件（不递增 revision）。
+- 市场档位优先读已装插件的本地 `package.json`（`compatSource: "local"`，离线也准）；
+  未装条目才用 catalog/registry 的 hint。registry packument 有进程内缓存
+  （默认 5 分钟），详情页与安装校验不会重复探测同一个包。
 
 市场目录（A）细节：源顺序 `FENG_MARKET_CATALOG_URL` → jsDelivr 镜像
 `cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json` → `awesome-dsh-plugin.com/plugins.json`；

@@ -399,6 +399,45 @@ describe("详情", () => {
     expect(detail.compat).toBe("B");
     expect(detail.error).toContain("offline");
   });
+
+  test("已装插件优先用本地 package.json 分档，packument 进程内缓存只探一次", async () => {
+    let packumentCalls = 0;
+    const registry = {
+      name: "beta-tools",
+      "dist-tags": { latest: "2.0.0" },
+      versions: { "2.0.0": { version: "2.0.0", dsh: { service: {} } } },
+    };
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://market.example")) return jsonResponse(CATALOG);
+      if (url === "https://registry.npmjs.org/beta-tools") {
+        packumentCalls += 1;
+        return jsonResponse(registry);
+      }
+      return new Response("nf", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const local = new Map<string, Record<string, unknown>>([
+      ["beta-tools", { name: "beta-tools", version: "2.0.0", dsh: { client: { entry: "./client.js" } } }],
+    ]);
+    const market = new MarketCatalog({
+      dataRoot: root,
+      sources: ["https://market.example/catalog.json"],
+      fetchImpl,
+      installedManifests: () => local,
+    });
+
+    const list = await market.catalog();
+    const beta = list.plugins.find((entry) => entry.name === "beta-tools");
+    expect(beta).toMatchObject({ compat: "C", compatSource: "local", installable: false });
+
+    const first = await market.detail("beta-tools");
+    const second = await market.detail("beta-tools");
+    expect(first.compat).toBe("C");
+    expect(first.compatSource).toBe("local");
+    expect(second.latestVersion).toBe("2.0.0");
+    expect(packumentCalls).toBe(1);
+  });
 });
 
 describe("列表分档探测（registry 确认）", () => {

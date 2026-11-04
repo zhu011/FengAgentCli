@@ -139,11 +139,29 @@ export class PluginStore {
     return this.write(state);
   }
 
+  /**
+   * 落盘协议探测结果（启动装载 / 安装时用）。
+   *
+   * 协议是插件包的静态属性，不是「插件面变更」：这里**不递增 revision**，
+   * 否则宿主启动时写一次协议就会把 `restartRequired` 误报成 true。
+   */
+  recordProtocol(id: string, protocol: string): PluginState {
+    const state = this.read();
+    const current = state.plugins[id];
+    if (current?.protocol === protocol) return state;
+    state.plugins[id] = {
+      ...(current ?? { enabled: true }),
+      enabled: current ? current.enabled !== false : true,
+      protocol,
+    };
+    return this.write(state, { bumpRevision: false });
+  }
+
   /** 原子写回：临时文件 + rename，避免半截 JSON 被读到 */
-  private write(state: PluginState): PluginState {
+  private write(state: PluginState, options: { bumpRevision?: boolean } = {}): PluginState {
     const next: PluginState = {
       version: 1,
-      revision: state.revision + 1,
+      revision: options.bumpRevision === false ? state.revision : state.revision + 1,
       plugins: state.plugins,
     };
     const dir = dirname(this.stateFile);

@@ -21,6 +21,8 @@ export interface PluginsPluginOptions {
   stateFile?: string;
   /** 依赖安装命令覆盖（默认 bun；null 表示不装依赖） */
   installDepsCommand?: string | null;
+  /** 启动装载失败查询（`PluginBootState.errors()`，列表并进 `error`） */
+  bootErrors?: () => ReadonlyMap<string, string>;
 }
 
 /** 插件管理面 — 提供 ctx.plugins */
@@ -31,6 +33,7 @@ export function pluginsPlugin(options: PluginsPluginOptions = {}) {
       ...(options.pluginsRoot ? { pluginsRoot: options.pluginsRoot } : {}),
       ...(options.stateFile ? { stateFile: options.stateFile } : {}),
       ...(options.installDepsCommand === undefined ? {} : { installDepsCommand: options.installDepsCommand }),
+      ...(options.bootErrors ? { bootErrors: options.bootErrors } : {}),
     });
     return new PluginsServiceImpl(ctx, manager) as PluginsService;
   };

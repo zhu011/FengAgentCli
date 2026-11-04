@@ -131,6 +131,7 @@ ACP 路径的细节：`fengagent acp` 在 `session/prompt` 期间会把审批作
 | `FENG_MARKET_CATALOG_URL` | — | jsDelivr 镜像 → 源站 | 插件市场目录源覆盖（首个源，e2e 也用它注入本地 fixture） |
 | `FENG_NPM_REGISTRY` | — | `https://registry.npmjs.org` | 市场安装/分档探测的 npm registry（国内可换镜像） |
 | `FENG_MARKET_PROBE` | — | `1` | 市场列表分档探测（按 registry `/latest` 元数据确认 A/B/C；`0` 关闭 → 目录里无协议字段时全部按 B hint） |
+| `FENG_PLUGIN_BOOT` | — | 开 | 设为 `0`（也认 `false`/`off`/`no`）跳过启动期 host 插件装载；用于排障或临时「只装不跑」 |
 
 **配置读取优先级（全链）**：`FENG_CONFIG_FILE`（显式路径，最高文件层）> `.fengagent-cordis/config.json`（分支级，`/model` `/provider` 只写这里）>
 项目 `.fengagent/config.json` > 全局 `~/.fengagent/config.json`（其后是环境变量 → CLI 参数）。

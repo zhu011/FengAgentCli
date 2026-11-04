@@ -191,6 +191,13 @@ export interface PluginManagerOptions {
   fetchImpl?: typeof fetch;
   /** npm tarball 大小上限（字节） */
   maxTarballBytes?: number;
+  /**
+   * 启动装载失败集合（`PluginBootState.errors()`）。
+   *
+   * 启动装载器与插件管理面是两次扫描：装载失败不改包，只在内存里记原因。
+   * 列表接口把它并进条目的 `error`，前端才能在「已安装」卡片上看到为什么没生效。
+   */
+  bootErrors?: () => ReadonlyMap<string, string>;
 }
 
 /** 复制插件时跳过的目录/文件（构建产物与版本库不该跟着搬家） */
@@ -324,6 +331,8 @@ export class PluginManager {
   private readonly maxTarballBytes: number | null;
   /** 启动时的状态版本（重启提示基线） */
   private readonly bootRevision: number;
+  /** 启动装载失败查询（无则为 null） */
+  private readonly bootErrors: (() => ReadonlyMap<string, string>) | null;
 
   constructor(options: PluginManagerOptions) {
     const dataRoot = resolve(options.dataRoot);
@@ -337,6 +346,7 @@ export class PluginManager {
     this.npmRegistry = options.npmRegistry?.trim() || null;
     this.fetchImpl = options.fetchImpl ?? null;
     this.maxTarballBytes = options.maxTarballBytes ?? null;
+    this.bootErrors = options.bootErrors ?? null;
     this.bootRevision = this.store.revision();
     // P0 收尾：上次进程可能在 staging 中间崩过，启动时清掉残留（不碰正式插件目录）
     this.cleanupStaging();
@@ -749,6 +759,7 @@ export class PluginManager {
       }
     }
 
+    const bootError = this.bootErrors?.().get(id);
     const assetsBase = webuiAssetsBase(id);
     const name = typeof pkg?.name === "string" && pkg.name ? pkg.name : id;
     const version = typeof pkg?.version === "string" && pkg.version ? pkg.version : "0.0.0";
@@ -770,9 +781,16 @@ export class PluginManager {
         : {}),
       ...(record?.source ? { source: record.source } : {}),
       ...(record?.sourceLabel ? { sourceLabel: record.sourceLabel } : {}),
-      ...(record?.protocol ? { protocol: record.protocol as PluginProtocol } : pkg ? { protocol: detectProtocol(pkg) } : {}),
+      // package.json 是事实源；plugins.json 的旧探测结果只在包读不出来时兜底
+      ...(pkg
+        ? { protocol: detectProtocol(pkg) }
+        : record?.protocol
+          ? { protocol: record.protocol as PluginProtocol }
+          : {}),
       ...(record?.installedAt ? { installedAt: record.installedAt } : {}),
-      ...(error ? { error } : {}),
+      ...(error !== undefined || bootError !== undefined
+        ? { error: [error, bootError].filter((value): value is string => Boolean(value)).join("；") }
+        : {}),
       ...(declaration ? { assetsBase } : {}),
     };
   }

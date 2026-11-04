@@ -84,6 +84,7 @@ export const BUILTIN_PLUGIN_REGISTRY: Record<string, BuiltinPluginFactory> = {
       pluginsRoot: config.pluginsRoot as string | undefined,
       stateFile: config.stateFile as string | undefined,
       installDepsCommand: config.installDepsCommand as string | null | undefined,
+      bootErrors: config.bootErrors as (() => ReadonlyMap<string, string>) | undefined,
     }),
 };
 

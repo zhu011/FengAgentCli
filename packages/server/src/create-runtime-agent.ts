@@ -64,6 +64,14 @@ import { BUILTIN_PLUGINS } from "../../cordis/src/types.ts";
 import type { FengRuntime, SessionStoreLike } from "../../cordis/src/types.ts";
 // 插件市场目录（A）：`/api/plugins/market` 的数据面
 import { MarketCatalog } from "../../cordis/src/market.ts";
+// D：启动期宿主插件装载（扫 <dataRoot>/plugins → 协议路由 → loadDshPlugin）
+import {
+  loadBootPlugins,
+  PluginBootState,
+  readInstalledPluginManifests,
+  type PluginBootContext,
+} from "../../cordis/src/plugin-runtime.ts";
+import { loadDshPlugin, type DshLoadContext } from "../../dsh-compat/src/loader.ts";
 import type {
   ConversationNode,
   RollbackGranularity,
@@ -302,7 +310,14 @@ export async function createRuntimeAgent(
   });
   // A：插件市场目录（服务端抓取 + 缓存 + 分页 + 兼容分类）。抓取失败不阻断
   // 宿主启动：市场页拿到 stale/空列表比拿不到页面好。
-  const marketCatalog = new MarketCatalog({ dataRoot: dataDir });
+  // D：已装插件的档位以本地 package.json 为准（离线也准），registry 只给未装
+  // 条目做 hint —— 市场列表不再为了 24 个徽标逐个回源探测。
+  const marketCatalog = new MarketCatalog({
+    dataRoot: dataDir,
+    installedManifests: () => readInstalledPluginManifests(dataDir),
+  });
+  // D：启动装载失败集合 —— 与 /api/plugins 共享同一份状态（列表条目展示 error）
+  const pluginBootState = new PluginBootState();
   // A8 降级：库打不开（磁盘/权限/被占用）不应阻止 Agent 创建 ——
   // 注入通道退化为「无卡继续」，与读路径的降级同口径。
   let reflectionStore: ReflectionStore | null = null;
@@ -569,7 +584,11 @@ export async function createRuntimeAgent(
       // S2：插件管理面（`/api/plugins`）—— 与 webui 共用同一份插件目录与状态文件
       {
         id: BUILTIN_PLUGINS.PLUGINS,
-        config: { dataRoot: dataDir },
+        config: {
+          dataRoot: dataDir,
+          // D：启动装载失败并进 /api/plugins 的条目 error
+          bootErrors: () => pluginBootState.errors(),
+        },
       },
       {
         id: BUILTIN_PLUGINS.LOOP,
@@ -593,6 +612,29 @@ export async function createRuntimeAgent(
   });
 
   await runtime.start();
+
+  // D：启动期装载 `<dataRoot>/plugins` 的 host 侧插件。
+  // 必须在 runtime.start() 之后：ctx.tools / ctx.storage 等内置服务已在线，
+  // 插件的 inject 预检与工具增量门才有意义。单个插件失败只进 /api/plugins，
+  // 不阻断宿主启动（`FENG_PLUGIN_BOOT=0` 一键关闸）。
+  const pluginBoot = await loadBootPlugins({
+    dataRoot: dataDir,
+    ctx: runtime.ctx as unknown as PluginBootContext,
+    state: pluginBootState,
+    loadPlugin: (ctx, entry, bootOptions) =>
+      loadDshPlugin(ctx as unknown as DshLoadContext, entry, {}, { timeoutMs: bootOptions.timeoutMs }),
+    ...(options.env ? { env: options.env } : {}),
+    onFailure: (failure) => {
+      process.stderr.write(
+        `Warn: 插件 ${failure.id} 启动装载失败（${failure.protocol}）：${failure.error}\n`,
+      );
+    },
+  });
+  if (!pluginBoot.enabled) {
+    process.stderr.write("Warn: 插件启动装载已关闭（FENG_PLUGIN_BOOT=0）\n");
+  } else if (pluginBoot.loaded.length > 0) {
+    process.stderr.write(`插件启动装载：${pluginBoot.loaded.join(", ")}\n`);
+  }
 
   // 记录 reload 状态（供 reloadProvider / onSwitch 使用）
   reloadState = { client: llmClient, config, env: options.env, runtime };

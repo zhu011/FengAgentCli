@@ -15,6 +15,7 @@ export * from "./runtime.ts";
 export * from "./webui.ts";
 export * from "./plugin-store.ts";
 export * from "./plugin-manager.ts";
+export * from "./plugin-runtime.ts";
 export * from "./npm-source.ts";
 export * from "./market.ts";
 export { modelPlugin } from "./adapters/model.ts";

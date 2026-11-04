@@ -726,8 +726,8 @@ export interface MarketEntry {
   compat: "A" | "B" | "C";
   /** 档位说明（徽标 tooltip） */
   compatReason: string;
-  /** 档位依据：catalog（hint）/ registry（已确认） */
-  compatSource: "catalog" | "registry";
+  /** 档位依据：catalog（hint）/ registry（已确认）/ local（已装插件本地包） */
+  compatSource: "catalog" | "registry" | "local";
   /** 能否一键安装（C 档 false） */
   installable: boolean;
 }

@@ -543,4 +543,42 @@ describe("PluginStore", () => {
     expect(store.isEnabled("demo")).toBe(true);
     expect(store.isEnabled("never-seen")).toBe(true);
   });
+
+  test("recordProtocol 落盘但不递增 revision（启动写协议不误报需重启）", () => {
+    const store = new PluginStore(join(root, "plugins.json"));
+    store.recordInstall("demo", { enabled: true });
+    const before = store.revision();
+    store.recordProtocol("demo", "dsh");
+    expect(store.revision()).toBe(before);
+    expect(store.read().plugins.demo?.protocol).toBe("dsh");
+    expect(store.isEnabled("demo")).toBe(true);
+
+    // 同值重复写不产生额外写回
+    store.recordProtocol("demo", "dsh");
+    expect(store.revision()).toBe(before);
+  });
+});
+
+describe("启动装载失败并入插件列表", () => {
+  test("bootErrors 的 error 与包解析错误合并展示，不影响其它条目", () => {
+    const demo = join(pluginsRoot, "demo");
+    mkdirSync(demo, { recursive: true });
+    writeFileSync(join(demo, "package.json"), JSON.stringify({ name: "demo", dsh: {} }));
+    const healthy = join(pluginsRoot, "healthy");
+    mkdirSync(healthy, { recursive: true });
+    writeFileSync(join(healthy, "package.json"), JSON.stringify({ name: "healthy", dsh: {} }));
+
+    const bootErrors = new Map([["demo", "inject 的服务未提供：missingService"]]);
+    const manager = new PluginManager({
+      dataRoot: root,
+      installDepsCommand: null,
+      bootErrors: () => bootErrors,
+    });
+
+    const list = manager.list();
+    const byId = new Map(list.plugins.map((plugin) => [plugin.id, plugin]));
+    expect(byId.get("demo")?.error).toContain("inject 的服务未提供");
+    expect(byId.get("healthy")?.error).toBeUndefined();
+    expect(list.errors.map((item) => item.id)).toEqual(["demo"]);
+  });
 });
