@@ -2,10 +2,11 @@
  * @fengagent/web-ui — Settings「市场」tab（插件市场接入 · C）
  *
  * 浏览/搜索市场目录（消费 `/api/plugins/market`，服务端搜索分页），按三档兼容
- * 徽标展示：A（fengagent.webui）即装即渲染、B（dsh host 侧 tools/services）装后
- * 需重启、C（dsh.client 界面插件）装得上但界面不渲染——C 档默认折叠成独立分区。
- * 安装走 POST /api/plugins/install 的 `{market:{name,version}}` 通道（spec 由
- * 服务端从 catalog 策展解析，前端不自由拼 npm spec）。
+ * 徽标展示：A（fengagent.webui）即装即渲染、B（dsh host 侧）装后需重启、
+ * C（dsh.client 界面插件）界面不渲染且服务端拒绝安装——C 档默认折叠成独立分区。
+ * 安装走 POST /api/plugins/install 的 `{marketName, marketVersion?}` 通道
+ * （spec 由服务端从 catalog 策展解析，前端不自由拼 npm spec）；列表 compat 是
+ * hint，服务端安装时用 registry 元数据复核。
  *
  * 后端市场 API 未装配（404 / 无后端）时回退 fixture 目录（market-mock.ts），
  * `?mock=1` 强制 fixture；已装态与 `/api/plugins` 列表联动。
@@ -26,42 +27,37 @@ const PAGE_SIZE = 24;
 /** 搜索防抖毫秒数 */
 const SEARCH_DEBOUNCE_MS = 300;
 
-/** 取条目描述（双语对象取中文，缺则回退英文；字符串原样） */
+/** 取条目描述（优先中文） */
 function entryDescription(e: MarketEntry): string {
-  if (typeof e.description === "string") return e.description;
-  return e.description.zh || e.description.en || "";
+  return e.description ?? e.descriptionI18n?.zh ?? e.descriptionI18n?.en ?? "";
 }
 
-/** compat 三档徽标（A/B/C） */
-function CompatBadge({ compat }: { compat: MarketEntry["compat"] }): ReactNode {
-  if (compat === "webui") {
+/** 市场包名对应的插件 id（`@scope/name` → `scope-name`，与 npm 源派生一致） */
+function marketIdOf(name: string): string {
+  return name.startsWith("@") ? name.slice(1).replace("/", "-") : name;
+}
+
+/** compat 三档徽标（A/B/C；tooltip 用服务端给的 compatReason） */
+function CompatBadge({ compat, reason }: { compat: MarketEntry["compat"]; reason: string }): ReactNode {
+  if (compat === "A") {
     return (
-      <span className="ag-badge ag-badge--ok" title="声明 fengagent.webui，装上即渲染">
+      <span className="ag-badge ag-badge--ok" title={reason}>
         A · 即装即用
       </span>
     );
   }
-  if (compat === "dsh") {
+  if (compat === "B") {
     return (
-      <span
-        className="ag-badge ag-badge--pending"
-        title="dsh host 侧 tools/services，经 dsh-compat 装载，装后需重启宿主"
-      >
+      <span className="ag-badge ag-badge--pending" title={reason}>
         B · 装后需重启
       </span>
     );
   }
-  if (compat === "dsh-client") {
-    return (
-      <span
-        className="ag-badge ag-badge--muted"
-        title="dsh 客户端协议 UI 插件，装得上但界面不渲染（对照组）"
-      >
-        C · 界面不渲染
-      </span>
-    );
-  }
-  return <span className="ag-badge ag-badge--muted">未识别</span>;
+  return (
+    <span className="ag-badge ag-badge--muted" title={reason}>
+      C · 界面不渲染
+    </span>
+  );
 }
 
 interface MarketTabProps {
@@ -83,6 +79,8 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
   const [installing, setInstalling] = useState<string[]>([]);
   const [installedKeys, setInstalledKeys] = useState<Set<string>>(new Set());
   const [showClient, setShowClient] = useState(false);
+  /** 目录降级提示（stale 缓存 / 无网空目录） */
+  const [catalogHint, setCatalogHint] = useState<string | null>(null);
   /** 筛选变化后让在途的过期响应失效 */
   const reloadSeq = useRef(0);
 
@@ -114,13 +112,20 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
             nextMode = "fixture";
           }
         }
-        if (!Array.isArray(body.entries)) throw new Error("市场目录响应格式异常（entries 非数组）");
+        if (!Array.isArray(body.plugins)) throw new Error("市场目录响应格式异常（plugins 非数组）");
         if (seq !== reloadSeq.current) return; // 过期响应（筛选已变），丢弃
         setMode(nextMode);
         setCategories(body.categories ?? []);
         setTotal(body.total);
-        setEntries((prev) => (offset === 0 ? body.entries : [...prev, ...body.entries]));
+        setEntries((prev) => (offset === 0 ? body.plugins : [...prev, ...body.plugins]));
         setError(null);
+        if (body.stale) {
+          setCatalogHint(`目录为过期缓存（抓取失败：${body.error ?? "未知原因"}），网络恢复后可刷新重试`);
+        } else if (body.plugins.length === 0 && body.retryable) {
+          setCatalogHint("市场目录不可达且无本地缓存，网络恢复后点「刷新」重试");
+        } else {
+          setCatalogHint(null);
+        }
       } catch (err) {
         if (seq !== reloadSeq.current) return;
         setError(err instanceof Error ? err.message : String(err));
@@ -166,14 +171,14 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
       setError(null);
       setNotice(null);
       try {
-        await client.installPluginFromMarket(entry.name, entry.version);
+        await client.installPluginFromMarket(entry.name, entry.latestVersion);
         const suffix =
-          entry.compat === "webui"
+          entry.compat === "A"
             ? "WebUI 插件即时生效"
-            : entry.compat === "dsh"
+            : entry.compat === "B"
               ? "工具/服务面需重启宿主后装载"
-              : "dsh.client 界面插件：装得上，但界面不渲染（对照组）";
-        setNotice(`已安装 ${entry.name}@${entry.version}（${suffix}）`);
+              : "dsh.client 界面插件（服务端拒绝安装）";
+        setNotice(`已安装 ${entry.name}${entry.latestVersion ? `@${entry.latestVersion}` : ""}（${suffix}）`);
         await reloadInstalled();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -185,13 +190,13 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
   );
 
   const isInstalled = useCallback(
-    (e: MarketEntry) => installedKeys.has(e.name) || installedKeys.has(e.name.split("/").pop() ?? e.name),
+    (e: MarketEntry) => installedKeys.has(e.name) || installedKeys.has(marketIdOf(e.name)),
     [installedKeys],
   );
 
   /** A/B 档进主列表；C 档（dsh.client）折叠到底部独立分区 */
-  const mainEntries = useMemo(() => entries.filter((e) => e.compat !== "dsh-client"), [entries]);
-  const clientEntries = useMemo(() => entries.filter((e) => e.compat === "dsh-client"), [entries]);
+  const mainEntries = useMemo(() => entries.filter((e) => e.compat !== "C"), [entries]);
+  const clientEntries = useMemo(() => entries.filter((e) => e.compat === "C"), [entries]);
   const hasMore = entries.length < total;
   const categoryTitle = (id: string): string => categories.find((c) => c.id === id)?.title.zh ?? id;
 
@@ -201,7 +206,7 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
     return (
       <article
         key={e.name}
-        className={`ag-runtime-card mk-card ${e.compat === "dsh-client" ? "mk-card--dim" : ""}`}
+        className={`ag-runtime-card mk-card ${e.compat === "C" ? "mk-card--dim" : ""}`}
         data-testid="market-card"
         data-market-name={e.name}
       >
@@ -209,15 +214,19 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
           <span className="ag-runtime-card__name mk-card__name" title={e.name}>
             {e.title || e.name}
           </span>
-          <CompatBadge compat={e.compat} />
+          <CompatBadge compat={e.compat} reason={e.compatReason} />
         </div>
         <div className="mk-card__pkg">
-          <code>{e.name}</code> · v{e.version} · {categoryTitle(e.category)}
+          <code>{e.name}</code> · v{e.latestVersion ?? "—"} · {e.category ? categoryTitle(e.category) : "未分类"}
         </div>
         <p className="mk-card__desc">{entryDescription(e)}</p>
         <div className="mk-card__actions">
           {installed ? (
             <span className="ag-badge ag-badge--ok">已安装</span>
+          ) : !e.installable ? (
+            <button type="button" className="ag-btn ag-btn--mini" disabled title={e.compatReason}>
+              不可安装
+            </button>
           ) : (
             <button
               type="button"
@@ -274,6 +283,7 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
 
       {error ? <div className="ag-page__hint ag-page__hint--error">{error}</div> : null}
       {notice ? <div className="ag-page__hint">{notice}</div> : null}
+      {catalogHint ? <div className="ag-page__hint">{catalogHint}</div> : null}
 
       <div className="ag-form__row">
         <input

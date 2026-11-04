@@ -77,6 +77,14 @@ export interface MarketCatalogResult {
   error?: string;
   /** 值得重试（网络类错误） */
   retryable?: boolean;
+  /** 分类表（catalog metadata 投影；源站缺省时为空） */
+  categories?: MarketCategory[];
+}
+
+/** 市场分类（catalog `metadata.categories` 投影；市场页 chips 消费） */
+export interface MarketCategory {
+  id: string;
+  title: { zh?: string; en?: string };
 }
 
 /** 市场目录选项 */
@@ -143,6 +151,8 @@ interface CatalogCache {
   entries: RawEntry[];
   source?: string;
   fetchedAt: number;
+  /** 分类表（源站 metadata 投影） */
+  categories?: MarketCategory[];
 }
 
 /** 取第一个字符串字段 */
@@ -314,6 +324,41 @@ export function extractEntries(payload: unknown): RawEntry[] {
   return [];
 }
 
+/** 从源站 payload 的 `metadata.categories`（映射形式）提取分类表 */
+export function extractCategories(payload: unknown): MarketCategory[] | null {
+  if (!payload || typeof payload !== "object") return null;
+  const metadata = (payload as Record<string, unknown>).metadata;
+  if (!metadata || typeof metadata !== "object") return null;
+  const raw = (metadata as Record<string, unknown>).categories;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: MarketCategory[] = [];
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!id.trim()) continue;
+    const title = value && typeof value === "object" ? (value as Record<string, unknown>).title : undefined;
+    const record = title && typeof title === "object" ? (title as Record<string, unknown>) : {};
+    const zh = typeof record.zh === "string" && record.zh ? record.zh : undefined;
+    const en = typeof record.en === "string" && record.en ? record.en : undefined;
+    out.push({ id, title: { ...(zh ? { zh } : {}), ...(en ? { en } : {}) } });
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** 磁盘缓存里的分类数组（宽松校验；旧缓存无此字段时返回 undefined） */
+function coerceCategories(raw: unknown): MarketCategory[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: MarketCategory[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== "string" || !record.id.trim()) continue;
+    const title = record.title && typeof record.title === "object" ? (record.title as Record<string, unknown>) : {};
+    const zh = typeof title.zh === "string" && title.zh ? title.zh : undefined;
+    const en = typeof title.en === "string" && title.en ? title.en : undefined;
+    out.push({ id: record.id, title: { ...(zh ? { zh } : {}), ...(en ? { en } : {}) } });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /** 关键字匹配（name / title / description，大小写不敏感） */
 function matches(entry: MarketPluginEntry, q: string): boolean {
   const needle = q.toLowerCase();
@@ -394,6 +439,7 @@ export class MarketCatalog {
       ...(stale ? { stale: true } : {}),
       ...(error ? { error } : {}),
       ...(retryable ? { retryable: true } : {}),
+      ...(cache?.categories ? { categories: cache.categories } : {}),
     };
   }
 
@@ -536,10 +582,12 @@ export class MarketCatalog {
       const entries = extractEntries(record.entries);
       const fetchedAt = typeof record.fetchedAt === "number" ? record.fetchedAt : 0;
       if (entries.length === 0 || fetchedAt <= 0) return null;
+      const categories = coerceCategories(record.categories);
       return {
         entries,
         fetchedAt,
         ...(typeof record.source === "string" ? { source: record.source } : {}),
+        ...(categories ? { categories } : {}),
       };
     } catch {
       return null;
@@ -579,9 +627,11 @@ export class MarketCatalog {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const text = await response.text();
         if (text.length > this.maxBytes) throw new Error(`目录响应过大（>${this.maxBytes} 字节）`);
-        const entries = extractEntries(JSON.parse(text) as unknown);
+        const payload = JSON.parse(text) as unknown;
+        const entries = extractEntries(payload);
         if (entries.length === 0) throw new Error("目录里没有条目");
-        const cache: CatalogCache = { entries, fetchedAt: this.now(), source: url };
+        const categories = extractCategories(payload);
+        const cache: CatalogCache = { entries, fetchedAt: this.now(), source: url, ...(categories ? { categories } : {}) };
         this.memory = cache;
         this.writeDisk(cache);
         return cache;

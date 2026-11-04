@@ -774,12 +774,12 @@ export class ApiClient {
     return (await res.json()) as PluginMutationResult;
   }
 
-  /** POST /api/plugins/install — 市场安装（spec 由服务端从 catalog 策展解析） */
-  async installPluginFromMarket(name: string, version: string): Promise<PluginMutationResult> {
+  /** POST /api/plugins/install — 市场安装（`{marketName, marketVersion?}`，spec 由服务端从 catalog 策展解析，marketVersion 缺省 = latest） */
+  async installPluginFromMarket(name: string, version?: string): Promise<PluginMutationResult> {
     const res = await fetch(`${this.baseUrl}/api/plugins/install`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ market: { name, version } }),
+      body: JSON.stringify({ marketName: name, ...(version ? { marketVersion: version } : {}) }),
     });
     if (!res.ok) {
       throw await this.toApiError(res, "Failed to install market plugin");

@@ -674,6 +674,10 @@ export interface PluginListEntry {
   assetsBase?: string;
   slots?: string[];
   hasWebui?: boolean;
+  /** 展示用来源（市场安装为 `market:<name>`） */
+  sourceLabel?: string;
+  /** 协议探测结果（webui / dsh / cordis / unknown） */
+  protocol?: string;
   error?: string;
 }
 
@@ -695,27 +699,40 @@ export interface PluginMutationResult {
 }
 
 /**
- * 市场目录条目（GET /api/plugins/market）。compat 兼容三档：
- * - `"webui"`      A 档：声明 fengagent.webui，装上即渲染；
- * - `"dsh"`        B 档：dsh host 侧 tools/services，dsh-compat 试装 + 需重启；
- * - `"dsh-client"` C 档：dsh 客户端协议 UI 插件，装得上但界面不渲染（对照组）。
+ * 市场目录条目（GET /api/plugins/market，对齐 cordis `MarketPluginEntry`）。
+ * `compat` 三档：`"A"` 即装即渲染 / `"B"` dsh host 侧试装 + 需重启 / `"C"` 界面
+ * 不渲染（对照组，`installable` 为 false）。列表档位是 hint（`compatSource:
+ * "catalog"`），安装时服务端会用 registry 元数据复核——徽标 tooltip 用
+ * `compatReason`，别把列表 hint 当最终结论。
  */
 export interface MarketEntry {
   /** npm 包名（可带 scope），安装 spec 由服务端从 catalog 策展解析 */
   name: string;
   title: string;
-  description: { zh: string; en: string } | string;
-  category: string;
-  version: string;
-  compat: "webui" | "dsh" | "dsh-client" | "unknown";
-  homepage?: string;
+  /** 描述（优先中文） */
+  description?: string;
+  /** 双语描述（catalog 提供时） */
+  descriptionI18n?: { zh?: string; en?: string };
+  category?: string;
   repository?: string;
+  homepage?: string;
+  /** catalog 里的最新版本 */
+  latestVersion?: string;
+  /** `engines.dsh` 之类的宿主要求 */
+  engines?: Record<string, string>;
+  compat: "A" | "B" | "C";
+  /** 档位说明（徽标 tooltip） */
+  compatReason: string;
+  /** 档位依据：catalog（hint）/ registry（已确认） */
+  compatSource: "catalog" | "registry";
+  /** 能否一键安装（C 档 false） */
+  installable: boolean;
 }
 
-/** 市场分类（id + 双语标题，来自 catalog metadata） */
+/** 市场分类（catalog `metadata.categories` 投影） */
 export interface MarketCategory {
   id: string;
-  title: { zh: string; en: string };
+  title: { zh?: string; en?: string };
 }
 
 /** GET /api/plugins/market 查询参数（服务端搜索分页） */
@@ -728,9 +745,20 @@ export interface MarketQuery {
 
 /** GET /api/plugins/market 响应（catalog 全量不进浏览器） */
 export interface MarketCatalogResponse {
-  entries: MarketEntry[];
+  plugins: MarketEntry[];
+  /** 过滤后的总数（分页前） */
   total: number;
-  offset: number;
   limit: number;
+  offset: number;
+  /** 目录来源（抓取 URL） */
+  source?: string;
+  fetchedAt?: string;
+  /** true = 本次用的是过期缓存（抓取失败） */
+  stale?: boolean;
+  /** 抓取失败原因 */
+  error?: string;
+  /** 值得重试（网络类错误） */
+  retryable?: boolean;
+  /** 分类表（市场页 chips 消费） */
   categories?: MarketCategory[];
 }

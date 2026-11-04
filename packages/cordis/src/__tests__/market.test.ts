@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
   MarketCatalog,
   classifyCompat,
+  extractCategories,
   extractEntries,
   projectEntry,
   type MarketPluginEntry,
@@ -123,6 +124,25 @@ describe("条目投影", () => {
     expect(extractEntries(null)).toHaveLength(0);
   });
 
+  test("extractCategories：catalog format-1 的 metadata.categories 映射 → 分类表", () => {
+    const payload = {
+      plugins: CATALOG.plugins,
+      metadata: {
+        categories: {
+          ui: { title: { zh: "UI 增强", en: "UI Enhancements" } },
+          tools: { title: { en: "Tools" } },
+          "": { title: { zh: "空 id 丢弃" } },
+        },
+      },
+    };
+    expect(extractCategories(payload)).toEqual([
+      { id: "ui", title: { zh: "UI 增强", en: "UI Enhancements" } },
+      { id: "tools", title: { en: "Tools" } },
+    ]);
+    expect(extractCategories(CATALOG)).toBeNull();
+    expect(extractCategories({ metadata: { categories: [] } })).toBeNull();
+  });
+
   test("catalog format-1：双语 description / metadata.category / versions[].version", () => {
     const entry = projectEntry({
       name: "@yolk/dsh-project-memory",
@@ -148,6 +168,31 @@ describe("条目投影", () => {
 });
 
 describe("catalog 查询", () => {
+  test("catalog() 回传分类表（metadata.categories 投影，磁盘缓存往返保留）", async () => {
+    const payload = {
+      plugins: CATALOG.plugins,
+      metadata: {
+        categories: {
+          ui: { title: { zh: "UI 增强", en: "UI Enhancements" } },
+          tools: { title: { zh: "工具与能力" } },
+        },
+      },
+    };
+    const catalog = makeCatalog({ fetchImpl: countingFetch(payload).fetchImpl });
+    const result = await catalog.catalog({});
+    expect(result.categories).toEqual([
+      { id: "ui", title: { zh: "UI 增强", en: "UI Enhancements" } },
+      { id: "tools", title: { zh: "工具与能力" } },
+    ]);
+    // 磁盘缓存回读：新实例 + 拒绝式 fetch 仍能拿到分类（旧缓存无此字段则缺省）
+    const reread = new MarketCatalog({
+      dataRoot: root,
+      sources: ["https://market.example/catalog.json"],
+      fetchImpl: countingFetch(payload, 500).fetchImpl,
+    });
+    expect((await reread.catalog({})).categories).toEqual(result.categories);
+  });
+
   test("默认排序 A→B→C，且 limit/offset 在服务端", async () => {
     const { fetchImpl } = countingFetch(CATALOG);
     const market = makeCatalog({ fetchImpl });
