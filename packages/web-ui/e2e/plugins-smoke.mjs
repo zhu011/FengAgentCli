@@ -29,7 +29,7 @@ cpSync(join(REPO, "integrations/example-webui-plugin"), pluginSource, { recursiv
 // ── 起 FengAgentCli server（独立数据根） ──
 const serverProc = spawn("bun", [join(REPO, "packages/server/src/entry.ts")], {
   cwd: REPO,
-  env: { ...process.env, FENG_DATA_ROOT: dataRoot, FENG_SERVER_PORT: String(PORT), FENG_SERVER_HOST: "127.0.0.1" },
+  env: { ...process.env, FENG_DATA_DIR: dataRoot, FENG_SERVER_PORT: String(PORT), FENG_SERVER_HOST: "127.0.0.1" },
   stdio: ["ignore", "pipe", "pipe"],
   detached: true,
 });

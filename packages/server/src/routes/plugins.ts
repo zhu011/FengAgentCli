@@ -35,6 +35,7 @@ import type {
   MarketCatalogQuery,
   MarketCatalogResult,
   MarketDetail,
+  MarketPluginEntry,
 } from "../../../cordis/src/market.ts";
 
 /** 上传包大小上限（插件包不该是巨型文件，避免把数据根/临时目录写满） */
@@ -62,6 +63,8 @@ export interface MarketRouteSource {
   catalog(query?: MarketCatalogQuery): Promise<MarketCatalogResult>;
   detail(name: string): Promise<MarketDetail>;
   assertInstallable(name: string, version?: string): Promise<unknown>;
+  /** 可选：列表分档回填（catalog 无协议字段时按 registry 确认）；未实现则用 catalog hint */
+  enrich?(entries: MarketPluginEntry[]): Promise<MarketPluginEntry[]>;
 }
 
 /** HTTP 错误码（多一个 internal） */
@@ -94,7 +97,17 @@ async function readInstallRequest(request: { json: () => Promise<unknown> }): Pr
     return null;
   }
   if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
-  return body as PluginInstallRequest;
+  const record = body as Record<string, unknown>;
+  // 市场源同时接受 `{ market: { name, version } }` 嵌套形与扁平
+  // `{ marketName, marketVersion }`（扁平为规范形，嵌套为兼容别名）
+  const market = record.market;
+  if (market === undefined) return record as PluginInstallRequest;
+  if (!market || typeof market !== "object" || Array.isArray(market)) return null;
+  const nested = market as Record<string, unknown>;
+  const name = typeof nested.name === "string" ? nested.name.trim() : "";
+  if (!name) return null;
+  const version = typeof nested.version === "string" && nested.version.trim() ? nested.version.trim() : undefined;
+  return { marketName: name, ...(version ? { marketVersion: version } : {}) };
 }
 
 /** 解析非负整数查询参数（缺省/非法 → undefined） */
@@ -183,7 +196,10 @@ export function createPluginRoutes(source: PluginRouteSource, market?: MarketRou
     const offset = positiveInt(c.req.query("offset"));
     query.offset = offset ?? 0;
     try {
-      return c.json(await market.catalog(query));
+      const result: MarketCatalogResult = await market.catalog(query);
+      // 列表分档回填：catalog 条目没有协议字段，按 registry /latest 确认（可选能力）
+      const plugins = market.enrich ? await market.enrich(result.plugins) : result.plugins;
+      return c.json({ ...result, plugins });
     } catch (error) {
       return fail(c, error);
     }
@@ -222,7 +238,7 @@ export function createPluginRoutes(source: PluginRouteSource, market?: MarketRou
         return fail(
           c,
           new PluginError(
-            '请求体必须是 JSON 对象（如 {"source": "/path/to/plugin"} 或 {"marketName": "dsh-better-edit"}）或 multipart 上传包',
+            '请求体必须是 JSON 对象（如 {"source": "/path/to/plugin"}、{"marketName": "dsh-better-edit"} 或 {"market": {"name": "dsh-better-edit", "version": "1.2.0"}}）或 multipart 上传包',
           ),
         );
       }

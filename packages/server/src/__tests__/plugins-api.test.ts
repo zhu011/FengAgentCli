@@ -282,13 +282,27 @@ describe("市场路由（A/B）", () => {
             {
               name: "alpha-ui",
               title: "Alpha UI",
+              description: "带界面的插件",
+              category: "ui",
+              version: "1.0.0",
               compat: "A" as const,
               compatReason: "声明 fengagent.webui",
               compatSource: "catalog" as const,
               installable: true,
             },
+            {
+              name: "gamma-client",
+              title: "Gamma Client",
+              category: "ui",
+              version: "0.3.0",
+              compat: "C" as const,
+              compatReason: "dsh.client 客户端插件",
+              compatSource: "catalog" as const,
+              installable: false,
+            },
           ],
-          total: 1,
+          categories: [{ id: "ui", title: { zh: "UI 增强", en: "UI Enhancements" } }],
+          total: 2,
           limit: query.limit ?? 24,
           offset: query.offset ?? 0,
         };
@@ -317,8 +331,17 @@ describe("市场路由（A/B）", () => {
     const { app: marketApp, queries } = makeMarketApp();
     const res = await marketApp.request("/api/plugins/market?q=alpha&category=ui&limit=5&offset=10");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { plugins: unknown[]; total: number; limit: number; offset: number };
-    expect(body).toMatchObject({ total: 1, limit: 5, offset: 10 });
+    const body = (await res.json()) as {
+      plugins: Array<{ name: string; compat: string; version: string; installable: boolean }>;
+      categories: Array<{ id: string; title: { zh: string; en: string } }>;
+      total: number;
+      limit: number;
+      offset: number;
+    };
+    expect(body).toMatchObject({ total: 2, limit: 5, offset: 10 });
+    expect(body.categories).toEqual([{ id: "ui", title: { zh: "UI 增强", en: "UI Enhancements" } }]);
+    expect(body.plugins[0]).toMatchObject({ name: "alpha-ui", compat: "A", version: "1.0.0", installable: true });
+    expect(body.plugins[1]).toMatchObject({ name: "gamma-client", compat: "C", installable: false });
     expect(queries[0]).toMatchObject({ q: "alpha", category: "ui", limit: 5, offset: 10 });
   });
 
@@ -367,6 +390,28 @@ describe("市场路由（A/B）", () => {
     });
     expect(res.status).toBe(201);
     expect(installed[0]).toMatchObject({ marketName: "alpha-ui", marketVersion: "1.0.0" });
+  });
+
+  test("install：嵌套体 { market: { name, version } } → 归一成 marketName/marketVersion", async () => {
+    const { app: marketApp, installed } = makeMarketApp();
+    const res = await marketApp.request("/api/plugins/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ market: { name: "alpha-ui", version: "1.0.0" } }),
+    });
+    expect(res.status).toBe(201);
+    expect(installed[0]).toMatchObject({ marketName: "alpha-ui", marketVersion: "1.0.0" });
+  });
+
+  test("install：{ market: {} } 缺 name → 400，且不进入安装链", async () => {
+    const { app: marketApp, installed } = makeMarketApp();
+    const res = await marketApp.request("/api/plugins/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ market: { version: "1.0.0" } }),
+    });
+    expect(res.status).toBe(400);
+    expect(installed).toHaveLength(0);
   });
 });
 

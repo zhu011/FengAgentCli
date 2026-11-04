@@ -713,10 +713,13 @@ export interface MarketEntry {
   description?: string;
   /** 双语描述（catalog 提供时） */
   descriptionI18n?: { zh?: string; en?: string };
-  category?: string;
+  /** 分类 id（缺省空串 = 未分类） */
+  category: string;
   repository?: string;
   homepage?: string;
-  /** catalog 里的最新版本 */
+  /** 展示用版本（catalog 策展版本；缺省空串） */
+  version: string;
+  /** catalog 里的最新版本（可能缺省） */
   latestVersion?: string;
   /** `engines.dsh` 之类的宿主要求 */
   engines?: Record<string, string>;
@@ -729,10 +732,10 @@ export interface MarketEntry {
   installable: boolean;
 }
 
-/** 市场分类（catalog `metadata.categories` 投影） */
+/** 市场分类（catalog `metadata.categories` 投影；单语时另一语回退同一文本） */
 export interface MarketCategory {
   id: string;
-  title: { zh?: string; en?: string };
+  title: { zh: string; en: string };
 }
 
 /** GET /api/plugins/market 查询参数（服务端搜索分页） */
@@ -759,6 +762,6 @@ export interface MarketCatalogResponse {
   error?: string;
   /** 值得重试（网络类错误） */
   retryable?: boolean;
-  /** 分类表（市场页 chips 消费） */
-  categories?: MarketCategory[];
+  /** 分类 chips：只含本次结果集里出现的分类 */
+  categories: MarketCategory[];
 }

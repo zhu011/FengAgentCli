@@ -236,6 +236,26 @@ export async function fetchNpmPackument(
   };
 }
 
+/**
+ * 拉取 latest 版本的 package.json（`/<name>/latest` 端点）。
+ *
+ * 市场列表的分档探测用它：比整包 packument 小一个量级，且保留 `dsh` /
+ * `fengagent` 等自定义字段（npm 的 abbreviated packument 会裁掉这些字段，
+ * 不能用来判档）。
+ */
+export async function fetchNpmLatestManifest(
+  name: string,
+  options: NpmSourceOptions = {},
+): Promise<Record<string, unknown>> {
+  const registry = resolveRegistry(options);
+  const impl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? 3_000;
+  return readJson(
+    await fetchWithTimeout(impl, `${registry}/${encodeName(name)}/latest`, timeoutMs),
+    `npm ${name}@latest`,
+  );
+}
+
 /** integrity 串支持 sha512/sha256/sha1（base64）；`sha512-<b64>` 形式 */
 export function verifyIntegrity(buffer: Buffer, integrity: string): boolean {
   const match = /^(sha512|sha256|sha1)-(.+)$/.exec(integrity.trim());

@@ -25,9 +25,16 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** 三个档位的样例目录 */
+/** 三个档位的样例目录（分类表用 format-1 的 `metadata.categories`） */
 const CATALOG = {
-  version: 1,
+  format: 1,
+  metadata: {
+    categories: {
+      ui: { title: { zh: "UI 增强", en: "UI Enhancements" } },
+      tools: { title: { zh: "工具与能力", en: "Tools & Capabilities" } },
+      memory: { title: { zh: "记忆", en: "Memory" } },
+    },
+  },
   plugins: [
     {
       name: "alpha-ui",
@@ -124,23 +131,15 @@ describe("条目投影", () => {
     expect(extractEntries(null)).toHaveLength(0);
   });
 
-  test("extractCategories：catalog format-1 的 metadata.categories 映射 → 分类表", () => {
-    const payload = {
-      plugins: CATALOG.plugins,
-      metadata: {
-        categories: {
-          ui: { title: { zh: "UI 增强", en: "UI Enhancements" } },
-          tools: { title: { en: "Tools" } },
-          "": { title: { zh: "空 id 丢弃" } },
-        },
-      },
-    };
-    expect(extractCategories(payload)).toEqual([
-      { id: "ui", title: { zh: "UI 增强", en: "UI Enhancements" } },
-      { id: "tools", title: { en: "Tools" } },
-    ]);
-    expect(extractCategories(CATALOG)).toBeNull();
-    expect(extractCategories({ metadata: { categories: [] } })).toBeNull();
+  test("extractCategories：format-1 映射 / 源站数组形 / 单语回填", () => {
+    expect(extractCategories(CATALOG)).toEqual({
+      ui: { zh: "UI 增强", en: "UI Enhancements" },
+      tools: { zh: "工具与能力", en: "Tools & Capabilities" },
+      memory: { zh: "记忆", en: "Memory" },
+    });
+    // 源站数组形 + 单语标题回填另一语
+    expect(extractCategories({ categories: [{ id: "x", title: { zh: "甲" } }] })).toEqual({ x: { zh: "甲", en: "甲" } });
+    expect(extractCategories(null)).toEqual({});
   });
 
   test("catalog format-1：双语 description / metadata.category / versions[].version", () => {
@@ -168,29 +167,23 @@ describe("条目投影", () => {
 });
 
 describe("catalog 查询", () => {
-  test("catalog() 回传分类表（metadata.categories 投影，磁盘缓存往返保留）", async () => {
-    const payload = {
-      plugins: CATALOG.plugins,
-      metadata: {
-        categories: {
-          ui: { title: { zh: "UI 增强", en: "UI Enhancements" } },
-          tools: { title: { zh: "工具与能力" } },
-        },
-      },
-    };
-    const catalog = makeCatalog({ fetchImpl: countingFetch(payload).fetchImpl });
-    const result = await catalog.catalog({});
-    expect(result.categories).toEqual([
+  test("分类 chips 来自 catalog 双语表，且只含结果集里出现的分类", async () => {
+    const { fetchImpl } = countingFetch(CATALOG);
+    const market = makeCatalog({ fetchImpl });
+    const all = await market.catalog();
+    // A→B→C 排序后条目分类：ui(alpha) → tools(beta) → ui(gamma) → 无分类(no-meta)；
+    // memory 只在分类表里、没有条目 → 不出 chip
+    expect(all.categories).toEqual([
       { id: "ui", title: { zh: "UI 增强", en: "UI Enhancements" } },
-      { id: "tools", title: { zh: "工具与能力" } },
+      { id: "tools", title: { zh: "工具与能力", en: "Tools & Capabilities" } },
     ]);
-    // 磁盘缓存回读：新实例 + 拒绝式 fetch 仍能拿到分类（旧缓存无此字段则缺省）
-    const reread = new MarketCatalog({
-      dataRoot: root,
-      sources: ["https://market.example/catalog.json"],
-      fetchImpl: countingFetch(payload, 500).fetchImpl,
-    });
-    expect((await reread.catalog({})).categories).toEqual(result.categories);
+
+    const onlyTools = await market.catalog({ q: "beta" });
+    expect(onlyTools.categories.map((category) => category.id)).toEqual(["tools"]);
+
+    const unknown = await market.catalog({ q: "no-meta" });
+    expect(unknown.categories).toEqual([]);
+    expect(unknown.plugins[0]).toMatchObject({ name: "no-meta", category: "", version: "" });
   });
 
   test("默认排序 A→B→C，且 limit/offset 在服务端", async () => {
@@ -267,6 +260,8 @@ describe("catalog 查询", () => {
     expect(result.error).toContain("ECONNREFUSED");
     expect(result.retryable).toBe(true);
     expect(result.total).toBe(4);
+    // 分类表也随磁盘缓存回读（stale 时 chips 不能退化成 id）
+    expect(result.categories.map((category) => category.title.zh)).toEqual(["UI 增强", "工具与能力"]);
   });
 
   test("首启无网：空列表 + retryable（不抛错）", async () => {
@@ -275,6 +270,7 @@ describe("catalog 查询", () => {
     });
     const result = await market.catalog();
     expect(result.plugins).toEqual([]);
+    expect(result.categories).toEqual([]);
     expect(result.retryable).toBe(true);
     expect(result.error).toContain("500");
   });
@@ -402,5 +398,106 @@ describe("详情", () => {
     expect(detail.versions).toEqual([]);
     expect(detail.compat).toBe("B");
     expect(detail.error).toContain("offline");
+  });
+});
+
+describe("列表分档探测（registry 确认）", () => {
+  /** 真实 catalog 只给包名/分类：三档 hint 全是 B */
+  const PLAIN = {
+    format: 1,
+    metadata: { categories: { ui: { title: { zh: "UI 增强", en: "UI Enhancements" } } } },
+    plugins: [
+      { name: "plain-webui", title: "WebUI", category: "ui", versions: [{ version: "1.0.0" }] },
+      { name: "plain-client", title: "Client", category: "ui", versions: [{ version: "1.0.0" }] },
+      { name: "plain-host", title: "Host", category: "ui", versions: [{ version: "1.0.0" }] },
+    ],
+  };
+
+  function probeFetch(onLatest: (name: string) => Response): { fetchImpl: typeof fetch; latest: string[] } {
+    const latest: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const match = /\/latest$/.exec(url);
+      if (!match) return jsonResponse(PLAIN);
+      const name = decodeURIComponent(new URL(url).pathname.split("/").slice(-2, -1)[0] ?? "");
+      latest.push(name);
+      return onLatest(name);
+    }) as unknown as typeof fetch;
+    return { fetchImpl, latest };
+  }
+
+  test("按 /latest 元数据回填 A/C 档，并标 compatSource:registry", async () => {
+    const { fetchImpl, latest } = probeFetch((name) => {
+      if (name === "plain-webui") return jsonResponse({ name, fengagent: { webui: "./client.mjs" } });
+      if (name === "plain-client") return jsonResponse({ name, dsh: { client: {} } });
+      return jsonResponse({ name, dsh: { service: {} } });
+    });
+    const market = new MarketCatalog({ dataRoot: root, sources: ["https://market.example/catalog.json"], fetchImpl });
+    const page = await market.catalog();
+    expect(page.plugins.map((entry) => entry.compat)).toEqual(["B", "B", "B"]);
+
+    const enriched = await market.enrich(page.plugins);
+    expect(enriched.map((entry) => [entry.name, entry.compat, entry.compatSource, entry.installable])).toEqual([
+      ["plain-client", "C", "registry", false],
+      ["plain-host", "B", "registry", true],
+      ["plain-webui", "A", "registry", true],
+    ]);
+    expect(latest.sort()).toEqual(["plain-client", "plain-host", "plain-webui"]);
+
+    // 结果缓存：同一页再探测不重复打 registry
+    const before = latest.length;
+    await market.enrich(page.plugins);
+    expect(latest.length).toBe(before);
+  });
+
+  test("registry 不可达 → 保留 catalog hint，并熔断冷却", async () => {
+    let now = 1_000;
+    const { fetchImpl } = probeFetch(() => {
+      throw new Error("ECONNREFUSED");
+    });
+    const market = new MarketCatalog({
+      dataRoot: root,
+      sources: ["https://market.example/catalog.json"],
+      fetchImpl,
+      now: () => now,
+      compatProbe: { concurrency: 1, failureThreshold: 2, cooldownMs: 1_000 },
+    });
+    const page = await market.catalog();
+    const enriched = await market.enrich(page.plugins);
+    expect(enriched.map((entry) => entry.compat)).toEqual(["B", "B", "B"]);
+    expect(enriched.every((entry) => entry.compatSource === "catalog")).toBe(true);
+
+    // 熔断窗口内不再打 registry（原样返回同一数组）
+    now += 10;
+    expect(await market.enrich(page.plugins)).toBe(page.plugins);
+  });
+
+  test("404（包未发布到 npm）不算连通性失败，不熔断", async () => {
+    const { fetchImpl, latest } = probeFetch(() => jsonResponse({ error: "not_found" }, 404));
+    const market = new MarketCatalog({
+      dataRoot: root,
+      sources: ["https://market.example/catalog.json"],
+      fetchImpl,
+      compatProbe: { concurrency: 1, failureThreshold: 1, cooldownMs: 10_000 },
+    });
+    const page = await market.catalog();
+    expect(await market.enrich(page.plugins)).toBe(page.plugins);
+    const before = latest.length;
+    // 未熔断：下一次仍会尝试
+    await market.enrich(page.plugins);
+    expect(latest.length).toBeGreaterThan(before);
+  });
+
+  test("compatProbe.enabled=false / FENG_MARKET_PROBE=0 → 原样返回", async () => {
+    const { fetchImpl, latest } = probeFetch(() => jsonResponse({ dsh: { client: {} } }));
+    const market = new MarketCatalog({
+      dataRoot: root,
+      sources: ["https://market.example/catalog.json"],
+      fetchImpl,
+      compatProbe: { enabled: false },
+    });
+    const page = await market.catalog();
+    expect(await market.enrich(page.plugins)).toBe(page.plugins);
+    expect(latest).toHaveLength(0);
   });
 });

@@ -16,7 +16,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fetchNpmPackument, type NpmPackument } from "./npm-source.ts";
+import { fetchNpmLatestManifest, fetchNpmPackument, type NpmPackument } from "./npm-source.ts";
 
 /** 兼容档位 */
 export type MarketCompat = "A" | "B" | "C";
@@ -31,9 +31,12 @@ export interface MarketPluginEntry {
   description?: string;
   /** 双语描述（catalog 提供时） */
   descriptionI18n?: { zh?: string; en?: string };
-  category?: string;
+  /** 分类 id（catalog `metadata.category`；缺省空串） */
+  category: string;
   repository?: string;
   homepage?: string;
+  /** 展示用版本（catalog 策展版本；缺省空串，前端不显示 undefined） */
+  version: string;
   /** catalog 里的最新版本（可能缺省） */
   latestVersion?: string;
   /** `engines.dsh` 之类的宿主要求 */
@@ -77,14 +80,30 @@ export interface MarketCatalogResult {
   error?: string;
   /** 值得重试（网络类错误） */
   retryable?: boolean;
-  /** 分类表（catalog metadata 投影；源站缺省时为空） */
-  categories?: MarketCategory[];
+  /** 分类 chips：只含本次结果集里出现的分类（按 catalog 声明顺序） */
+  categories: MarketCategory[];
 }
 
-/** 市场分类（catalog `metadata.categories` 投影；市场页 chips 消费） */
+/** 市场分类（id + 双语标题，来自 catalog 顶层 `metadata.categories`） */
 export interface MarketCategory {
   id: string;
-  title: { zh?: string; en?: string };
+  title: { zh: string; en: string };
+}
+
+/** 列表分档探测选项（catalog 没有协议字段，按 registry latest 元数据确认） */
+export interface MarketCompatProbeOptions {
+  /** 关闭探测（`FENG_MARKET_PROBE=0` 也可关）；默认开 */
+  enabled?: boolean;
+  /** 单包请求超时（默认 2.5s） */
+  timeoutMs?: number;
+  /** 并发（默认 8；registry 限流时会被熔断兜住） */
+  concurrency?: number;
+  /** 结果缓存 TTL（默认 1h） */
+  ttlMs?: number;
+  /** 连续失败多少次后熔断（默认 6） */
+  failureThreshold?: number;
+  /** 熔断冷却（默认 5 分钟） */
+  cooldownMs?: number;
 }
 
 /** 市场目录选项 */
@@ -103,8 +122,10 @@ export interface MarketCatalogOptions {
   cacheFile?: string;
   /** 源响应大小上限（字节，默认 32 MB） */
   maxBytes?: number;
-  /** npm registry 覆盖（详情页拉 packument 用） */
+  /** npm registry 覆盖（详情页 / 分档探测用） */
   registry?: string;
+  /** 列表分档探测（catalog 无协议字段时的 registry 确认） */
+  compatProbe?: MarketCompatProbeOptions;
 }
 
 /** 市场详情（`GET /api/plugins/market/:name`） */
@@ -149,10 +170,10 @@ type RawEntry = Record<string, unknown>;
 interface CatalogCache {
   /** 抓取到的原始条目（已归一 name） */
   entries: RawEntry[];
+  /** 顶层分类 id → 双语标题（catalog `metadata.categories`） */
+  categories?: Record<string, { zh: string; en: string }>;
   source?: string;
   fetchedAt: number;
-  /** 分类表（源站 metadata 投影） */
-  categories?: MarketCategory[];
 }
 
 /** 取第一个字符串字段 */
@@ -291,7 +312,8 @@ export function projectEntry(raw: RawEntry): MarketPluginEntry | null {
     title,
     ...(description ? { description } : {}),
     ...(i18n.zh || i18n.en ? { descriptionI18n: i18n } : {}),
-    ...(category ? { category } : {}),
+    category: category ?? "",
+    version: latestVersion ?? "",
     ...(repoOf(raw) ? { repository: repoOf(raw) } : {}),
     ...(pickString(raw, ["homepage", "url"]) ? { homepage: pickString(raw, ["homepage", "url"]) } : {}),
     ...(latestVersion ? { latestVersion } : {}),
@@ -324,39 +346,72 @@ export function extractEntries(payload: unknown): RawEntry[] {
   return [];
 }
 
-/** 从源站 payload 的 `metadata.categories`（映射形式）提取分类表 */
-export function extractCategories(payload: unknown): MarketCategory[] | null {
-  if (!payload || typeof payload !== "object") return null;
-  const metadata = (payload as Record<string, unknown>).metadata;
-  if (!metadata || typeof metadata !== "object") return null;
-  const raw = (metadata as Record<string, unknown>).categories;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const out: MarketCategory[] = [];
-  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!id.trim()) continue;
-    const title = value && typeof value === "object" ? (value as Record<string, unknown>).title : undefined;
-    const record = title && typeof title === "object" ? (title as Record<string, unknown>) : {};
-    const zh = typeof record.zh === "string" && record.zh ? record.zh : undefined;
-    const en = typeof record.en === "string" && record.en ? record.en : undefined;
-    out.push({ id, title: { ...(zh ? { zh } : {}), ...(en ? { en } : {}) } });
+/** 双语标题字段归一（catalog format-1 是 `{ title: { zh, en } }`） */
+function titleOf(value: unknown): { zh: string; en: string } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = (value as Record<string, unknown>).title ?? value;
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    return text ? { zh: text, en: text } : undefined;
   }
-  return out.length > 0 ? out : null;
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const zh = typeof record.zh === "string" ? record.zh.trim() : "";
+  const en = typeof record.en === "string" ? record.en.trim() : "";
+  if (!zh && !en) return undefined;
+  // 单语时另一语回退同一文本，前端 `title.zh` 永远有值
+  return { zh: zh || en, en: en || zh };
 }
 
-/** 磁盘缓存里的分类数组（宽松校验；旧缓存无此字段时返回 undefined） */
-function coerceCategories(raw: unknown): MarketCategory[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out: MarketCategory[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object") continue;
-    const record = item as Record<string, unknown>;
-    if (typeof record.id !== "string" || !record.id.trim()) continue;
-    const title = record.title && typeof record.title === "object" ? (record.title as Record<string, unknown>) : {};
-    const zh = typeof title.zh === "string" && title.zh ? title.zh : undefined;
-    const en = typeof title.en === "string" && title.en ? title.en : undefined;
-    out.push({ id: record.id, title: { ...(zh ? { zh } : {}), ...(en ? { en } : {}) } });
+/**
+ * 从源站 JSON 顶层取分类表（catalog format-1：`metadata.categories`，
+ * 源站：顶层 `categories`），归一成 `id → {zh,en}`。
+ *
+ * 市场页的分类 chips 消费这张表；条目里只有 `metadata.category` id。
+ */
+export function extractCategories(payload: unknown): Record<string, { zh: string; en: string }> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  const record = payload as Record<string, unknown>;
+  const meta = record.metadata;
+  const raw =
+    (meta && typeof meta === "object" ? (meta as Record<string, unknown>).categories : undefined) ??
+    record.categories;
+  const out: Record<string, { zh: string; en: string }> = {};
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const id = pickString(item as RawEntry, ["id", "slug", "name"]);
+      const title = titleOf(item);
+      if (id && title) out[id] = title;
+    }
+    return out;
   }
-  return out.length > 0 ? out : undefined;
+  if (raw && typeof raw === "object") {
+    for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+      const title = titleOf(value);
+      if (title) out[id] = title;
+    }
+  }
+  return out;
+}
+
+/** 结果集里的分类（按 catalog 声明顺序，未知 id 追加在末尾按字母序） */
+export function projectCategories(
+  entries: MarketPluginEntry[],
+  titles: Record<string, { zh: string; en: string }> | undefined,
+): MarketCategory[] {
+  const present = new Set(entries.map((entry) => entry.category).filter((id) => id.length > 0));
+  const declared = Object.keys(titles ?? {});
+  const out: MarketCategory[] = [];
+  for (const id of declared) {
+    if (!present.has(id)) continue;
+    present.delete(id);
+    out.push({ id, title: titles?.[id] ?? { zh: id, en: id } });
+  }
+  for (const id of [...present].sort()) {
+    out.push({ id, title: { zh: id, en: id } });
+  }
+  return out;
 }
 
 /** 关键字匹配（name / title / description，大小写不敏感） */
@@ -392,6 +447,10 @@ export class MarketCatalog {
   private readonly cacheFile: string;
   private readonly maxBytes: number;
   private readonly registryUrl: string | null;
+  private readonly probe: Required<MarketCompatProbeOptions>;
+  private readonly probeCache = new Map<string, { at: number; compat: MarketCompat; reason: string }>();
+  /** 探测熔断截止时间（registry 不可达时不把市场页拖死） */
+  private probeCooldownUntil = 0;
   private memory: CatalogCache | null = null;
   /** 避免并发请求打爆源站：进行中的抓取共享同一个 Promise */
   private inflight: Promise<CatalogCache | null> | null = null;
@@ -409,6 +468,15 @@ export class MarketCatalog {
     this.cacheFile = resolve(options.cacheFile ?? resolve(this.dataRoot, "cache", "market-catalog.json"));
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.registryUrl = options.registry?.trim() || null;
+    const probe = options.compatProbe ?? {};
+    this.probe = {
+      enabled: probe.enabled ?? process.env.FENG_MARKET_PROBE !== "0",
+      timeoutMs: probe.timeoutMs ?? 2_500,
+      concurrency: Math.max(1, Math.floor(probe.concurrency ?? 8)),
+      ttlMs: probe.ttlMs ?? DEFAULT_TTL_MS,
+      failureThreshold: Math.max(1, Math.floor(probe.failureThreshold ?? 6)),
+      cooldownMs: probe.cooldownMs ?? 5 * 60 * 1000,
+    };
   }
 
   /** 目录查询（搜索 + 分类 + 分页都在服务端） */
@@ -439,8 +507,72 @@ export class MarketCatalog {
       ...(stale ? { stale: true } : {}),
       ...(error ? { error } : {}),
       ...(retryable ? { retryable: true } : {}),
-      ...(cache?.categories ? { categories: cache.categories } : {}),
+      categories: projectCategories(filtered, cache?.categories),
     };
+  }
+
+  /**
+   * 列表分档回填：catalog 没有协议字段，用 registry 的 `/latest` 元数据为**当前页**
+   * 条目确认档位（A/C 才会真实出现），带 1h 缓存与熔断。
+   *
+   * 只处理 `compatSource: "catalog"` 的 hint；失败一律保留原 hint —— 市场页不该被
+   * registry 的可用性拖垮（连续失败 N 次后冷却，期间直接返回原条目）。
+   */
+  async enrich(entries: MarketPluginEntry[]): Promise<MarketPluginEntry[]> {
+    if (!this.probe.enabled || entries.length === 0) return entries;
+    if (this.now() < this.probeCooldownUntil) return entries;
+    const pending = entries.filter((entry) => entry.compatSource === "catalog");
+    if (pending.length === 0) return entries;
+
+    const resolved = new Map<string, { compat: MarketCompat; reason: string }>();
+    let failures = 0;
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < pending.length) {
+        if (failures >= this.probe.failureThreshold) {
+          this.probeCooldownUntil = this.now() + this.probe.cooldownMs;
+          return;
+        }
+        const entry = pending[cursor++]!;
+        const cached = this.probeCache.get(entry.name);
+        if (cached && this.now() - cached.at <= this.probe.ttlMs) {
+          resolved.set(entry.name, cached);
+          continue;
+        }
+        try {
+          const manifest = await fetchNpmLatestManifest(entry.name, {
+            ...(this.registryUrl ? { registry: this.registryUrl } : {}),
+            fetchImpl: this.fetchImpl,
+            timeoutMs: this.probe.timeoutMs,
+          });
+          const classified = classifyCompat(manifest);
+          const value = { at: this.now(), compat: classified.compat, reason: classified.reason };
+          this.probeCache.set(entry.name, value);
+          resolved.set(entry.name, value);
+        } catch (error) {
+          // 404 = 这个包没发布到 npm（永久性），不算连通性失败、不熔断
+          const permanent =
+            error instanceof Error && "code" in error && (error as { code?: string }).code === "not_found";
+          if (!permanent) failures += 1;
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(this.probe.concurrency, pending.length) }, () => worker()),
+    );
+    if (resolved.size === 0) return entries;
+
+    return entries.map((entry) => {
+      const hit = resolved.get(entry.name);
+      if (!hit) return entry;
+      return {
+        ...entry,
+        compat: hit.compat,
+        compatReason: hit.reason,
+        compatSource: "registry",
+        installable: hit.compat !== "C",
+      };
+    });
   }
 
   /** 市场条目里是否有这个包（安装前校验用） */
@@ -582,12 +714,12 @@ export class MarketCatalog {
       const entries = extractEntries(record.entries);
       const fetchedAt = typeof record.fetchedAt === "number" ? record.fetchedAt : 0;
       if (entries.length === 0 || fetchedAt <= 0) return null;
-      const categories = coerceCategories(record.categories);
+      const categories = extractCategories({ metadata: { categories: record.categories } });
       return {
         entries,
+        ...(Object.keys(categories).length > 0 ? { categories } : {}),
         fetchedAt,
         ...(typeof record.source === "string" ? { source: record.source } : {}),
-        ...(categories ? { categories } : {}),
       };
     } catch {
       return null;
@@ -631,7 +763,12 @@ export class MarketCatalog {
         const entries = extractEntries(payload);
         if (entries.length === 0) throw new Error("目录里没有条目");
         const categories = extractCategories(payload);
-        const cache: CatalogCache = { entries, fetchedAt: this.now(), source: url, ...(categories ? { categories } : {}) };
+        const cache: CatalogCache = {
+          entries,
+          ...(Object.keys(categories).length > 0 ? { categories } : {}),
+          fetchedAt: this.now(),
+          source: url,
+        };
         this.memory = cache;
         this.writeDisk(cache);
         return cache;

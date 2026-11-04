@@ -36,7 +36,7 @@
 | GET | `/api/plugins` | 列表：`{ plugins, errors, pluginsRoot, stateFile, revision, restartRequired }` |
 | GET | `/api/plugins/market` | 市场目录：`?q=&category=&limit=&offset=`（服务端搜索分页，默认 24 / 上限 100） |
 | GET | `/api/plugins/market/:name` | 市场详情：版本列表 + 兼容档（A/B/C） |
-| POST | `/api/plugins/install` | 安装：JSON `{ source }` 本地源 / `{ marketName, marketVersion }` 市场源 / multipart 上传包 |
+| POST | `/api/plugins/install` | 安装：JSON `{ source }` 本地源 / `{ marketName, marketVersion }` 市场源（也收嵌套 `{ market: { name, version } }`）/ multipart 上传包 |
 | POST | `/api/plugins/:id/enable` | 启用 |
 | POST | `/api/plugins/:id/disable` | 停用（manifest/assets 立即不再对外） |
 | DELETE | `/api/plugins/:id` | 卸载（删目录 + 清状态） |
@@ -77,8 +77,9 @@ POST /api/plugins/install   Content-Type: multipart/form-data
 ### 市场安装
 
 ```jsonc
-// marketName / marketVersion 是唯一的市场入口：服务端先用 catalog 策展清单校验
+// 市场安装唯一入口（规范形）：服务端先用 catalog 策展清单校验
 // （名称必须在目录里、不能是 C 档 dsh.client），再解析成 npm tarball 安装。
+// 嵌套体 { market: { name, version } } 作为兼容别名同样被接受（归一后等价）。
 POST /api/plugins/install
 { "marketName": "dsh-better-edit", "marketVersion": "1.2.0" }
 ```
@@ -100,18 +101,39 @@ sha512 → 解包 → `<pluginsRoot>/.staging-*` → `bun install --production`�
 内存 + `<dataRoot>/cache/market-catalog.json` 缓存，TTL 1 小时；抓取失败回退 stale
 （`stale: true` + `error`），首启无网返回空列表 + `retryable: true`，不阻塞页面。
 
-列表条目（`GET /api/plugins/market`）：
+列表条目（`GET /api/plugins/market` 的 `plugins[]`，WebUI 市场页契约）：
 
 ```json
 {
   "name": "@0imzero/dsh-workspace-menu", "title": "0imzero/dsh-workspace-menu",
   "description": "DSH 主页工作区/会话增强菜单…",
   "descriptionI18n": { "zh": "…", "en": "…" },
-  "category": "ui", "latestVersion": "2.1.0", "engines": { "dsh": ">=0.5.0" },
+  "category": "ui", "version": "2.1.0", "latestVersion": "2.1.0",
+  "engines": { "dsh": ">=0.5.0" },
   "repository": "https://github.com/…", "homepage": "https://…",
-  "compat": "B", "compatReason": "…", "compatSource": "catalog", "installable": true
+  "compat": "C", "compatReason": "…", "compatSource": "registry", "installable": false
 }
 ```
+
+`compat` 三档：`"A"`（声明 `fengagent.webui`，即装即渲染）/ `"B"`（dsh host 侧
+tools/services，dsh-compat 试装 + 需重启）/ `"C"`（`dsh.client` 界面插件，装得上
+但界面不渲染——对照组，`installable: false`，安装闸门拒绝）。
+
+响应：`{ plugins, total, limit, offset, categories, source, fetchedAt, stale?, error?, retryable? }`，
+`categories` 是 `[{ id, title: { zh, en } }]`，只含本次结果集里出现的分类（前端 chips
+直接消费），标题取自 catalog 顶层 `metadata.categories`。前端按 `offset + limit < total`
+继续翻页。
+
+catalog format-1 只给包名/标题/双语描述/`metadata.category`/`versions[].version`，
+**没有 package.json 的 `dsh`/`fengagent` 字段**，所以列表先按 catalog 判 hint
+（`compatSource: "catalog"`；没有形态信号时按 B）。`GET /api/plugins/market` 随后对
+**当前页**（≤100 条）用 registry 的 `/<name>/latest` 元数据确认档位
+（`compatSource: "registry"`）：A/C 档会真实出现，C 档 `installable: false`。探测带
+1 小时内存缓存（按包名）与熔断（连续 6 次非 404 失败后冷却 5 分钟，期间用 hint）；
+`FENG_MARKET_PROBE=0` 可关闭。冷启动首屏（24 条）约 2–6s（取决于 registry 延迟；
+`FENG_NPM_REGISTRY` 可换镜像），同页再次请求命中缓存后 <1s。详情
+（`/market/:name`）与安装闸门同样用 registry 元数据确认；安装前 registry 明确是
+`dsh.client` 的一律拒绝。
 
 catalog format-1 只给包名/标题/双语描述/`metadata.category`/`versions[].version`，
 **没有 package.json 的 `dsh`/`fengagent` 字段**，所以列表里的 `compat` 是 hint

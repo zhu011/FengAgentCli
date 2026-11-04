@@ -171,14 +171,15 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
       setError(null);
       setNotice(null);
       try {
-        await client.installPluginFromMarket(entry.name, entry.latestVersion);
+        const version = entry.version || entry.latestVersion;
+        await client.installPluginFromMarket(entry.name, version);
         const suffix =
           entry.compat === "A"
             ? "WebUI 插件即时生效"
             : entry.compat === "B"
               ? "工具/服务面需重启宿主后装载"
               : "dsh.client 界面插件（服务端拒绝安装）";
-        setNotice(`已安装 ${entry.name}${entry.latestVersion ? `@${entry.latestVersion}` : ""}（${suffix}）`);
+        setNotice(`已安装 ${entry.name}${version ? `@${version}` : ""}（${suffix}）`);
         await reloadInstalled();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -217,7 +218,7 @@ export function MarketTab({ client }: MarketTabProps): ReactNode {
           <CompatBadge compat={e.compat} reason={e.compatReason} />
         </div>
         <div className="mk-card__pkg">
-          <code>{e.name}</code> · v{e.latestVersion ?? "—"} · {e.category ? categoryTitle(e.category) : "未分类"}
+          <code>{e.name}</code> · v{e.version || e.latestVersion || "—"} · {e.category ? categoryTitle(e.category) : "未分类"}
         </div>
         <p className="mk-card__desc">{entryDescription(e)}</p>
         <div className="mk-card__actions">
