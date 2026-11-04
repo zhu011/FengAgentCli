@@ -8,6 +8,8 @@
 //      装载失败隔离，宿主不挂——真实生态发现，按失败口径断言）+
 //      A 档（example-webui-plugin 本地源）+ C 档对照（dshmarket 安装被 400 拒；
 //      本地装的 client-only 假包 host 面不装载、宿主不挂）+ 坏插件（import 抛错）；
+//      目录契约：首屏字段完备（compat A/B/C + installable 布尔 + category/version
+//      非空）、categories 按筛选结果集裁剪（全集 ⊇ 搜索集、单类过滤只剩该类）；
 //   ② 重启后 boot 断言：装载名单（stderr）含真装载的 B 档（dsh-compat 的工具
 //      增量门保证 loaded ⇒ 注册过工具）、webui 走 manifest 不进 host 面、
 //      不可装载插件进 /api/plugins 的 error 且宿主 /api/health 仍 200；
@@ -157,6 +159,32 @@ try {
     const body = await res.json();
     if (body.total !== 1 || body.plugins[0].name !== "dsh-better-edit") {
       throw new Error(`total=${body.total} first=${body.plugins[0]?.name}`);
+    }
+  });
+
+  await check("首屏字段完备：compat 全 A/B/C、installable 布尔、category/version 非空", async () => {
+    const res = await api("/api/plugins/market?limit=24", {}, 90_000);
+    const body = await res.json();
+    for (const p of body.plugins) {
+      if (!["A", "B", "C"].includes(p.compat)) throw new Error(`${p.name} compat=${p.compat}`);
+      if (typeof p.installable !== "boolean") throw new Error(`${p.name} installable=${p.installable}`);
+      if (typeof p.category !== "string" || typeof p.version !== "string") throw new Error(`${p.name} category/version 缺失`);
+    }
+    const cTier = body.plugins.filter((p) => p.compat === "C");
+    if (cTier.length > 0 && !cTier.every((p) => p.installable === false)) throw new Error("C 档存在 installable=true");
+  });
+
+  await check("categories 按筛选结果集裁剪（全集 ⊇ 搜索集；单类过滤只剩该类）", async () => {
+    const full = await (await api("/api/plugins/market?limit=1", {}, 90_000)).json();
+    const fullIds = full.categories.map((c) => c.id);
+    if (fullIds.length < 20) throw new Error(`全集分类仅 ${fullIds.length}（catalog 可能已裁撤分类？）`);
+    const byQ = await (await api("/api/plugins/market?q=edit&limit=1", {}, 90_000)).json();
+    const qIds = byQ.categories.map((c) => c.id);
+    if (qIds.length === 0 || qIds.length >= fullIds.length) throw new Error(`q=edit 分类 ${qIds.length}（全集 ${fullIds.length}）`);
+    if (!qIds.every((id) => fullIds.includes(id))) throw new Error("搜索集不是全集子集");
+    const byCat = await (await api("/api/plugins/market?category=tools&limit=1", {}, 90_000)).json();
+    if (byCat.categories.length !== 1 || byCat.categories[0].id !== "tools") {
+      throw new Error(`category=tools → ${JSON.stringify(byCat.categories.map((c) => c.id))}`);
     }
   });
 
