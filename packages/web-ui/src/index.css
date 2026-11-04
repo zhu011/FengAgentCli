@@ -6150,3 +6150,52 @@ body {
   border-left: 2px solid var(--border-color);
   margin-left: 4px;
 }
+
+/* ── 市场卡片（Settings · 市场 tab） ── */
+
+.mk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.mk-card__pkg {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.mk-card__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mk-card__desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mk-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+}
+
+/* C 档（dsh.client）标灰 */
+.mk-card--dim {
+  opacity: 0.62;
+}
+
+.mk-clientfold {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}

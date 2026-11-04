@@ -27,10 +27,14 @@ import type {
   GroupStopResponse,
   GroupStreamEvent,
   MarkdownReport,
+  MarketCatalogResponse,
+  MarketQuery,
   MessageEvalResponse,
   MessageTracesResponse,
   ModelsResponse,
   PermissionResult,
+  PluginMutationResult,
+  PluginsListResponse,
   RollbackResponse,
   RuntimeInfo,
   Session,
@@ -743,6 +747,84 @@ export class ApiClient {
     }
     return (await res.json()) as EvalOverview & { date: string };
   }
+
+  // ──────────────────────────────────────────────
+  // 插件管理与市场（/api/plugins）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/plugins — 已装插件列表 */
+  async listPlugins(): Promise<PluginsListResponse> {
+    const res = await fetch(`${this.baseUrl}/api/plugins`, { headers: { Accept: "application/json" } });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to list plugins");
+    }
+    return (await res.json()) as PluginsListResponse;
+  }
+
+  /** POST /api/plugins/install — 本地源安装（目录或 .tgz 路径） */
+  async installPluginFromSource(source: string): Promise<PluginMutationResult> {
+    const res = await fetch(`${this.baseUrl}/api/plugins/install`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source }),
+    });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to install plugin");
+    }
+    return (await res.json()) as PluginMutationResult;
+  }
+
+  /** POST /api/plugins/install — 市场安装（spec 由服务端从 catalog 策展解析） */
+  async installPluginFromMarket(name: string, version: string): Promise<PluginMutationResult> {
+    const res = await fetch(`${this.baseUrl}/api/plugins/install`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ market: { name, version } }),
+    });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to install market plugin");
+    }
+    return (await res.json()) as PluginMutationResult;
+  }
+
+  /** POST /api/plugins/:id/enable|disable — 启停插件 */
+  async setPluginEnabled(id: string, enabled: boolean): Promise<PluginMutationResult> {
+    const res = await fetch(
+      `${this.baseUrl}/api/plugins/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to toggle plugin");
+    }
+    return (await res.json()) as PluginMutationResult;
+  }
+
+  /** DELETE /api/plugins/:id — 卸载插件 */
+  async uninstallPlugin(id: string): Promise<PluginMutationResult> {
+    const res = await fetch(`${this.baseUrl}/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to uninstall plugin");
+    }
+    return (await res.json()) as PluginMutationResult;
+  }
+
+  /** GET /api/plugins/market — 市场目录（服务端搜索分页） */
+  async getMarketCatalog(query: MarketQuery = {}): Promise<MarketCatalogResponse> {
+    const params = new URLSearchParams();
+    if (query.q) params.set("q", query.q);
+    if (query.category) params.set("category", query.category);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
+    const qs = params.toString();
+    const res = await fetch(`${this.baseUrl}/api/plugins/market${qs ? `?${qs}` : ""}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to load market catalog");
+    }
+    return (await res.json()) as MarketCatalogResponse;
+  }
+
 
   // ──────────────────────────────────────────────
   // SSE 解析

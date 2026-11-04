@@ -1,47 +1,30 @@
 /**
  * @fengagent/web-ui — Settings 页（S2）
  *
- * 四 tab（通用/模型/插件/关于）的分段骨架 + 插件管理 tab（消费 `/api/plugins`
- * CRUD API，按 docs/PLUGINS.md 契约）。模型 tab 等 S3 的 `settings/model` API；
- * 通用/关于 tab 先落最小可用（主题切换 + 版本/健康）。
+ * 五 tab（插件/市场/通用/模型/关于）的分段骨架 + 插件管理 tab（消费 `/api/plugins`
+ * CRUD API，按 docs/PLUGINS.md 契约）+ 市场 tab（消费 `/api/plugins/market`，
+ * 插件市场接入 · C）。模型 tab 等 S3 的 `settings/model` API；通用/关于 tab 先落
+ * 最小可用（主题切换 + 版本/健康）。
  */
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Loader2, Package, RefreshCw, Settings as SettingsIcon, Upload } from "lucide-react";
+import { ApiError, type ApiClient } from "../api/client.ts";
+import type { PluginsListResponse } from "../api/types.ts";
 import type { Theme } from "../lib/theme.ts";
-
-/* ------------------------------ 插件 API 契约 ------------------------------ */
-
-interface PluginEntry {
-  id: string;
-  name: string;
-  version: string;
-  enabled: boolean;
-  source: string;
-  installedAt?: string;
-  bundleUrl?: string;
-  slots?: string[];
-  error?: string;
-}
-
-interface PluginsResponse {
-  plugins: PluginEntry[];
-  errors: Array<{ id: string; error: string }>;
-  pluginsRoot: string;
-  revision: number;
-  restartRequired: boolean;
-}
+import { MarketTab } from "./market-tab.tsx";
 
 /* ------------------------------ 页面 ------------------------------ */
 
-type SettingsTab = "general" | "model" | "plugins" | "about";
+type SettingsTab = "general" | "model" | "plugins" | "market" | "about";
 
 interface SettingsPageProps {
+  client: ApiClient;
   theme: Theme;
   onSelectTheme: (t: Theme) => void;
 }
 
-export function SettingsPage({ theme, onSelectTheme }: SettingsPageProps): ReactNode {
+export function SettingsPage({ client, theme, onSelectTheme }: SettingsPageProps): ReactNode {
   const [tab, setTab] = useState<SettingsTab>("plugins");
 
   return (
@@ -60,6 +43,7 @@ export function SettingsPage({ theme, onSelectTheme }: SettingsPageProps): React
         {(
           [
             ["plugins", "插件"],
+            ["market", "市场"],
             ["general", "通用"],
             ["model", "模型"],
             ["about", "关于"],
@@ -78,7 +62,8 @@ export function SettingsPage({ theme, onSelectTheme }: SettingsPageProps): React
         ))}
       </div>
 
-      {tab === "plugins" ? <PluginsTab /> : null}
+      {tab === "plugins" ? <PluginsTab client={client} /> : null}
+      {tab === "market" ? <MarketTab client={client} /> : null}
       {tab === "general" ? <GeneralTab theme={theme} onSelectTheme={onSelectTheme} /> : null}
       {tab === "model" ? <ModelTab /> : null}
       {tab === "about" ? <AboutTab /> : null}
@@ -88,8 +73,8 @@ export function SettingsPage({ theme, onSelectTheme }: SettingsPageProps): React
 
 /* ------------------------------ 插件 tab ------------------------------ */
 
-function PluginsTab(): ReactNode {
-  const [data, setData] = useState<PluginsResponse | null>(null);
+function PluginsTab({ client }: { client: ApiClient }): ReactNode {
+  const [data, setData] = useState<PluginsListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installSource, setInstallSource] = useState("");
@@ -100,17 +85,19 @@ function PluginsTab(): ReactNode {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/plugins", { headers: { Accept: "application/json" } });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}（插件管理 API 未装配？）`);
-      }
-      setData((await res.json()) as PluginsResponse);
+      setData(await client.listPlugins());
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg =
+        err instanceof ApiError && err.status === 404
+          ? "HTTP 404（插件管理 API 未装配？）"
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      setError(msg);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [client]);
 
   useEffect(() => {
     void reload();
@@ -122,16 +109,7 @@ function PluginsTab(): ReactNode {
     setInstalling(true);
     setNotice(null);
     try {
-      const res = await fetch("/api/plugins/install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source }),
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
-      if (!res.ok) {
-        const msg = typeof body.error === "string" ? body.error : body.error?.message ?? `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
+      await client.installPluginFromSource(source);
       setInstallSource("");
       setNotice("安装成功（WebUI 插件即时生效；工具/服务面需重启宿主）");
       await reload();
@@ -140,40 +118,30 @@ function PluginsTab(): ReactNode {
     } finally {
       setInstalling(false);
     }
-  }, [installSource, installing, reload]);
+  }, [client, installSource, installing, reload]);
 
   const toggle = useCallback(
-    async (id: string, action: "enable" | "disable") => {
+    async (id: string, enabled: boolean) => {
       try {
-        const res = await fetch(`/api/plugins/${encodeURIComponent(id)}/${action}`, { method: "POST" });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
-          const msg = typeof body.error === "string" ? body.error : body.error?.message ?? `HTTP ${res.status}`;
-          throw new Error(msg);
-        }
+        await client.setPluginEnabled(id, enabled);
         await reload();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [reload],
+    [client, reload],
   );
 
   const remove = useCallback(
     async (id: string) => {
       try {
-        const res = await fetch(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
-          const msg = typeof body.error === "string" ? body.error : body.error?.message ?? `HTTP ${res.status}`;
-          throw new Error(msg);
-        }
+        await client.uninstallPlugin(id);
         await reload();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [reload],
+    [client, reload],
   );
 
   const entries = useMemo(() => data?.plugins ?? [], [data]);
@@ -262,7 +230,7 @@ function PluginsTab(): ReactNode {
                     <button
                       type="button"
                       className="ag-btn ag-btn--mini"
-                      onClick={() => void toggle(p.id, p.enabled ? "disable" : "enable")}
+                      onClick={() => void toggle(p.id, !p.enabled)}
                     >
                       {p.enabled ? "停用" : "启用"}
                     </button>

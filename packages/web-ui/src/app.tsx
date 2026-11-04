@@ -249,7 +249,7 @@ function App() {
           </div>
         ) : view === "settings" ? (
           <div className="app-shell__main">
-            <SettingsPage theme={theme} onSelectTheme={selectTheme} />
+            <SettingsPage client={client} theme={theme} onSelectTheme={selectTheme} />
           </div>
         ) : (
           <div className="app-shell__main">

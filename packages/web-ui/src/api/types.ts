@@ -657,3 +657,80 @@ export type GroupStreamEvent =
   | { type: "message"; message: GroupMessage }
   | { type: "group"; group: GroupInfo }
   | { type: "heartbeat" };
+
+/* ══════════════════ 插件管理 / 插件市场（/api/plugins） ══════════════════ */
+
+/** 已装插件条目（GET /api/plugins，docs/PLUGINS.md 契约） */
+export interface PluginListEntry {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  enabled: boolean;
+  source: string;
+  installedAt?: string;
+  entry?: string;
+  bundleUrl?: string;
+  assetsBase?: string;
+  slots?: string[];
+  hasWebui?: boolean;
+  error?: string;
+}
+
+/** GET /api/plugins 响应 */
+export interface PluginsListResponse {
+  plugins: PluginListEntry[];
+  errors: Array<{ id: string; error: string }>;
+  pluginsRoot: string;
+  revision: number;
+  restartRequired: boolean;
+}
+
+/** install / enable / disable / uninstall 的统一响应 */
+export interface PluginMutationResult {
+  plugin: PluginListEntry;
+  revision: number;
+  restartRequired: boolean;
+  warnings?: string[];
+}
+
+/**
+ * 市场目录条目（GET /api/plugins/market）。compat 兼容三档：
+ * - `"webui"`      A 档：声明 fengagent.webui，装上即渲染；
+ * - `"dsh"`        B 档：dsh host 侧 tools/services，dsh-compat 试装 + 需重启；
+ * - `"dsh-client"` C 档：dsh 客户端协议 UI 插件，装得上但界面不渲染（对照组）。
+ */
+export interface MarketEntry {
+  /** npm 包名（可带 scope），安装 spec 由服务端从 catalog 策展解析 */
+  name: string;
+  title: string;
+  description: { zh: string; en: string } | string;
+  category: string;
+  version: string;
+  compat: "webui" | "dsh" | "dsh-client" | "unknown";
+  homepage?: string;
+  repository?: string;
+}
+
+/** 市场分类（id + 双语标题，来自 catalog metadata） */
+export interface MarketCategory {
+  id: string;
+  title: { zh: string; en: string };
+}
+
+/** GET /api/plugins/market 查询参数（服务端搜索分页） */
+export interface MarketQuery {
+  q?: string;
+  category?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** GET /api/plugins/market 响应（catalog 全量不进浏览器） */
+export interface MarketCatalogResponse {
+  entries: MarketEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+  categories?: MarketCategory[];
+}
