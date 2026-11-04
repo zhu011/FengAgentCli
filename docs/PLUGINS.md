@@ -17,7 +17,8 @@
   "version": 1,
   "revision": 3,
   "plugins": {
-    "demo": { "enabled": true, "source": "D:\\plugins\\demo", "installedAt": "2026-11-02T…", "name": "@acme/demo", "version": "1.0.0" }
+    "demo": { "enabled": true, "source": "D:\\plugins\\demo", "installedAt": "2026-11-02T…", "name": "@acme/demo", "version": "1.0.0", "protocol": "webui" },
+    "better-edit": { "enabled": true, "source": "market:dsh-better-edit@1.2.0", "sourceLabel": "market:dsh-better-edit", "resolvedVersion": "1.2.0", "integrity": "sha512-…", "protocol": "dsh", "installedAt": "2026-11-04T…" }
   }
 }
 ```
@@ -33,7 +34,9 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/plugins` | 列表：`{ plugins, errors, pluginsRoot, stateFile, revision, restartRequired }` |
-| POST | `/api/plugins/install` | 安装：JSON `{ source }` 本地目录/`.tgz`，或 multipart 上传包 |
+| GET | `/api/plugins/market` | 市场目录：`?q=&category=&limit=&offset=`（服务端搜索分页，默认 24 / 上限 100） |
+| GET | `/api/plugins/market/:name` | 市场详情：版本列表 + 兼容档（A/B/C） |
+| POST | `/api/plugins/install` | 安装：JSON `{ source }` 本地源 / `{ marketName, marketVersion }` 市场源 / multipart 上传包 |
 | POST | `/api/plugins/:id/enable` | 启用 |
 | POST | `/api/plugins/:id/disable` | 停用（manifest/assets 立即不再对外） |
 | DELETE | `/api/plugins/:id` | 卸载（删目录 + 清状态） |
@@ -71,11 +74,60 @@ POST /api/plugins/install   Content-Type: multipart/form-data
 - 冲突（同 id 已存在）→ `409`；安装失败会回滚已复制目录，不留半装插件。
 - 上传安装的 `source` 记作 `upload:<文件名>`（临时路径装完即删，不留死链）。
 
+### 市场安装
+
+```jsonc
+// marketName / marketVersion 是唯一的市场入口：服务端先用 catalog 策展清单校验
+// （名称必须在目录里、不能是 C 档 dsh.client），再解析成 npm tarball 安装。
+POST /api/plugins/install
+{ "marketName": "dsh-better-edit", "marketVersion": "1.2.0" }
+```
+
+流水线：catalog 校验 → registry 解析 `dist.tarball`/`dist.integrity` → 下载并校验
+sha512 → 解包 → `<pluginsRoot>/.staging-*` → `bun install --production`（**strict**，
+失败即整体失败）→ rename 原子落盘 → 登记。任一步失败都删 staging / 已就位目录 /
+`store.forget(id)`。
+
+- **不开放任意 npm spec**：`{ source: "npm:…" }` 一律 400，避免接口变成「任意 npm
+  包执行器」；本地目录 / `.tgz` / 上传通道不变。
+- 登记字段：`source: "market:<name>@<version>"`、`sourceLabel: "market:<name>"`、
+  `resolvedVersion`、`integrity`、`registry`（配置了镜像时）、`protocol`。
+- `protocol` 由 package.json 探测：`webui`（`fengagent.webui`）/ `dsh`（`dsh`、
+  `engines.dsh`、dsh 关键字）/ `cordis`（有 `main`/`exports`）/ `unknown`。
+
+市场目录（A）细节：源顺序 `FENG_MARKET_CATALOG_URL` → jsDelivr 镜像
+`cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json` → `awesome-dsh-plugin.com/plugins.json`；
+内存 + `<dataRoot>/cache/market-catalog.json` 缓存，TTL 1 小时；抓取失败回退 stale
+（`stale: true` + `error`），首启无网返回空列表 + `retryable: true`，不阻塞页面。
+
+列表条目（`GET /api/plugins/market`）：
+
+```json
+{
+  "name": "@0imzero/dsh-workspace-menu", "title": "0imzero/dsh-workspace-menu",
+  "description": "DSH 主页工作区/会话增强菜单…",
+  "descriptionI18n": { "zh": "…", "en": "…" },
+  "category": "ui", "latestVersion": "2.1.0", "engines": { "dsh": ">=0.5.0" },
+  "repository": "https://github.com/…", "homepage": "https://…",
+  "compat": "B", "compatReason": "…", "compatSource": "catalog", "installable": true
+}
+```
+
+catalog format-1 只给包名/标题/双语描述/`metadata.category`/`versions[].version`，
+**没有 package.json 的 `dsh`/`fengagent` 字段**，所以列表里的 `compat` 是 hint
+（`compatSource: "catalog"`），详情（`/market/:name`）与安装闸门会用 registry
+元数据确认（`compatSource: "registry"`）；安装前 registry 明确是 `dsh.client` 的
+一律拒绝。
+
+响应分页字段：`{ plugins, total, limit, offset, source, fetchedAt, stale?, error?, retryable? }`，
+前端按 `offset + limit < total` 继续翻页。
+
 ### 安全边界
 
 - 插件 id 只允许单段目录名（`A-Za-z0-9._@-`，拒绝 `..`/分隔符/盘符/NUL）；
   所有落盘路径都在 `<dataRoot>/plugins` 之内。
-- 只接受本地源；上传包只接受 `.tgz`/`.tar.gz` 且限 50 MB。
+- 本地源只接受目录 / `.tgz` / 上传包（`.tgz`/`.tar.gz`，50 MB 上限）；市场源只接受
+  catalog 策展条目，且 C 档拒绝一键安装。
 - `/api/webui/assets/*` 只服务声明了 `fengagent.webui` 的插件目录内真实文件，
   目录穿越一律 404；坏包（`package.json` 非法）不会变成 500。
 

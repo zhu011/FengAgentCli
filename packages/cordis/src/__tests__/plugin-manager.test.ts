@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { PluginError, PluginManager, type PluginManagerOptions } from "../plugin-manager.ts";
 import { PluginStore } from "../plugin-store.ts";
 
@@ -398,6 +399,123 @@ describe("PluginManager.list", () => {
     const list = makeManager().list();
     expect(list.plugins).toEqual([]);
     expect(list.errors).toEqual([]);
+  });
+});
+
+describe("PluginManager.install（市场源）", () => {
+  /** 准备一个「解包后」的插件目录（市场安装只测解析/下载/校验/登记，tar 在本地源用例覆盖） */
+  function marketSource(name: string, pkg: Record<string, unknown>): string {
+    return makeSource(`market-${name.replace(/[@/]/g, "-")}`, pkg, { "client.mjs": "export function setup() {}" });
+  }
+
+  /** registry + tarball 的假 fetch（tarball 字节固定，integrity 用同一份算） */
+  function npmFetch(
+    name: string,
+    version: string,
+    tarball: Buffer,
+    pkg: Record<string, unknown>,
+  ): { fetchImpl: typeof fetch; integrity: string } {
+    const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
+    const tarballUrl = `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const decoded = decodeURIComponent(url);
+      if (decoded === `https://registry.npmjs.org/${name}/${version}`) {
+        return new Response(
+          JSON.stringify({
+            name,
+            version,
+            ...pkg,
+            dist: { tarball: tarballUrl, integrity },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url === tarballUrl) return new Response(new Uint8Array(tarball));
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, integrity };
+  }
+
+  test("marketName + marketVersion：校验 tarball、落 sourceLabel/protocol/resolvedVersion", async () => {
+    const staging = marketSource("dsh-better-edit", {
+      name: "dsh-better-edit",
+      version: "1.2.0",
+      dsh: { service: {} },
+    });
+    const tarball = Buffer.from("fake-tarball-bytes");
+    const { fetchImpl, integrity } = npmFetch("dsh-better-edit", "1.2.0", tarball, { dsh: { service: {} } });
+    const manager = new PluginManager({
+      dataRoot: root,
+      installDepsCommand: null,
+      fetchImpl,
+      extractTarball: () => ({ dir: staging }),
+    });
+
+    const result = await manager.install({ marketName: "dsh-better-edit", marketVersion: "1.2.0" });
+    expect(result.plugin).toMatchObject({
+      id: "dsh-better-edit",
+      protocol: "dsh",
+      sourceLabel: "market:dsh-better-edit",
+    });
+
+    const state = JSON.parse(readFileSync(join(root, "plugins.json"), "utf8")) as {
+      plugins: Record<string, Record<string, unknown>>;
+    };
+    expect(state.plugins["dsh-better-edit"]).toMatchObject({
+      enabled: true,
+      source: "market:dsh-better-edit@1.2.0",
+      sourceLabel: "market:dsh-better-edit",
+      resolvedVersion: "1.2.0",
+      protocol: "dsh",
+      integrity,
+    });
+  });
+
+  test("scoped 包名 → id 带 scope（不撞同名不同 scope）", async () => {
+    const staging = marketSource("@acme/ui", { name: "@acme/ui", version: "0.1.0" });
+    const { fetchImpl } = npmFetch("@acme/ui", "0.1.0", Buffer.from("x"), {});
+    const manager = new PluginManager({
+      dataRoot: root,
+      installDepsCommand: null,
+      fetchImpl,
+      extractTarball: () => ({ dir: staging }),
+    });
+    const result = await manager.install({ marketName: "@acme/ui", marketVersion: "0.1.0" });
+    expect(result.plugin).toMatchObject({ id: "acme-ui", protocol: "unknown" });
+  });
+
+  test("integrity 不匹配 → 整体失败且不留目录/记录", async () => {
+    const staging = marketSource("tampered", { name: "tampered", version: "1.0.0" });
+    const tarball = Buffer.from("good-bytes");
+    const { fetchImpl } = npmFetch("tampered", "1.0.0", tarball, {});
+    const manager = new PluginManager({
+      dataRoot: root,
+      installDepsCommand: null,
+      // 下载到的字节被换掉：哈希对不上
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        const response = await fetchImpl(input);
+        if (String(input).endsWith(".tgz")) return new Response(Buffer.from("tampered-bytes"));
+        return response;
+      }) as unknown as typeof fetch,
+      extractTarball: () => ({ dir: staging }),
+    });
+    const error = await attemptAsync(() => manager.install({ marketName: "tampered", marketVersion: "1.0.0" }));
+    expectPluginError(error, "unsupported");
+    expect(existsSync(join(pluginsRoot, "tampered"))).toBe(false);
+    expect(new PluginStore(join(root, "plugins.json")).read().plugins).toEqual({});
+  });
+
+  test("不开放任意 npm spec；marketVersion 必须是确切版本", async () => {
+    expectPluginError(
+      await attemptAsync(() => makeManager().install({ source: "npm:left-pad@1.3.0" })),
+      "unsupported",
+    );
+    expectPluginError(
+      await attemptAsync(() => makeManager().install({ marketName: "alpha", marketVersion: "^1.0.0" })),
+      "bad_request",
+    );
+    expectPluginError(await attemptAsync(() => makeManager().install({ marketVersion: "1.0.0" })), "bad_request");
   });
 });
 

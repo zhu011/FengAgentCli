@@ -82,6 +82,9 @@ async function main() {
     ...(runtimeResult.runtime.ctx.plugins
       ? { plugins: runtimeResult.runtime.ctx.plugins }
       : {}),
+    // A/B：插件市场目录 → /api/plugins/market（列表/详情），
+    // 并给 /api/plugins/install 的 marketName 安装做策展校验
+    market: runtimeResult.marketCatalog,
     // S3：模型设置面 → /api/settings/model + /api/settings/providers
     settings: runtimeResult.modelSettings,
   });

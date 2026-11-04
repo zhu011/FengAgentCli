@@ -10,7 +10,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPluginRoutes } from "../routes/plugins.ts";
-import { PluginManager } from "../../../cordis/src/plugin-manager.ts";
+import { PluginManager, type PluginInstallRequest } from "../../../cordis/src/plugin-manager.ts";
+import type { MarketCatalogQuery } from "../../../cordis/src/market.ts";
 
 let root: string;
 let sources: string;
@@ -243,3 +244,129 @@ describe("DELETE /api/plugins/:id", () => {
     expect(again.status).toBe(404);
   });
 });
+
+describe("市场路由（A/B）", () => {
+  /** 记录 install 入参的假管理面 + 假目录（路由契约测试，不碰网络） */
+  function makeMarketApp(): { app: Hono; installed: PluginInstallRequest[]; queries: MarketCatalogQuery[] } {
+    const installed: PluginInstallRequest[] = [];
+    const queries: MarketCatalogQuery[] = [];
+    const source = {
+      list: () => ({
+        plugins: [],
+        errors: [],
+        pluginsRoot: join(root, "plugins"),
+        stateFile: join(root, "plugins.json"),
+        revision: 0,
+        restartRequired: false,
+      }),
+      install: async (request: PluginInstallRequest) => {
+        installed.push(request);
+        return {
+          plugin: { id: "alpha-ui", name: "alpha-ui", version: "1.0.0", enabled: true, hasWebui: true, slots: [] },
+          revision: 1,
+          restartRequired: true,
+        };
+      },
+      setEnabled: () => {
+        throw new Error("not used");
+      },
+      remove: () => {
+        throw new Error("not used");
+      },
+    };
+    const market = {
+      catalog: async (query: MarketCatalogQuery = {}) => {
+        queries.push(query);
+        return {
+          plugins: [
+            {
+              name: "alpha-ui",
+              title: "Alpha UI",
+              compat: "A" as const,
+              compatReason: "声明 fengagent.webui",
+              compatSource: "catalog" as const,
+              installable: true,
+            },
+          ],
+          total: 1,
+          limit: query.limit ?? 24,
+          offset: query.offset ?? 0,
+        };
+      },
+      detail: async (name: string) => ({
+        name,
+        title: "Alpha UI",
+        versions: ["1.0.0"],
+        latestVersion: "1.0.0",
+        compat: "A" as const,
+        compatReason: "声明 fengagent.webui",
+        compatSource: "catalog" as const,
+        installable: true,
+      }),
+      assertInstallable: async (name: string) => {
+        if (name !== "alpha-ui") throw new Error(`市场目录里没有插件 ${name}`);
+        return { name };
+      },
+    };
+    const app = new Hono();
+    app.route("/api/plugins", createPluginRoutes(source, market));
+    return { app, installed, queries };
+  }
+
+  test("GET /api/plugins/market 透传 q/category/limit/offset，并回服务端分页字段", async () => {
+    const { app: marketApp, queries } = makeMarketApp();
+    const res = await marketApp.request("/api/plugins/market?q=alpha&category=ui&limit=5&offset=10");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { plugins: unknown[]; total: number; limit: number; offset: number };
+    expect(body).toMatchObject({ total: 1, limit: 5, offset: 10 });
+    expect(queries[0]).toMatchObject({ q: "alpha", category: "ui", limit: 5, offset: 10 });
+  });
+
+  test("limit 超上限收敛到 100，缺省 24", async () => {
+    const { app: marketApp } = makeMarketApp();
+    const big = (await (await marketApp.request("/api/plugins/market?limit=999")).json()) as { limit: number };
+    expect(big.limit).toBe(100);
+    const fallback = (await (await marketApp.request("/api/plugins/market")).json()) as { limit: number };
+    expect(fallback.limit).toBe(24);
+  });
+
+  test("详情：scoped 包名可带 /", async () => {
+    const { app: marketApp } = makeMarketApp();
+    const res = await marketApp.request(`/api/plugins/market/${encodeURIComponent("@acme/ui")}`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { name: string }).name).toBe("@acme/ui");
+  });
+
+  test("市场目录未装配 → 400 unsupported（不静默空列表）", async () => {
+    const manager = new PluginManager({ dataRoot: root, installDepsCommand: null });
+    const bare = new Hono();
+    bare.route("/api/plugins", createPluginRoutes(manager));
+    const res = await bare.request("/api/plugins/market");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("unsupported");
+  });
+
+  test("install：策展清单外的包 → 404，且不进入安装链", async () => {
+    const { app: marketApp, installed } = makeMarketApp();
+    const res = await marketApp.request("/api/plugins/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ marketName: "not-in-catalog" }),
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("not_found");
+    expect(installed).toHaveLength(0);
+  });
+
+  test("install：目录内条目 → 201，marketName/marketVersion 原样交给管理器", async () => {
+    const { app: marketApp, installed } = makeMarketApp();
+    const res = await marketApp.request("/api/plugins/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ marketName: "alpha-ui", marketVersion: "1.0.0" }),
+    });
+    expect(res.status).toBe(201);
+    expect(installed[0]).toMatchObject({ marketName: "alpha-ui", marketVersion: "1.0.0" });
+  });
+});
+

@@ -5,8 +5,10 @@
  * 插件文件是事实源，状态文件只记启用状态与安装来源（见 `plugin-store.ts`）。
  *
  * 边界（与方案 S1/S2 的安全口径一致）：
- * - 只接受**本地**源（目录或 `.tgz`/`.tar.gz`），远程 URL / git 地址一律拒绝 ——
- *   管理面不替用户去公网拉包；
+ * - 本地源只接受目录或 `.tgz`/`.tar.gz`，远程 URL / git 地址一律拒绝；
+ * - 市场安装只收 `marketName`/`marketVersion`，**spec 只从 catalog 策展解析**
+ *   （route 层先过 catalog 校验），不开放任意 npm spec —— 否则这个接口等于
+ *   「任意 npm 包执行器」；
  * - 插件 id 必须是单个目录名（复用 `isSafePluginId`），任何解析结果都要落在
  *   `pluginsRoot` 之内，杜绝目录穿越；
  * - 安装失败会回滚已复制的目录；依赖安装失败只告警，不把插件打成半装状态；
@@ -21,11 +23,21 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import {
+  downloadTarball,
+  isNpmSpec,
+  parseNpmSpec,
+  resolveNpmVersion,
+  NpmSourceError,
+  type NpmSourceOptions,
+  type NpmVersionInfo,
+} from "./npm-source.ts";
 import { PluginStore, type PluginRecord } from "./plugin-store.ts";
 import {
   isSafePluginId,
@@ -79,7 +91,14 @@ export interface PluginListEntry {
   installedAt?: string;
   /** package.json / webui 声明解析失败的原因（插件仍列出，便于卸载或修复） */
   error?: string;
+  /** 安装来源标签（市场安装为 `market:<name>`；手工放置的插件无此字段） */
+  sourceLabel?: string;
+  /** 协议探测结果：在 plugins.json 里落盘，供市场页徽章/运行时接线读 */
+  protocol?: PluginProtocol;
 }
+
+/** 插件协议形态（安装时探测、落 plugins.json） */
+export type PluginProtocol = "webui" | "dsh" | "cordis" | "unknown";
 
 /** `GET /api/plugins` 响应 */
 export interface PluginListResult {
@@ -98,9 +117,19 @@ export interface PluginListResult {
 
 /** `POST /api/plugins/install` 请求体 */
 export interface PluginInstallRequest {
-  /** 本地源：插件目录，或 `.tgz`/`.tar.gz` 包 */
+  /** 本地源：插件目录，或 `.tgz`/`.tar.gz` 包（市场安装不用这个字段） */
   source?: string;
-  /** 显式插件 id（缺省由包名推导：`@scope/name` → `name`） */
+  /**
+   * 市场安装：catalog 里的 npm 包名（可带 scope）。
+   *
+   * 市场页只传这个名字；服务端先用 catalog 校验它确实在策展清单里、且不是 C 档，
+   * 再由管理器解析成 `npm:<name>@<version>` 走 tarball 通道。前端**不能**自由
+   * 拼 npm spec —— 否则这个接口等于「任意 npm 包执行器」。
+   */
+  marketName?: string;
+  /** 市场安装版本（缺省 = catalog/registry 的 latest；必须是确切版本） */
+  marketVersion?: string;
+  /** 显式插件 id（缺省由包名推导：本地源取末段，npm 源 `@scope/name` → `scope-name`） */
   id?: string;
   /** 装完是否启用（默认 true） */
   enable?: boolean;
@@ -155,6 +184,13 @@ export interface PluginManagerOptions {
    * 这样在禁止子进程的环境里也能覆盖 `.tgz` 安装流程。
    */
   extractTarball?: (source: string) => { dir: string; cleanup?: () => void };
+
+  /** npm registry 覆盖（默认 `FENG_NPM_REGISTRY` 或 npmjs） */
+  npmRegistry?: string;
+  /** fetch 注入（市场/npm 安装的测试不发真请求） */
+  fetchImpl?: typeof fetch;
+  /** npm tarball 大小上限（字节） */
+  maxTarballBytes?: number;
 }
 
 /** 复制插件时跳过的目录/文件（构建产物与版本库不该跟着搬家） */
@@ -213,8 +249,45 @@ function derivePluginId(pkgName: unknown, root: string): string {
   return unscoped;
 }
 
-/** 在解包目录里定位真正的插件根（兼容 npm pack 的 `package/` 外层） */
-function locatePluginRoot(staging: string): string {
+/**
+ * npm 源的插件 id：`@scope/name` → `scope-name`，无 scope 时同 `derivePluginId`。
+ *
+ * npm 生态里 `@a/ui` 与 `@b/ui` 同名不同 scope 很常见；只用末段会在目录里白撞
+ * 409，市场安装必须带上 scope。
+ */
+function deriveNpmPluginId(pkgName: unknown, fallback: string): string {
+  const raw = typeof pkgName === "string" && pkgName.trim() ? pkgName.trim() : fallback;
+  const id = raw.startsWith("@") ? raw.slice(1).replace(/\//g, "-") : raw;
+  if (!isSafePluginId(id)) {
+    throw new PluginError(`无法从包名推导插件 id（${raw}），请显式传 id`);
+  }
+  return id;
+}
+
+/**
+ * 协议探测：从 package.json 判断插件形态（安装时落 `plugins.json`）。
+ *
+ * - `webui`：声明 `fengagent.webui`（装完刷新页面即渲染）；
+ * - `dsh`：声明 `dsh` / `engines.dsh` / dsh 关键字（dsh-compat host 侧插件）；
+ * - `cordis`：有 `main` / `exports` 的普通宿主插件；
+ * - `unknown`：都没有 —— 装上了也看不出该怎么装载。
+ */
+export function detectProtocol(pkg: Record<string, unknown>): PluginProtocol {
+  const fengagent = pkg.fengagent;
+  if (fengagent && typeof fengagent === "object" && (fengagent as Record<string, unknown>).webui !== undefined) {
+    return "webui";
+  }
+  if (pkg.dsh !== undefined) return "dsh";
+  const engines = pkg.engines;
+  if (engines && typeof engines === "object" && (engines as Record<string, unknown>).dsh) return "dsh";
+  if (Array.isArray(pkg.keywords) && pkg.keywords.some((k) => typeof k === "string" && /^dsh([.-]|$)/.test(k))) {
+    return "dsh";
+  }
+  if (typeof pkg.main === "string" || pkg.exports !== undefined) return "cordis";
+  return "unknown";
+}
+
+/** 在解包目录里定位真正的插件根（兼容 npm pack 的 `package/` 外层） */function locatePluginRoot(staging: string): string {
   if (existsSync(join(staging, "package.json"))) return staging;
   const children = readdirSync(staging, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
@@ -243,6 +316,12 @@ export class PluginManager {
   private readonly installDepsCommand: string | null;
   /** 解包器（默认系统 tar；测试可注入假实现） */
   private readonly extract: (source: string) => { dir: string; cleanup?: () => void };
+  /** npm registry（null = 用 npm-source 的默认值/环境变量） */
+  private readonly npmRegistry: string | null;
+  /** fetch 注入（测试用） */
+  private readonly fetchImpl: typeof fetch | null;
+  /** npm tarball 大小上限 */
+  private readonly maxTarballBytes: number | null;
   /** 启动时的状态版本（重启提示基线） */
   private readonly bootRevision: number;
 
@@ -255,7 +334,12 @@ export class PluginManager {
     this.store = new PluginStore(this.stateFile);
     this.installDepsCommand = options.installDepsCommand === undefined ? "bun" : options.installDepsCommand;
     this.extract = options.extractTarball ?? ((source) => this.extractTarballWithTar(source));
+    this.npmRegistry = options.npmRegistry?.trim() || null;
+    this.fetchImpl = options.fetchImpl ?? null;
+    this.maxTarballBytes = options.maxTarballBytes ?? null;
     this.bootRevision = this.store.revision();
+    // P0 收尾：上次进程可能在 staging 中间崩过，启动时清掉残留（不碰正式插件目录）
+    this.cleanupStaging();
   }
 
   /** 插件面是否需要重启才完全生效 */
@@ -285,84 +369,20 @@ export class PluginManager {
   }
 
   /**
-   * 安装插件（本地目录或 `.tgz`）。
+   * 安装插件。
    *
-   * 流程：校验源 → 解包/定位插件根 → 复制进 `<pluginsRoot>/<id>` → 按需装依赖
-   * → 登记状态。任何一步失败都会清掉已复制的目录，不留半装插件。
+   * 两条源共用同一套落盘骨架（staging → 装依赖 → rename → 登记）：
+   * - 本地源：目录 / `.tgz`（依赖失败只告警，保留「放进来就能用」的宽容）；
+   * - 市场源：`marketName` + `marketVersion`（catalog 已校验）→ registry 解析 →
+   *   tarball 下载 + integrity 校验 → 解包 → **strict 依赖** → 原子落盘。
+   *
+   * 任何一步失败都会删 staging、删已就位目录、`store.forget(id)` —— 不留半装
+   * 插件，也不留脏记录。
    */
   async install(request: PluginInstallRequest = {}): Promise<PluginMutationResult> {
-    const rawSource = (request.source ?? "").trim();
-    if (!rawSource) {
-      throw new PluginError("source 必填：本地插件目录或 .tgz/.tar.gz 路径");
-    }
-    if (isRemoteSource(rawSource)) {
-      throw new PluginError("仅支持本地源（目录或 .tgz/.tar.gz），不支持远程 URL / git 地址", "unsupported");
-    }
-
-    const source = resolve(expandTilde(rawSource));
-    if (!existsSync(source)) {
-      throw new PluginError(`源不存在: ${source}`);
-    }
-
-    let stagingRoot = source;
-    let cleanup: (() => void) | undefined;
-    if (!statSync(source).isDirectory()) {
-      if (!/\.(tgz|tar\.gz)$/i.test(source)) {
-        throw new PluginError("源必须是目录或 .tgz/.tar.gz 压缩包", "unsupported");
-      }
-      const extracted = this.extract(source);
-      stagingRoot = extracted.dir;
-      cleanup = extracted.cleanup;
-    }
-
-    let destination: string | null = null;
-    /** 是否真的复制出了目录：冲突时 destination 已指向旧插件，绝不能删 */
-    let created = false;
-    try {
-      const pluginRoot = locatePluginRoot(stagingRoot);
-      const pkg = readPackageJson(pluginRoot);
-      const id = request.id ? this.requireId(request.id) : derivePluginId(pkg.name, pluginRoot);
-
-      const target = this.pluginDir(id);
-      if (existsSync(target)) {
-        throw new PluginError(`插件 ${id} 已存在（先卸载或换个 id）`, "conflict");
-      }
-
-      mkdirSync(this.pluginsRoot, { recursive: true });
-      cpSync(pluginRoot, target, {
-        recursive: true,
-        dereference: false,
-        filter: (src) => !COPY_SKIP.has(basename(src)),
-      });
-      destination = target;
-      created = true;
-
-      const warnings = this.installDependencies(destination, pkg, request.installDeps);
-      const record: PluginRecord = {
-        enabled: request.enable !== false,
-        source: request.sourceLabel ?? source,
-        installedAt: new Date().toISOString(),
-      };
-      if (typeof pkg.name === "string" && pkg.name) record.name = pkg.name;
-      if (typeof pkg.version === "string" && pkg.version) record.version = pkg.version;
-      this.store.recordInstall(id, record);
-
-      const plugin = this.entryFor(id);
-      if (!plugin) {
-        throw new PluginError(`安装后无法读取插件 ${id}`);
-      }
-      return {
-        plugin,
-        revision: this.store.revision(),
-        restartRequired: this.restartRequired(),
-        ...(warnings.length > 0 ? { warnings } : {}),
-      };
-    } catch (error) {
-      if (destination && created) rmSync(destination, { recursive: true, force: true });
-      throw error;
-    } finally {
-      cleanup?.();
-    }
+    const marketSpec = this.marketSpecOf(request);
+    if (marketSpec) return this.installFromMarket(marketSpec, request);
+    return this.installFromLocal(request);
   }
 
   /** 启用/停用（停用后 manifest 与 assets 立即不再对外，工具面仍需重启） */
@@ -398,6 +418,283 @@ export class PluginManager {
   }
 
   /* ------------------------------ 内部 ------------------------------ */
+
+  /**
+   * 市场安装的 spec 解析：只认 `marketName`（+ 可选 `marketVersion`）。
+   *
+   * 这里不接收 `npm:` / `{ npm }` 这类自由 spec —— spec 必须由 catalog 策展
+   * 条目解析出来（route 层先校验目录），从源头堵住「任意 npm 包执行器」。
+   */
+  private marketSpecOf(request: PluginInstallRequest): string | null {
+    const name = request.marketName?.trim();
+    if (!name) {
+      if (request.marketVersion !== undefined) {
+        throw new PluginError("marketVersion 必须与 marketName 一起使用");
+      }
+      return null;
+    }
+    if (!/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+      throw new PluginError(`非法 npm 包名: ${name}`);
+    }
+    const version = request.marketVersion?.trim();
+    if (version && !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+      throw new PluginError(`marketVersion 必须是确切版本（收到 ${version}）`);
+    }
+    return `npm:${name}${version ? `@${version}` : ""}`;
+  }
+
+  /** 本地源安装（目录或 `.tgz`）：staging → 宽容装依赖 → rename → 登记 */
+  private async installFromLocal(request: PluginInstallRequest): Promise<PluginMutationResult> {
+    const rawSource = (request.source ?? "").trim();
+    if (!rawSource) {
+      throw new PluginError("source 必填：本地插件目录或 .tgz 路径；市场安装请用 marketName/marketVersion");
+    }
+    if (isNpmSpec(rawSource)) {
+      throw new PluginError("不开放任意 npm spec：市场插件请用 marketName/marketVersion 安装", "unsupported");
+    }
+    if (isRemoteSource(rawSource)) {
+      throw new PluginError(
+        "不支持远程 URL / git 地址（本地源只接受目录 / .tgz）；市场插件请用 marketName/marketVersion 安装",
+        "unsupported",
+      );
+    }
+
+    const source = resolve(expandTilde(rawSource));
+    if (!existsSync(source)) {
+      throw new PluginError(`源不存在: ${source}`);
+    }
+
+    let sourceRoot = source;
+    let cleanup: (() => void) | undefined;
+    if (!statSync(source).isDirectory()) {
+      if (!/\.(tgz|tar\.gz)$/i.test(source)) {
+        throw new PluginError("源必须是目录或 .tgz/.tar.gz 压缩包", "unsupported");
+      }
+      const extracted = this.extract(source);
+      sourceRoot = extracted.dir;
+      cleanup = extracted.cleanup;
+    }
+
+    let id: string | null = null;
+    let staging: string | null = null;
+    let target: string | null = null;
+    let recorded = false;
+    try {
+      const pluginRoot = locatePluginRoot(sourceRoot);
+      const pkg = readPackageJson(pluginRoot);
+      id = request.id ? this.requireId(request.id) : derivePluginId(pkg.name, pluginRoot);
+      target = this.pluginDir(id);
+      if (existsSync(target)) {
+        throw new PluginError(`插件 ${id} 已存在（先卸载或换个 id）`, "conflict");
+      }
+
+      mkdirSync(this.pluginsRoot, { recursive: true });
+      this.cleanupStaging();
+      staging = this.makeStaging();
+      cpSync(pluginRoot, staging, {
+        recursive: true,
+        dereference: false,
+        filter: (src) => !COPY_SKIP.has(basename(src)),
+      });
+      // 本地安装的依赖是「尽力而为」：失败只告警（插件文件已就位）
+      const warnings = this.installDependencies(staging, pkg, request.installDeps);
+      renameSync(staging, target);
+      staging = null;
+
+      const record: PluginRecord = {
+        enabled: request.enable !== false,
+        source: request.sourceLabel ?? source,
+        installedAt: new Date().toISOString(),
+        protocol: detectProtocol(pkg),
+        ...(request.sourceLabel ? { sourceLabel: request.sourceLabel } : {}),
+      };
+      if (typeof pkg.name === "string" && pkg.name) record.name = pkg.name;
+      if (typeof pkg.version === "string" && pkg.version) record.version = pkg.version;
+      this.store.recordInstall(id, record);
+      recorded = true;
+
+      const plugin = this.entryFor(id);
+      if (!plugin) {
+        throw new PluginError(`安装后无法读取插件 ${id}`);
+      }
+      return {
+        plugin,
+        revision: this.store.revision(),
+        restartRequired: this.restartRequired(),
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
+    } catch (error) {
+      this.rollbackInstall(id, staging, target, recorded);
+      throw error;
+    } finally {
+      cleanup?.();
+    }
+  }
+
+  /**
+   * 市场安装：registry 解析 → tarball 下载 + integrity → 解包 → locate → staging
+   * → **strict** 依赖 → rename → 登记。
+   *
+   * 与本地源的区别有三点：spec 来自 catalog 策展条目（route 层已校验）、id 推导
+   * 带 scope（避免 4200 条目录里同名不同 scope 白撞 409）、依赖失败即整体失败
+   * （市场装完必须能跑）。
+   */
+  private async installFromMarket(spec: string, request: PluginInstallRequest): Promise<PluginMutationResult> {
+    let name: string;
+    let version: string | undefined;
+    try {
+      ({ name, version } = parseNpmSpec(spec));
+    } catch (error) {
+      throw this.translateNpmError(error);
+    }
+
+    const npmOptions: NpmSourceOptions = {};
+    if (this.npmRegistry) npmOptions.registry = this.npmRegistry;
+    if (this.fetchImpl) npmOptions.fetchImpl = this.fetchImpl;
+    if (this.maxTarballBytes !== null) npmOptions.maxTarballBytes = this.maxTarballBytes;
+
+    let info: NpmVersionInfo;
+    try {
+      info = await resolveNpmVersion(name, version, npmOptions);
+    } catch (error) {
+      throw this.translateNpmError(error);
+    }
+
+    const tempDir = mkdtempSync(join(tmpdir(), "feng-plugin-npm-"));
+    let id: string | null = null;
+    let staging: string | null = null;
+    let target: string | null = null;
+    let recorded = false;
+    try {
+      let downloaded: { path: string; size: number; integrity: string };
+      try {
+        downloaded = await downloadTarball(info, tempDir, npmOptions);
+      } catch (error) {
+        throw this.translateNpmError(error);
+      }
+
+      const extracted = this.extract(downloaded.path);
+      let stagedRoot: string | null = staging;
+      try {
+        const pluginRoot = locatePluginRoot(extracted.dir);
+        const pkg = readPackageJson(pluginRoot);
+        id = request.id ? this.requireId(request.id) : deriveNpmPluginId(pkg.name, info.name);
+        target = this.pluginDir(id);
+        if (existsSync(target)) {
+          throw new PluginError(`插件 ${id} 已存在（先卸载或换个 id）`, "conflict");
+        }
+
+        mkdirSync(this.pluginsRoot, { recursive: true });
+        this.cleanupStaging();
+        stagedRoot = this.makeStaging();
+        staging = stagedRoot;
+        cpSync(pluginRoot, stagedRoot, {
+          recursive: true,
+          dereference: false,
+          filter: (src) => !COPY_SKIP.has(basename(src)),
+        });
+        // 市场安装：依赖失败 = 安装失败（不留「装上了但跑不起来」的插件）
+        this.installDependencies(stagedRoot, pkg, request.installDeps, { strict: true });
+        renameSync(stagedRoot, target);
+        staging = null;
+
+        const record: PluginRecord = {
+          enabled: request.enable !== false,
+          source: `market:${info.name}@${info.version}`,
+          sourceLabel: `market:${info.name}`,
+          installedAt: new Date().toISOString(),
+          resolvedVersion: info.version,
+          protocol: detectProtocol(pkg),
+          ...(downloaded.integrity ? { integrity: downloaded.integrity } : {}),
+          ...(this.npmRegistry ? { registry: this.npmRegistry } : {}),
+        };
+        if (typeof pkg.name === "string" && pkg.name) record.name = pkg.name;
+        if (typeof pkg.version === "string" && pkg.version) record.version = pkg.version;
+        this.store.recordInstall(id, record);
+        recorded = true;
+
+        const plugin = this.entryFor(id);
+        if (!plugin) {
+          throw new PluginError(`安装后无法读取插件 ${id}`);
+        }
+        return {
+          plugin,
+          revision: this.store.revision(),
+          restartRequired: this.restartRequired(),
+        };
+      } finally {
+        extracted.cleanup?.();
+      }
+    } catch (error) {
+      this.rollbackInstall(id, staging, target, recorded);
+      throw error;
+    } finally {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // 临时目录清理失败不影响安装结果
+      }
+    }
+  }
+
+  /** 失败回滚：staging 目录、已就位目录、状态记录一起清（顺序：先删目录再 forget） */
+  private rollbackInstall(
+    id: string | null,
+    staging: string | null,
+    target: string | null,
+    recorded: boolean,
+  ): void {
+    for (const dir of [staging, recorded ? target : null]) {
+      if (!dir) continue;
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // 回滚尽力而为：残留目录下次启动会被 staging 清理或列表标坏包
+      }
+    }
+    if (recorded && id) {
+      try {
+        this.store.forget(id);
+      } catch {
+        // 状态文件被占用时留一条脏记录，比删掉用户插件目录安全
+      }
+    }
+  }
+
+  /** `<pluginsRoot>/.staging-XXXXXX`（同卷，rename 原子；点开头不被扫描成插件） */
+  private makeStaging(): string {
+    return mkdtempSync(join(this.pluginsRoot, ".staging-"));
+  }
+
+  /** 清理上次进程残留的 staging 目录（只删 `.staging-` 前缀） */
+  private cleanupStaging(): void {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(this.pluginsRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith(".staging-"))
+        .map((entry) => entry.name);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      try {
+        rmSync(join(this.pluginsRoot, name), { recursive: true, force: true });
+      } catch {
+        // 被占用就留给下次；不影响新安装（staging 名唯一）
+      }
+    }
+  }
+
+  /** npm 错误 → 插件管理错误码（route 层按码映射 HTTP） */
+  private translateNpmError(error: unknown): PluginError {
+    if (error instanceof PluginError) return error;
+    if (error instanceof NpmSourceError) {
+      const code: PluginErrorCode =
+        error.code === "not_found" ? "not_found" : error.code === "integrity" ? "unsupported" : "bad_request";
+      return new PluginError(error.message, code);
+    }
+    return new PluginError(messageOf(error));
+  }
 
   /** 校验并规范化插件 id（单段目录名） */
   private requireId(id: string): string {
@@ -472,6 +769,8 @@ export class PluginManager {
           }
         : {}),
       ...(record?.source ? { source: record.source } : {}),
+      ...(record?.sourceLabel ? { sourceLabel: record.sourceLabel } : {}),
+      ...(record?.protocol ? { protocol: record.protocol as PluginProtocol } : pkg ? { protocol: detectProtocol(pkg) } : {}),
       ...(record?.installedAt ? { installedAt: record.installedAt } : {}),
       ...(error ? { error } : {}),
       ...(declaration ? { assetsBase } : {}),
@@ -518,13 +817,14 @@ export class PluginManager {
   /**
    * 按需安装 npm 依赖。
    *
-   * 只在 package.json 声明了 `dependencies` 时才执行；失败不阻断安装（插件文件
-   * 已就位，用户可手动在插件目录里装），只回一条告警。
+   * - 本地源：失败不阻断安装（插件文件已就位，用户可手动在插件目录里装），只回告警；
+   * - npm 源（`strict`）：失败即抛错，由调用方整体回滚 —— 市场装完必须能跑。
    */
   private installDependencies(
     dir: string,
     pkg: Record<string, unknown>,
     installDeps: boolean | undefined,
+    options: { strict?: boolean } = {},
   ): string[] {
     if (installDeps === false || !this.installDepsCommand) return [];
     const deps = pkg.dependencies;
@@ -539,6 +839,12 @@ export class PluginManager {
     if (result.error || result.status !== 0) {
       const stderr = (result.stderr || "").trim().split("\n").slice(-3).join(" ");
       const detail = result.error?.message ?? stderr;
+      if (options.strict) {
+        throw new PluginError(
+          `依赖安装失败（市场安装要求依赖可用，已回滚）：${detail || "unknown error"}`,
+          "unsupported",
+        );
+      }
       return [`依赖安装失败（插件已就位，可手动在插件目录执行 bun install）：${detail || "unknown error"}`];
     }
     return [];

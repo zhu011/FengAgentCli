@@ -128,6 +128,8 @@ ACP 路径的细节：`fengagent acp` 在 `session/prompt` 期间会把审批作
 | `FENG_LOG_LEVEL` | `logLevel` | `info` | 日志级别（debug/info/warn/error） |
 | `FENG_LOG_DIR` | — | `<dataRoot>/logs` | 日志目录 |
 | `FENG_MCP_SERVERS` | — | — | MCP 服务器配置（JSON 格式） |
+| `FENG_MARKET_CATALOG_URL` | — | jsDelivr 镜像 → 源站 | 插件市场目录源覆盖（首个源，e2e 也用它注入本地 fixture） |
+| `FENG_NPM_REGISTRY` | — | `https://registry.npmjs.org` | 市场安装的 npm registry（国内可换镜像） |
 
 **配置读取优先级（全链）**：`FENG_CONFIG_FILE`（显式路径，最高文件层）> `.fengagent-cordis/config.json`（分支级，`/model` `/provider` 只写这里）>
 项目 `.fengagent/config.json` > 全局 `~/.fengagent/config.json`（其后是环境变量 → CLI 参数）。

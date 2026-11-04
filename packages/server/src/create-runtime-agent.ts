@@ -62,6 +62,8 @@ import {
 import { createRuntime } from "../../cordis/src/runtime.ts";
 import { BUILTIN_PLUGINS } from "../../cordis/src/types.ts";
 import type { FengRuntime, SessionStoreLike } from "../../cordis/src/types.ts";
+// 插件市场目录（A）：`/api/plugins/market` 的数据面
+import { MarketCatalog } from "../../cordis/src/market.ts";
 import type {
   ConversationNode,
   RollbackGranularity,
@@ -211,6 +213,8 @@ export interface CreateRuntimeAgentResult {
    * server 路由只做 HTTP 适配。
    */
   modelSettings: ModelSettingsService;
+  /** 插件市场目录（A/B：`/api/plugins/market` + 市场安装策展校验） */
+  marketCatalog: MarketCatalog;
 }
 
 /** 简易内存会话存储（enableSessionStore=false 时兜底，避免插件落到磁盘） */
@@ -296,6 +300,9 @@ export async function createRuntimeAgent(
     env: options.env,
     configDataDir: config.dataDir,
   });
+  // A：插件市场目录（服务端抓取 + 缓存 + 分页 + 兼容分类）。抓取失败不阻断
+  // 宿主启动：市场页拿到 stale/空列表比拿不到页面好。
+  const marketCatalog = new MarketCatalog({ dataRoot: dataDir });
   // A8 降级：库打不开（磁盘/权限/被占用）不应阻止 Agent 创建 ——
   // 注入通道退化为「无卡继续」，与读路径的降级同口径。
   let reflectionStore: ReflectionStore | null = null;
@@ -637,6 +644,7 @@ export async function createRuntimeAgent(
     mcpResult,
     runtime,
     modelSettings,
+    marketCatalog,
   };
 }
 
