@@ -54,8 +54,16 @@ export interface DeepLinkTarget {
   subView?: TeamsSubViewParam;
 }
 
-/** URL 里的合法 view 值（含旧别名，解析时归一） */
-const KNOWN_VIEWS = new Set(["chat", "observability", "eval", "teams", "settings", "agents", "groups"]);
+/** URL 里的 view 值 → 规范视图（旧别名 agents/groups 归一到 teams；未知值忽略） */
+const VIEW_PARAM: Record<string, AppView> = {
+  chat: "chat",
+  observability: "observability",
+  eval: "eval",
+  teams: "teams",
+  settings: "settings",
+  agents: "teams",
+  groups: "teams",
+};
 
 function App() {
   const client = useMemo(() => createApiClient(), []);
@@ -94,9 +102,11 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const v = params.get("view");
-    if (!v || !KNOWN_VIEWS.has(v)) return;
+    if (!v) return;
+    const targetView = VIEW_PARAM[v];
+    if (!targetView) return;
 
-    const legacy = v === "agents" || v === "groups";
+    const legacy = v !== targetView;
     const target: DeepLinkTarget = {
       sessionId: params.get("sessionId") ?? undefined,
       messageId: params.get("messageId") ?? undefined,
@@ -110,7 +120,7 @@ function App() {
         return undefined;
       })(),
     };
-    setView("teams");
+    setView(targetView);
     setDeepLink(target);
 
     if (legacy) {
