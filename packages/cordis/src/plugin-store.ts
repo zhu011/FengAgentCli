@@ -21,7 +21,7 @@ import { dirname, resolve } from "node:path";
 export interface PluginRecord {
   /** 是否启用（缺省 true） */
   enabled: boolean;
-  /** 安装来源（本地目录或 .tgz 路径；手工放置的插件无此字段） */
+  /** 安装来源（本地目录、`.tgz` 路径或 `npm:<name>@<version>`；手工放置的插件无此字段） */
   source?: string;
   /** 安装时间（ISO 8601） */
   installedAt?: string;
@@ -29,6 +29,16 @@ export interface PluginRecord {
   name?: string;
   /** 安装时的版本（仅用于诊断） */
   version?: string;
+  /** npm 安装时校验过的 integrity（`sha512-…`）；本地安装无此字段 */
+  integrity?: string;
+  /** npm 安装时 registry 解析出的确切版本（`version` 是 package.json 里的值） */
+  resolvedVersion?: string;
+  /** npm 安装使用的 registry（诊断 / 重装用） */
+  registry?: string;
+  /** 安装来源标签（市场安装为 `market:<name>`；上传为 `upload:<文件名>`） */
+  sourceLabel?: string;
+  /** 协议探测结果（webui / dsh / cordis / unknown），供市场页徽章与运行时接线 */
+  protocol?: string;
 }
 
 /** `plugins.json` 结构 */
@@ -59,6 +69,13 @@ function normalizeState(raw: unknown): PluginState {
       if (typeof entry.installedAt === "string" && entry.installedAt) plugin.installedAt = entry.installedAt;
       if (typeof entry.name === "string" && entry.name) plugin.name = entry.name;
       if (typeof entry.version === "string" && entry.version) plugin.version = entry.version;
+      if (typeof entry.integrity === "string" && entry.integrity) plugin.integrity = entry.integrity;
+      if (typeof entry.resolvedVersion === "string" && entry.resolvedVersion) {
+        plugin.resolvedVersion = entry.resolvedVersion;
+      }
+      if (typeof entry.registry === "string" && entry.registry) plugin.registry = entry.registry;
+      if (typeof entry.sourceLabel === "string" && entry.sourceLabel) plugin.sourceLabel = entry.sourceLabel;
+      if (typeof entry.protocol === "string" && entry.protocol) plugin.protocol = entry.protocol;
       plugins[id] = plugin;
     }
   }

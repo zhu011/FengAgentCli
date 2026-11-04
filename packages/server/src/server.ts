@@ -29,7 +29,7 @@ import { createAgentTaskRoutes, createRuntimeRoutes } from "./routes/agent-tasks
 import { createGroupRoutes } from "./routes/groups.ts";
 import { createGroupMcpRoutes } from "./mcp-groups.ts";
 import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
-import { createPluginRoutes, type PluginRouteSource } from "./routes/plugins.ts";
+import { createPluginRoutes, type PluginRouteSource, type MarketRouteSource } from "./routes/plugins.ts";
 import { createSettingsRoutes, type SettingsRouteSource } from "./routes/settings.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
@@ -85,6 +85,12 @@ export interface ServerOptions {
    * 前端据此把「插件」tab 显示为不可用。
    */
   plugins?: PluginRouteSource;
+  /**
+   * 插件市场目录（A：`/api/plugins/market` + `/api/plugins/market/:name`）。
+   *
+   * 与 `plugins` 同时提供时，市场安装（`marketName`）先过 catalog 策展校验（B）。
+   */
+  market?: MarketRouteSource;
   /**
    * 模型设置面（S3：`/api/settings/model` + `/api/settings/providers`）。
    *
@@ -184,9 +190,9 @@ export function createApp(options: ServerOptions): {
     app.route("/api/webui", createWebuiRoutes(options.webui));
   }
 
-  // S2：插件管理面 —— 列表/安装/启停/卸载（只接受本地源，重启提示随响应返回）
+  // S2 + A/B：插件管理面 —— 列表/安装/启停/卸载 + 市场目录（服务端搜索分页）
   if (options.plugins) {
-    app.route("/api/plugins", createPluginRoutes(options.plugins));
+    app.route("/api/plugins", createPluginRoutes(options.plugins, options.market));
   }
 
   // S3：模型设置面 —— 生效值 / 来源 / 环境变量锁定 + PATCH 落盘并热切换

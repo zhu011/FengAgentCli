@@ -1,10 +1,12 @@
 /**
- * @fengagent/server — 插件管理面路由（S2）
+ * @fengagent/server — 插件管理面 + 市场目录路由（S2 / A / B）
  *
  * | 方法 | 路径 | 说明 |
  * |---|---|---|
  * | GET | `/api/plugins` | 插件列表（含启用状态 / 是否带 UI / 重启提示） |
- * | POST | `/api/plugins/install` | 安装插件：JSON `{source}`（本地目录/`.tgz` 路径）或 multipart 上传包 |
+ * | GET | `/api/plugins/market` | 市场目录：`?q=&category=&limit=&offset=`（服务端搜索分页） |
+ * | GET | `/api/plugins/market/:name` | 市场插件详情：版本列表 + 兼容档 |
+ * | POST | `/api/plugins/install` | 本地源 `{source}` / 市场源 `{marketName, marketVersion}` / multipart 上传 |
  * | POST | `/api/plugins/:id/enable` | 启用 |
  * | POST | `/api/plugins/:id/disable` | 停用 |
  * | DELETE | `/api/plugins/:id` | 卸载 |
@@ -12,8 +14,9 @@
  * 错误体沿用群路由的契约：`{ error: { message, code } }`，
  * `code ∈ bad_request | not_found | conflict | unsupported | internal`。
  *
- * 安全边界：只接受本地源（远程 URL 由 manager 拒绝）与上传的本地包，插件 id
- * 只允许单段目录名，所有落盘路径都在 `<dataRoot>/plugins` 之内。
+ * 安全边界：本地源只接受目录 / `.tgz` 与上传包（远程 URL 由 manager 拒绝）；
+ * 市场安装只接受 `marketName`/`marketVersion`，先过 catalog 策展校验，不开放
+ * 任意 npm spec。插件 id 只允许单段目录名，所有落盘路径都在 `<dataRoot>/plugins` 之内。
  */
 
 import { Hono } from "hono";
@@ -28,9 +31,18 @@ import type {
   PluginRemoveResult,
 } from "../../../cordis/src/plugin-manager.ts";
 import { PluginError } from "../../../cordis/src/plugin-manager.ts";
+import type {
+  MarketCatalogQuery,
+  MarketCatalogResult,
+  MarketDetail,
+} from "../../../cordis/src/market.ts";
 
 /** 上传包大小上限（插件包不该是巨型文件，避免把数据根/临时目录写满） */
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/** 市场列表默认/上限条数（前端不传 limit 时按页取，绝不整发 catalog） */
+const DEFAULT_LIMIT = 24;
+const MAX_LIMIT = 100;
 
 /** 路由依赖的最小管理面（cordis `ctx.plugins` 结构兼容） */
 export interface PluginRouteSource {
@@ -38,6 +50,18 @@ export interface PluginRouteSource {
   install(request: PluginInstallRequest): Promise<PluginMutationResult>;
   setEnabled(id: string, enabled: boolean): PluginMutationResult;
   remove(id: string): PluginRemoveResult;
+}
+
+/**
+ * 市场目录面（B）：列表 + 详情 + 安装闸门。
+ *
+ * `assertInstallable` 是市场安装的安全面：只有 catalog 策展清单里、非 C 档的
+ * 插件能被装 —— 否则 `/install` 等于「任意 npm 包执行器」。
+ */
+export interface MarketRouteSource {
+  catalog(query?: MarketCatalogQuery): Promise<MarketCatalogResult>;
+  detail(name: string): Promise<MarketDetail>;
+  assertInstallable(name: string, version?: string): Promise<unknown>;
 }
 
 /** HTTP 错误码（多一个 internal） */
@@ -71,6 +95,14 @@ async function readInstallRequest(request: { json: () => Promise<unknown> }): Pr
   }
   if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
   return body as PluginInstallRequest;
+}
+
+/** 解析非负整数查询参数（缺省/非法 → undefined） */
+function positiveInt(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return undefined;
+  return Math.floor(value);
 }
 
 /**
@@ -126,7 +158,7 @@ async function stageUpload(
 }
 
 /** 创建插件管理面路由 */
-export function createPluginRoutes(source: PluginRouteSource): Hono {
+export function createPluginRoutes(source: PluginRouteSource, market?: MarketRouteSource): Hono {
   const app = new Hono();
 
   // GET / — 插件列表（不缓存：装/卸/启停后前端必须看到新状态）
@@ -135,7 +167,43 @@ export function createPluginRoutes(source: PluginRouteSource): Hono {
     return c.json(source.list());
   });
 
-  // POST /install — 安装插件：JSON 本地路径，或 multipart 上传 .tgz
+  // GET /market — 市场目录（q/category/limit/offset 全在服务端过滤分页）
+  app.get("/market", async (c) => {
+    c.header("Cache-Control", "no-cache");
+    if (!market) {
+      return fail(c, new PluginError("市场目录未启用（服务端 MarketCatalog 未装配）", "unsupported"));
+    }
+    const query: MarketCatalogQuery = {};
+    const q = c.req.query("q")?.trim();
+    if (q) query.q = q;
+    const category = c.req.query("category")?.trim();
+    if (category) query.category = category;
+    const limit = positiveInt(c.req.query("limit"));
+    query.limit = limit && limit > 0 ? Math.min(MAX_LIMIT, limit) : DEFAULT_LIMIT;
+    const offset = positiveInt(c.req.query("offset"));
+    query.offset = offset ?? 0;
+    try {
+      return c.json(await market.catalog(query));
+    } catch (error) {
+      return fail(c, error);
+    }
+  });
+
+  // GET /market/:name — 详情（scoped 包名带 `/`，用通配参数）；registry 抽风时仍回 catalog 信息
+  app.get("/market/:name{.+}", async (c) => {
+    c.header("Cache-Control", "no-cache");
+    if (!market) {
+      return fail(c, new PluginError("市场目录未启用（服务端 MarketCatalog 未装配）", "unsupported"));
+    }
+    const name = decodeURIComponent(c.req.param("name"));
+    try {
+      return c.json(await market.detail(name));
+    } catch (error) {
+      return fail(c, error);
+    }
+  });
+
+  // POST /install — 本地路径 / multipart 上传 / 市场源（marketName + marketVersion）
   app.post("/install", async (c) => {
     let request: PluginInstallRequest | null = null;
     let cleanup: (() => void) | undefined;
@@ -151,11 +219,30 @@ export function createPluginRoutes(source: PluginRouteSource): Hono {
     } else {
       request = await readInstallRequest(c.req);
       if (!request) {
-        return fail(c, new PluginError('请求体必须是 JSON 对象（如 {"source": "/path/to/plugin"}）或 multipart 上传包'));
+        return fail(
+          c,
+          new PluginError(
+            '请求体必须是 JSON 对象（如 {"source": "/path/to/plugin"} 或 {"marketName": "dsh-better-edit"}）或 multipart 上传包',
+          ),
+        );
       }
     }
 
     try {
+      // B：市场安装先过 catalog 策展校验（名称存在、非 C 档、版本确切）
+      const marketName = request.marketName?.trim();
+      if (marketName) {
+        if (!market) {
+          return fail(c, new PluginError("市场目录未启用（服务端 MarketCatalog 未装配）", "unsupported"));
+        }
+        try {
+          await market.assertInstallable(marketName, request.marketVersion?.trim());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const code: PluginErrorCode = /没有插件|not found/i.test(message) ? "not_found" : "unsupported";
+          return fail(c, new PluginError(message, code));
+        }
+      }
       const result = await source.install(request);
       return c.json(result, 201);
     } catch (error) {
