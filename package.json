@@ -67,12 +67,18 @@
     "prepublishOnly": "bun run typecheck",
     "publish": "bun run scripts/publish.ts",
     "smoke:teams": "node packages/web-ui/e2e/teams-smoke.mjs",
-    "smoke:plugins": "node packages/web-ui/e2e/plugins-smoke.mjs"
+    "smoke:plugins": "node packages/web-ui/e2e/plugins-smoke.mjs",
+    "smoke:market": "node packages/web-ui/e2e/market-smoke.mjs"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-fs": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": "0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox": "0.1.0-rc.6",
     "@deepseek-ai/dsh-scope": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-fs": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-str-replace-editor": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
     "@types/bun": "^1.3.14",
     "ink-testing-library": "^4.0.0",
