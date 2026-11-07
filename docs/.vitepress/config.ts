@@ -10,6 +10,8 @@ import { defineConfig } from "vitepress";
  */
 export default defineConfig({
   lang: "zh-CN",
+  // GitHub Pages 项目站：zhu011.github.io/FengAgentCli/ —— 资产必须带此前缀
+  base: "/FengAgentCli/",
   title: "FengAgentCli",
   description: "开源本地 AI Agent 对话平台 — 对话 / 工具调用 / 多 Agent 团队协作 / 插件市场",
   head: [["meta", { name: "theme-color", content: "#0a0a0f" }]],
