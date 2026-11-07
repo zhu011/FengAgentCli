@@ -877,3 +877,9 @@ WebUI 端切换会话即可重新加载。
 | [EXTENDING.md](./EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent |
 | [MODULES.md](./MODULES.md) | 各包 API 接口 |
 | [EVALUATION.md](./EVALUATION.md) | 可观测性接入、`bun run eval` 全用法与报告解读、自优化流程 |
+| [QUICKSTART.md](./QUICKSTART.md) | 小白向快速上手：安装 → TUI/WebUI → 接入外部 Agent / 团队派单 / 群聊 / 插件市场 / Settings |
+| [PLUGINS.md](./PLUGINS.md) | 插件管理面 + `fengagent.webui` UI 扩展协议 + 插件市场契约（安装闸门 / A/B/C 三档判定） |
+| [AGENTS-DISPATCH.md](./AGENTS-DISPATCH.md) | 接入外部 ACP Agent（`runtimes.json` 注册表）与派单任务 7 态契约 |
+| [GROUPS.md](./GROUPS.md) | 多 Agent 群聊模型（群 / 消息 / 流式事件 / 拍板收口） |
+| [SETTINGS.md](./SETTINGS.md) | WebUI Settings 模型配置服务面（`settings.json` / 热切换 / Key 掩码） |
+| [DSH-CONTRACT-MAP.md](./DSH-CONTRACT-MAP.md) | dsh ↔ FengAgentCli 服务契约映射（插件双向互通） |

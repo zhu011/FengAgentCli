@@ -36,8 +36,16 @@
 | 🧠 | **记忆系统** | MEMORY.md + 分类记忆 + 向量检索 |
 | 📊 | **Agent 测评** | `bun run eval` 自动生成工具成功率 / KV Cache 命中率报告 |
 | 📡 | **观测与调用链** | trace 全量落盘，WebUI 四层调用链树（会话→消息→LLM 调用→工具调用）+ 图表与模型对比 |
+| 👥 | **团队协作** | WebUI 团队页：本机 ACP Agent（kimi / dsh / fengagent…）注册为成员，聊天流派单、任务 7 态台账 |
+| 💬 | **多 Agent 群聊** | 团队内多成员讨论，人工「拍板」一键收口定格结论 |
+| 🧲 | **插件市场** | Settings「市场」tab：浏览/搜索 4000+ 社区策展插件，一键 npm 安装，A/B/C 三档兼容徽标 |
+| 🧩 | **WebUI 插件扩展面** | `fengagent.webui` 协议：插件向前端注册 slot（导航 / 设置 / 会话侧栏），装上即渲染 |
+| ⚙️ | **Settings 热切换** | 网页里配 Provider / 模型 / API Key，保存即热切换，无需重启宿主 |
 
 ## 🚀 快速开始
+
+> 🚀 **新手推荐**：[docs/QUICKSTART.md](docs/QUICKSTART.md) — 从安装到全部功能的快速上手
+> （TUI / WebUI / 接入外部 Agent / 团队派单 / 群聊 / 插件市场 / Settings 配置）。
 
 **环境要求**：Bun ≥ 1.3.0 + 任一 LLM API Key（Anthropic / OpenAI / OpenAI-Compatible / Google / Bedrock）。
 
@@ -165,11 +173,17 @@ powershell -ExecutionPolicy Bypass -File scripts/demo.ps1   # Windows
 
 | 文档 | 说明 |
 |------|------|
+| [快速上手](docs/QUICKSTART.md) | 小白向：从安装到全部功能（含团队 / 群聊 / 插件市场 / Settings） |
 | [操作手册](docs/GUIDE-CORDIS.md) | 从安装到每个功能的可照抄命令 + 预期输出（新手推荐） |
 | [架构设计](docs/ARCHITECTURE-CORDIS.md) | Cordis 插件化 + 对话图 + 事件溯源设计 |
 | [配置参考](docs/CONFIGURATION.md) | 环境变量、配置文件、权限规则 |
 | [开发指南](docs/DEVELOPMENT.md) | 本地开发、测试、构建、打包 |
 | [扩展指南](docs/EXTENDING.md) | 添加 Provider / 工具 / 插件 / Agent / Skill |
+| [插件与市场](docs/PLUGINS.md) | 插件管理面、`fengagent.webui` 协议、插件市场契约（安装闸门 / 三档判定） |
+| [接入外部 Agent](docs/AGENTS-DISPATCH.md) | `runtimes.json` 注册表、派单任务 7 态与事件流 |
+| [群聊契约](docs/GROUPS.md) | 多 Agent 群聊模型（群 / 消息 / 流式事件 / 拍板收口） |
+| [Settings 服务面](docs/SETTINGS.md) | 模型设置 API、`settings.json`、热切换与 Key 掩码 |
+| [dsh 互通契约](docs/DSH-CONTRACT-MAP.md) | dsh ↔ FengAgentCli 服务契约映射（插件双向互通） |
 | [实验沙箱](docs/SANDBOX.md) | 沙箱安全模型与编程接口 |
 | [评测与自优化](docs/EVALUATION.md) | 可观测性接入、评测模块使用手册、自优化流程 |
 | [RSI 日常使用指南](docs/RSI-USAGE.md) | 测试集 JSON 结构与路径、`eval --judge` 产卡、对话自动注入、`FENG_REFLECT_*` 开关、观察与边界 |
