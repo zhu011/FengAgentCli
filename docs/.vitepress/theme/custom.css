@@ -1,0 +1,49 @@
+/* FengAgentCli 文档站主题 — 品牌雾蓝 + 深空暗色（沿用 WebUI 设计语言） */
+
+:root {
+  --vp-c-brand-1: #2563eb;
+  --vp-c-brand-2: #3b82f6;
+  --vp-c-brand-3: #1d4ed8;
+  --vp-c-brand-soft: rgba(59, 130, 246, 0.14);
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: -webkit-linear-gradient(120deg, #60a5fa 30%, #a78bfa);
+  --vp-home-hero-image-background-image: linear-gradient(-45deg, rgba(59, 130, 246, 0.18) 50%, rgba(167, 139, 250, 0.12) 50%);
+  --vp-home-hero-image-filter: blur(72px);
+}
+
+.dark {
+  /* 深空底色（对齐 WebUI dark 主题） */
+  --vp-c-bg: #0a0a0f;
+  --vp-c-bg-alt: #12121a;
+  --vp-c-bg-soft: #12121a;
+  --vp-c-border: #1f1f2a;
+  --vp-c-divider: #1f1f2a;
+  --vp-c-gutter: #0a0a0f;
+
+  --vp-c-text-1: rgba(235, 238, 245, 0.92);
+  --vp-c-text-2: rgba(200, 206, 220, 0.68);
+  --vp-c-text-3: rgba(160, 168, 188, 0.42);
+
+  --vp-c-brand-1: #60a5fa;
+  --vp-c-brand-2: #3b82f6;
+  --vp-c-brand-3: #93c5fd;
+  --vp-c-brand-soft: rgba(96, 165, 250, 0.16);
+
+  --vp-c-control: rgba(255, 255, 255, 0.06);
+  --vp-code-bg: rgba(255, 255, 255, 0.055);
+}
+
+/* 首页特性卡片：悬浮微抬 + 边框提亮（deepseek platform 卡片网格观感） */
+.VPFeature {
+  transition: border-color 0.25s ease, transform 0.25s ease;
+}
+.VPFeature:hover {
+  border-color: var(--vp-c-brand-2);
+  transform: translateY(-2px);
+}
+
+/* 中文排版：字号微调，标题不换行断字 */
+.vp-doc {
+  word-break: break-word;
+}

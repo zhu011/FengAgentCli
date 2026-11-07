@@ -266,7 +266,7 @@ bun run packages/cli/src/entry.ts
 
 预期输出：进入全屏 TUI 界面，顶部出现品牌标题卡片（FengAgentCli v0.2.0），下方是消息区、输入行和状态栏（模型 · tokens · 会话）。
 
-![CLI 欢迎界面](site/screenshots/cli-01-welcome.png)
+![CLI 欢迎界面](./screenshots/cli-01-welcome.png)
 
 直接输入文字回车即发送，例如：
 
@@ -392,7 +392,7 @@ bun run packages/cli/src/entry.ts --print "一句话问题"               # 强�
 - 命令多时列表可滚动，顶部/底部有 `↑ 还有 N 个命令` / `↓ 还有 N 个命令` 提示；
 - 底部提示行：`↑↓选择 · Tab补全 · Esc关闭 · Enter提交`。
 
-![CLI 命令补全](site/screenshots/cli-06-help.png)
+![CLI 命令补全](./screenshots/cli-06-help.png)
 
 > 注：补全列表来自集中维护的命令表，新增命令后会自动出现在 `/` 联想里。
 
@@ -431,7 +431,7 @@ bun run packages/cli/src/entry.ts --print "一句话问题"               # 强�
 
 WebUI 里对应「图面板」（见第 11 节），效果见下图：
 
-![WebUI 对话图面板](site/screenshots/12-graph-panel.png)
+![WebUI 对话图面板](./screenshots/12-graph-panel.png)
 
 ---
 
@@ -470,7 +470,7 @@ WebUI 里对应「图面板」（见第 11 节），效果见下图：
 > 「**回退并重答**」按钮，效果与 CLI `/rollback <节点id>` 一致——回退到该轮提问处、
 > 截断会话并**自动重新回答**，新回答挂在分支点下，旧分支灰显保留（可溯源）。
 
-![回退前](site/screenshots/13-graph-before-rollback.png)  ![回退后](site/screenshots/14-graph-after-rollback.png)
+![回退前](./screenshots/13-graph-before-rollback.png)  ![回退后](./screenshots/14-graph-after-rollback.png)
 
 ### 10.1 更细的三种操作（图面板）
 
@@ -515,7 +515,7 @@ bun run dev
 ```
 
 - 后端 Server：http://127.0.0.1:3000
-- 前端 Vite：http://localhost:5180（自动代理 /api 到后端，改前端代码即时生效）
+- 前端 Vite：`http://localhost:5180`（自动代理 /api 到后端，改前端代码即时生效）
 
 ### 一键 Demo（自动构建 + 启动 + 打开浏览器）
 
@@ -538,9 +538,9 @@ bash scripts/demo.sh
 - **🧪 评测页**（顶栏「评测」）：测试集清单浏览 / JSON 查看 / 导出，`eval-report-{date}.md` 报告浏览 / 导出与**一键生成报告**（「生成报告 / 生成报告 + 自优化」，等价于再跑一次 `bun run eval`），`optimization-{date}.md` 自优化建议浏览 / 导出；
 - **聊天 ↔ 观测 / 评测 深链**：聊天页每条消息右侧「查看调用链 / 查看评测」、会话列表每行「查看观测 / 查看评测」，按每轮对话粒度直达对应页面（`?view=observability&sessionId=X&messageId=Y`，刷新 / 分享链接仍可定位同一会话与消息）；详见 [EVALUATION.md 第 2.5–2.6 节](./EVALUATION.md)。
 
-![WebUI 对话 + 图面板](site/screenshots/16-conversation-with-graph.png)
+![WebUI 对话 + 图面板](./screenshots/16-conversation-with-graph.png)
 
-![WebUI 全貌](site/screenshots/24-webui-full-view.png)
+![WebUI 全貌](./screenshots/24-webui-full-view.png)
 
 ---
 

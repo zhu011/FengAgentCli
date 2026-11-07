@@ -49,3 +49,5 @@ screenshots/tui-raw/
 .npm-cache/
 .npm-test-prefix/
 *.tgz
+docs/.vitepress/dist
+docs/.vitepress/cache

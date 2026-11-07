@@ -1,0 +1,36 @@
+# 文档站构建发布：push 到 refactor 且 docs/** 有改动时，构建 VitePress 并推 gh-pages。
+# 取代旧的人工 main:/docs 同步（docs/main-sync 流程）。
+# 前置（一次性）：仓库 Settings → Pages → Source 切到「Deploy from a branch: gh-pages /(root)」。
+name: Deploy Docs
+
+on:
+  push:
+    branches: [refactor/cordis-graph-architecture]
+    paths:
+      - "docs/**"
+      - ".github/workflows/deploy-docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write # peaceiris/action-gh-pages 推 gh-pages 分支所需
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build docs
+        run: bun run docs:build
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/action-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/.vitepress/dist
+          force_orphan: true
