@@ -38,7 +38,13 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/runtimes` | `RuntimeInfo[]`。`?probe=1` 先真探测再返回 |
+| GET | `/api/runtimes/protocols` | 表单可选协议（支持的 + 已知但未实现的） |
+| POST | `/api/runtimes` | 新增 runtime（`name/command/args?/protocol?/env?/enabled?`；`probe=true` 先探测）→ 201 `RuntimeInfo[]` |
+| PATCH | `/api/runtimes/:name` | 编辑（只改 body 里出现的字段；注册名不可改）→ `RuntimeInfo[]` |
+| DELETE | `/api/runtimes/:name` | 删除 → `RuntimeInfo[]` |
+| POST | `/api/runtimes/:name/probe` | 探测单个 → `RuntimeInfo`（失败带 `probeError`/`probeErrorCode`） |
 | POST | `/api/runtimes/probe` | 探测全部启用的 runtime（每个 spawn 一次 `initialize`） |
+| POST | `/api/runtimes/probe-candidate` | 表单「探测验证」（不落盘）→ `{probeStatus, probeError?, probeErrorCode?, agentInfo…}` |
 | POST | `/api/runtimes/:name/enabled` | `{enabled: boolean}` 启停（只影响新任务） |
 | GET | `/api/agent-tasks` | `{tasks, nextCursor?, runtimes}`；`status`（可逗号分隔）/`runtime`/`limit`/`cursor` |
 | POST | `/api/agent-tasks` | `{runtime, content, fromSession?, cwd?, idempotencyKey?}` → 201 task |
@@ -46,6 +52,23 @@
 | POST | `/api/agent-tasks/:id/cancel` | 非终态 → cancelled；终态 409 |
 | POST | `/api/agent-tasks/:id/retry` | 终态 → 新 attempt（同 taskId）；非终态 409 |
 | GET | `/api/agent-tasks/:id/stream` | SSE（见 §4） |
+
+**统一错误体**：runtime 管理面（上表前 8 行）失败一律回
+`{ "error": { "message": "…", "code": "…" } }`，`message` 是**可以直接展示给人看**的
+具体原因，`code` 是分类：
+
+| code | HTTP | 什么时候 |
+|---|---|---|
+| `bad_request` | 400 | name/command/args/env/enabled 形状不对 |
+| `conflict` | 409 | 注册名重复 |
+| `not_found` | 404 | 编辑/删除/探测/启停一个没注册的 runtime |
+| `unsupported_protocol` | 400 | 协议不在 `acp` / `claude-stream-json` 里，或命令的原生协议不是它（见 §7.1） |
+| `command_not_found` | 400 | 命令在 PATH 里找不到（也可能是绝对路径写错） |
+| `spawn_failed` | 422 | 进程拉不起来（EINVAL/EACCES 等） |
+| `credentials_missing` | 422 | 目标自报未登录 / 缺 API Key |
+| `handshake_failed` | 422 | 目标按所选协议没有回应 `initialize`（含 stderr 尾巴） |
+| `probe_timeout` | 422 | 超时没握手（默认 20s） |
+| `registry_io` | 500 | `runtimes.json` 写不进去 |
 
 **任务字段**（`AgentTask`）：`id, fromSession, runtime, status, content, result?, error?,
 createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`（时间是 ISO 字符串）。
@@ -138,12 +161,42 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
 
 - 缺文件时自动写默认三件套；`probes` 是探测结果缓存（启动时后台探一次，也可 `POST /api/runtimes/probe` 手动刷新）。
 - 探测 = spawn 目标 + `initialize` + 立刻回收（超时 20s，dsh 冷启实测 ~13s）。
-- 加一个 runtime 只改这个 json，不改代码。
+- 加一个 runtime 只改这个 json，不改代码 —— 页面上「添加 runtime」走的也是这一条
+  （`POST /api/runtimes`，见 §7.1）。
 - `permissionPolicy`（可选，`"allow"` / `"deny"`）：该 runtime 的 headless 权限策略，
   覆盖服务默认的 `deny`。**验收需要目标真写文件（marker 类）时，给测试 runtime 配 `"allow"`**；
   决策仍会写进事件流（`[permission] … → allow|deny`）。
 - `env`（可选）：显式注入目标进程的环境变量 —— 这是往目标传凭据的**唯一**推荐方式
   （默认不透传调用方的 `MULTICA_*`，见 §4.5）。
+
+### 7.1 增删改 + 探测验证（`/api/runtimes` 写接口）
+
+团队页「成员库」的添加/编辑/删除与「探测验证」按钮都落在这里，**失败必须带具体原因**：
+
+- **新增**：`name` 必填且要能当派发参数（`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`）、`command` 必填并
+  **当场在 PATH 里解析**（找不到直接 `command_not_found`，不等 20s 探测）、`protocol` 缺省 `acp`。
+  `probe=true` 时先真 spawn 一次 `initialize`：失败 → `422` + 原因，**不落盘**（不留下永远派不出去的注册）。
+- **协议闸（重点）**：dispatch 只实现了 `acp` 与 `claude-stream-json`。其它值一律
+  `unsupported_protocol`，并且**对认识的命令直接点名它的原生协议**：
+
+  | 填的 command | 填的 protocol | 结果 |
+  |---|---|---|
+  | `opencode` | `acp` | 400 `协议不支持: opencode 的 run --json（一次性事件流），不是 acp…` |
+  | `opencode` | `run-json` | 400 `协议不支持: … dispatch 目前只实现 acp 与 claude-stream-json` |
+  | `claude` | `acp` | 400 提示应选 `claude-stream-json` |
+  | `kimi` | `acp` | 通过（真探测才知道可不可达） |
+
+  这条**刻意不做「按 ACP 硬 spawn 试试看」**：opencode 的 `run --json` 不是 JSON-RPC，硬试只会得到
+  一串看不懂的握手错误 —— 而「协议不支持」才是人能行动的答案。
+- **编辑**：`PATCH` 只覆盖 body 里出现的字段；注册名（= `dispatch_task` 的 agent 参数）不可改；
+  改了 `command/args/protocol/env` 后旧探测结果作废（回到 `unprobed`），避免卡片显示过期「可用」。
+- **删除**：直接删条目 + 清探测缓存（历史任务不受影响，仍可查）。
+- **探测验证（表单）**：`POST /api/runtimes/probe-candidate` 不落盘、不抛错，永远回
+  `{probeStatus, probeError?, probeErrorCode?, agentName?, agentVersion?, capabilities?}`，
+  前端把 `probeError` 原样显示。
+- **探测失败归类**：`credentials_missing`（目标自报缺 key / 未登录）、`handshake_failed`（不是所选协议，
+  带 stderr 尾巴）、`spawn_failed`（EINVAL/EACCES）、`command_not_found`、`probe_timeout`。
+  `RuntimeInfo` 上同时给 `probeError`（人话）与 `probeErrorCode`（分类）。
 
 ## 8. `dispatch_task` 工具
 
@@ -206,3 +259,7 @@ createdAt, dispatchedAt?, startedAt?, finishedAt?, durationMs?, acpSessionId?`�
   「retry 复用同一目标会话」）、实时帧顺序（每次转移「事件帧 → 状态帧」，含终态）、
   SSE 实时推终态事件（`?after=` 之后只可能来自实时推送）、身份隔离（`MULTICA_*` 不透传、
   默认 cwd 在仓库外）、台账回放/未决拦截、启动恢复、以及 §3 全部路由（含 SSE 快照与事件回放）。
+- `packages/server/src/__tests__/runtimes-crud.test.ts`：§7.1 全部写接口 —— 新增落盘 / 重名 409 /
+  缺字段 400 / 命令不存在 400 / 未知协议与 **opencode 用例**（`acp` 与 `run-json` 都报「协议不支持」）/
+  claude 协议提示 / `probe=true` 成功与失败（握手失败、缺凭据 → 422 且不落盘）/ `probe-candidate`
+  不落盘 / 编辑作废旧探测 / 删除 404 / 启停参数校验 / `GET /protocols`。

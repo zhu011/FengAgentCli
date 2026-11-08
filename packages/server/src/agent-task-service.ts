@@ -50,7 +50,7 @@ import { homedir } from "node:os";
 import { digestResult } from "@fengagent/core";
 import { createLogger, generateId } from "@fengagent/shared";
 import { AgentRuntimeRegistry } from "./agent-runtimes.ts";
-import type { RuntimeInfo } from "./agent-runtimes.ts";
+import type { RuntimeEntryInput, RuntimeInfo } from "./agent-runtimes.ts";
 
 const log = createLogger("agent-tasks");
 
@@ -235,6 +235,44 @@ export class AgentTaskService {
   /** 显式探测全部 runtime */
   async probeRuntimes(): Promise<RuntimeInfo[]> {
     return this.registry.probeAll(this.taskCounts());
+  }
+
+  /** 探测单个 runtime（失败原因落在卡片的 probeError / probeErrorCode 上） */
+  async probeRuntime(name: string): Promise<RuntimeInfo> {
+    return this.registry.probe(name, this.taskCounts().get(name) ?? 0);
+  }
+
+  /**
+   * 新增 runtime（`probe: true` 时先真探测，失败则不落盘并把原因抛给路由）。
+   *
+   * @param input - 表单载荷
+   * @param options - 探测开关
+   */
+  async createRuntime(
+    input: RuntimeEntryInput,
+    options: { probe?: boolean } = {},
+  ): Promise<RuntimeInfo[]> {
+    await this.registry.create(input, options);
+    return this.listRuntimes();
+  }
+
+  /** 编辑 runtime（注册名不可改；改连接参数会作废旧探测结果） */
+  updateRuntime(name: string, patch: RuntimeEntryInput): RuntimeInfo[] {
+    this.registry.update(name, patch);
+    return this.listRuntimes();
+  }
+
+  /** 删除 runtime */
+  deleteRuntime(name: string): RuntimeInfo[] {
+    this.registry.remove(name);
+    return this.listRuntimes();
+  }
+
+  /** 表单「探测验证」：不落盘，失败原因原样回给前端 */
+  async probeRuntimeCandidate(
+    input: RuntimeEntryInput,
+  ): Promise<Awaited<ReturnType<AgentRuntimeRegistry["probeCandidate"]>>> {
+    return this.registry.probeCandidate(input);
   }
 
   /** 取任务 */

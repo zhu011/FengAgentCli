@@ -6,7 +6,14 @@
  * | 方法 | 路径 | 作用 |
  * |---|---|---|
  * | GET | `/api/runtimes` | runtime 卡片数组（`?probe=1` 触发一次真探测） |
+ * | GET | `/api/runtimes/protocols` | 表单可选的启动协议（+ 已知但未实现的） |
+ * | POST | `/api/runtimes` | 新增 runtime（`{name,command,args?,protocol?,env?,enabled?}`；`probe=true` 先探测） |
+ * | PATCH | `/api/runtimes/:name` | 编辑 runtime（只改 body 里出现的字段） |
+ * | DELETE | `/api/runtimes/:name` | 删除 runtime |
+ * | POST | `/api/runtimes/:name/enabled` | 启停 |
+ * | POST | `/api/runtimes/:name/probe` | 探测单个 |
  * | POST | `/api/runtimes/probe` | 显式探测全部 |
+ * | POST | `/api/runtimes/probe-candidate` | 表单「探测验证」（不落盘） |
  * | GET | `/api/agent-tasks` | `{tasks, nextCursor?, runtimes}`（`status`/`runtime`/`limit`/`cursor`） |
  * | POST | `/api/agent-tasks` | 建任务并派发 → task |
  * | GET | `/api/agent-tasks/:id` | `{task, events}` |
@@ -19,11 +26,18 @@
  */
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AgentTaskStatus } from "@fengagent/agent";
 import { isTerminalTaskStatus } from "@fengagent/agent";
 import { createLogger } from "@fengagent/shared";
 import type { AgentTaskService, AgentTaskStreamEvent } from "../agent-task-service.ts";
+import {
+  KNOWN_AGENT_PROTOCOLS,
+  RuntimeRegistryError,
+  SUPPORTED_PROTOCOLS,
+} from "../agent-runtimes.ts";
+import type { RuntimeEntryInput } from "../agent-runtimes.ts";
 
 const log = createLogger("agent-task-routes");
 
@@ -66,10 +80,40 @@ function createFrameQueue() {
 /**
  * `/api/runtimes` 路由。
  *
+ * 读：`GET /`（卡片，`?probe=1` 先真探测）、`GET /protocols`（表单可选项）。
+ * 写：`POST /` 新增、`PATCH /:name` 编辑、`DELETE /:name` 删除、`POST /:name/enabled` 启停。
+ * 探测：`POST /probe`（全部）、`POST /:name/probe`（单个）、`POST /probe-candidate`（表单里还没保存的配置）。
+ *
+ * 所有失败都回 `{error:{message,code}}`（与 `mcp-groups` 等接口同契约）：
+ * `message` 是可以直接展示给人的具体原因（命令不存在 / 协议不支持 / spawn 失败 / 凭据缺失…），
+ * `code` 是机器可读分类。**不允许静默失败**。
+ *
  * @param service - 外派任务服务
  */
 export function createRuntimeRoutes(service: AgentTaskService): Hono {
   const app = new Hono();
+
+  /** 统一错误出口（`RuntimeRegistryError` 带 status；其余按 500） */
+  const fail = (c: Context, err: unknown) => {
+    const payload = toRuntimeErrorPayload(err);
+    if (payload.status >= 500) {
+      log.warn("runtimes", `运行时管理失败: ${payload.body.error.message}`);
+    }
+    return c.json(payload.body, payload.status);
+  };
+
+  // GET /protocols — 表单的协议候选（static 路由要先于 /:name 注册）
+  app.get("/protocols", (c) =>
+    c.json({
+      supported: [...SUPPORTED_PROTOCOLS],
+      known: Object.entries(KNOWN_AGENT_PROTOCOLS).map(([command, info]) => ({
+        command,
+        protocol: info.protocol,
+        label: info.label,
+      })),
+      note: "dispatch 只实现了 acp 与 claude-stream-json；其它协议（如 opencode 的 run --json）会被明确拒绝。",
+    }),
+  );
 
   // GET / — runtime 卡片（?probe=1 时先探测再回）
   app.get("/", async (c) => {
@@ -80,25 +124,91 @@ export function createRuntimeRoutes(service: AgentTaskService): Hono {
     return c.json(service.listRuntimes());
   });
 
+  // POST / — 新增 runtime（body.probe=true 时先真探测，失败则不落盘）
+  app.post("/", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    try {
+      const list = await service.createRuntime(body as RuntimeEntryInput, {
+        probe: body.probe === true,
+      });
+      return c.json(list, 201);
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
   // POST /probe — 显式探测全部（页面「重新探测」按钮）
   app.post("/probe", async (c) => c.json(await service.probeRuntimes()));
+
+  // POST /probe-candidate — 表单「探测验证」（不落盘，失败原因原样回）
+  app.post("/probe-candidate", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    return c.json(await service.probeRuntimeCandidate(body as RuntimeEntryInput));
+  });
+
+  // POST /:name/probe — 探测单个 runtime
+  app.post("/:name/probe", async (c) => {
+    try {
+      return c.json(await service.probeRuntime(c.req.param("name")));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  // PATCH /:name — 编辑（name 不可改；body 里没出现的字段保持原值）
+  app.patch("/:name", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    try {
+      return c.json(service.updateRuntime(c.req.param("name"), body as RuntimeEntryInput));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  // DELETE /:name — 删除
+  app.delete("/:name", (c) => {
+    try {
+      return c.json(service.deleteRuntime(c.req.param("name")));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
 
   // POST /:name/enabled — 启停某个 runtime（不影响历史任务）
   app.post("/:name/enabled", async (c) => {
     const name = c.req.param("name");
     const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") {
-      return c.json({ error: "enabled 必须是布尔值" }, 400);
+      return c.json({ error: { message: "enabled 必须是布尔值", code: "bad_request" } }, 400);
     }
     try {
       service.registry.setEnabled(name, body.enabled);
       return c.json(service.listRuntimes());
     } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 404);
+      return fail(c, err);
     }
   });
 
   return app;
+}
+
+/** 错误 → HTTP 契约（`{error:{message,code}}` + 状态码） */
+function toRuntimeErrorPayload(err: unknown): {
+  status: 400 | 404 | 409 | 422 | 500;
+  body: { error: { message: string; code: string } };
+} {
+  if (err instanceof RuntimeRegistryError) {
+    return { status: err.status, body: err.toPayload() };
+  }
+  return {
+    status: 500,
+    body: {
+      error: {
+        message: err instanceof Error ? err.message : String(err),
+        code: "internal_error",
+      },
+    },
+  };
 }
 
 /**
