@@ -85,11 +85,22 @@ export type {
 } from "./acp-stdio.ts";
 
 // Agents 外派能力（P1 运行时注册表 / P2 任务面）
-export { AgentRuntimeRegistry, DEFAULT_RUNTIME_ENTRIES } from "./agent-runtimes.ts";
+export {
+  AgentRuntimeRegistry,
+  DEFAULT_RUNTIME_ENTRIES,
+  KNOWN_AGENT_PROTOCOLS,
+  RuntimeRegistryError,
+  SUPPORTED_PROTOCOLS,
+  classifyProbeError,
+} from "./agent-runtimes.ts";
 export type {
   RuntimeEntry,
+  RuntimeEntryInput,
   RuntimeInfo,
   RuntimeProbeResult,
+  RuntimeRegistryErrorCode,
+  RuntimeCandidateProbe,
+  RuntimeCandidateProbeFailure,
   AgentRuntimeRegistryOptions,
 } from "./agent-runtimes.ts";
 export { AgentTaskService, toTaskDto, toEventDto } from "./agent-task-service.ts";
