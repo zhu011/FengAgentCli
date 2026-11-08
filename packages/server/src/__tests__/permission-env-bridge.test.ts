@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, test, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -85,6 +85,40 @@ function readEnv(key: string): string | undefined {
   return process.env[key] as string | undefined;
 }
 
+/**
+ * 配置隔离沙箱 —— 让用例只看见「自己写的那份 config」。
+ *
+ * `loadConfig` 的 project 层按 **cwd** 解析 `./.fengagent/config.json`：本机/仓库里
+ * 留一份 `autoApproveTools: true`（开发时很常见），「不配也不该放行」的用例就会被
+ * 误染红。两层隔离：
+ * 1. cwd 切到空临时目录 → project / cordis 层读不到残留；
+ * 2. `FENG_CONFIG_FILE` 显式指向空配置文件 → 宿主 shell 里导出的配置也进不来。
+ *
+ * 注意：只加第 2 层**不够** —— `FENG_CONFIG_FILE` 是叠在 project 层之上的 merge 层，
+ * 空的 `{}` 清不掉低层已有的 `autoApproveTools`。
+ * 数据根一并落沙箱（`FENG_DATA_DIR`），避免用例写本机 `~/.fengagent`。
+ */
+async function withIsolatedConfig<T>(
+  env: Record<string, string | undefined>,
+  run: (env: Record<string, string | undefined>) => Promise<T>,
+): Promise<T> {
+  const sandbox = makeTempDir();
+  const emptyConfigPath = join(sandbox, "config.json");
+  writeFileSync(emptyConfigPath, "{}\n", "utf-8");
+
+  const previousCwd = process.cwd();
+  process.chdir(sandbox);
+  try {
+    return await run({
+      ...env,
+      FENG_CONFIG_FILE: emptyConfigPath,
+      FENG_DATA_DIR: join(sandbox, ".data"),
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+}
+
 describe("applyToolPermissionEnvFromConfig — 注入语义", () => {
   test("autoApproveTools / allowedTools / deniedTools 全部注入", () => {
     const env: Record<string, string | undefined> = {};
@@ -144,12 +178,14 @@ describe("createRuntimeAgent — config 的授权字段对权限检查器生效"
     delete process.env.FENG_AUTO_APPROVE_TOOLS;
     const workdir = makeTempDir();
 
-    const result = await createRuntimeAgent({
-      env: baseEnv,
-      workdir,
-      enableSessionStore: false,
-      cliArgs: { autoApproveTools: true },
-    });
+    const result = await withIsolatedConfig(baseEnv, (env) =>
+      createRuntimeAgent({
+        env,
+        workdir,
+        enableSessionStore: false,
+        cliArgs: { autoApproveTools: true },
+      }),
+    );
     await result.runtime.start();
 
     // 1) 桥接落地：权限检查器读到的 env 已是 config 的值
@@ -171,11 +207,13 @@ describe("createRuntimeAgent — config 的授权字段对权限检查器生效"
     delete process.env.FENG_AUTO_APPROVE_TOOLS;
     const workdir = makeTempDir();
 
-    const result = await createRuntimeAgent({
-      env: baseEnv,
-      workdir,
-      enableSessionStore: false,
-    });
+    const result = await withIsolatedConfig(baseEnv, (env) =>
+      createRuntimeAgent({
+        env,
+        workdir,
+        enableSessionStore: false,
+      }),
+    );
     await result.runtime.start();
 
     expect(readEnv("FENG_AUTO_APPROVE_TOOLS")).toBeUndefined();
