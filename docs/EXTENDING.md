@@ -417,21 +417,22 @@ hookRegistry.register("pre-tool-use", async (toolName, input, context) => {
 
 ### 配置
 
-在 `.fengagent/mcp-servers.json` 中添加 MCP Server 配置：
+在 `.fengagent/mcp-servers.json` 中添加 MCP Server 配置（**顶层平铺：服务器名 → 配置**，
+不要包 `"servers": {}` 层；小白向说明见 [MCP-PERMISSIONS.md](./MCP-PERMISSIONS.md)）：
 
 ```json
 {
-  "servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
-      }
+  "filesystem": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+  },
+  "github": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
     }
   }
 }

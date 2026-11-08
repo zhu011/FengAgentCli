@@ -32,6 +32,7 @@ export type {
 
 export {
   loadPermissionConfig,
+  appendPermissionRule,
   findMatchingRule,
   PermissionConfigSchema,
   PermissionRuleSchema,

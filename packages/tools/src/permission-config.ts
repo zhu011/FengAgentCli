@@ -16,8 +16,8 @@
  * ```
  */
 import { z } from "zod";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { safeJsonParse } from "@fengagent/shared/utils";
 import type { PermissionDecision } from "@fengagent/core/permission";
 
@@ -96,6 +96,40 @@ export function loadPermissionConfig(workdir: string): PermissionConfig {
   }
 
   return result.data;
+}
+
+// ──────────────────────────────────────────────
+// 配置写入
+// ──────────────────────────────────────────────
+
+/**
+ * 追加一条权限规则到 `.fengagent/permissions.json`（TUI「永久放行」用）。
+ *
+ * - 已存在同 `tool` + `action` 的规则时不重复添加；
+ * - 文件/目录不存在时创建；原子写（tmp + rename）；
+ * - 返回写入后的完整配置（副本，不共享 `EMPTY_PERMISSION_CONFIG`）。
+ *
+ * @param workdir - 工作目录
+ * @param rule - 要追加的规则
+ * @returns 写入后的权限配置
+ */
+export function appendPermissionRule(
+  workdir: string,
+  rule: PermissionRule,
+): PermissionConfig {
+  const loaded = loadPermissionConfig(workdir);
+  const config: PermissionConfig = { cache: loaded.cache, rules: [...loaded.rules] };
+  if (!config.rules.some((r) => r.tool === rule.tool && r.action === rule.action)) {
+    config.rules.push(rule);
+  }
+
+  const configPath = resolve(workdir, PERMISSIONS_CONFIG_PATH);
+  const body = `${JSON.stringify(config, null, 2)}\n`;
+  mkdirSync(dirname(configPath), { recursive: true });
+  const tmp = `${configPath}.tmp`;
+  writeFileSync(tmp, body, "utf-8");
+  renameSync(tmp, configPath);
+  return config;
 }
 
 // ──────────────────────────────────────────────

@@ -878,6 +878,7 @@ WebUI 端切换会话即可重新加载。
 | [MODULES.md](./MODULES.md) | 各包 API 接口 |
 | [EVALUATION.md](./EVALUATION.md) | 可观测性接入、`bun run eval` 全用法与报告解读、自优化流程 |
 | [QUICKSTART.md](./QUICKSTART.md) | 小白向快速上手：安装 → TUI/WebUI → 接入外部 Agent / 团队派单 / 群聊 / 插件市场 / Settings |
+| [MCP-PERMISSIONS.md](./MCP-PERMISSIONS.md) | MCP 接入与工具授权保姆级：mcp-servers.json 平铺结构、五键审批弹窗、三档授权模式（白名单/全授权） |
 | [PLUGINS.md](./PLUGINS.md) | 插件管理面 + `fengagent.webui` UI 扩展协议 + 插件市场契约（安装闸门 / A/B/C 三档判定） |
 | [AGENTS-DISPATCH.md](./AGENTS-DISPATCH.md) | 接入外部 ACP Agent（`runtimes.json` 注册表）与派单任务 7 态契约 |
 | [GROUPS.md](./GROUPS.md) | 多 Agent 群聊模型（群 / 消息 / 流式事件 / 拍板收口） |

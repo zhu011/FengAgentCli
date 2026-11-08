@@ -106,7 +106,7 @@
 
 | 宿主 | 审批通道 | 行为 |
 |------|----------|------|
-| CLI TUI | 终端审批弹窗 | 弹出审批，用户可选「改参后执行」 |
+| CLI TUI | 终端审批弹窗（五键） | 允许 / 改参后允许（编辑入参 JSON）/ 本会话总允许 / 永久允许（写 `permissions.json`）/ 拒绝，见 [MCP-PERMISSIONS.md](./MCP-PERMISSIONS.md) |
 | WebUI（HTTP/SSE） | 右上角检查器面板 | 审批卡片，入参 JSON 可编辑 |
 | Multica（`fengagent acp`，stdio） | ACP `session/request_permission` | 审批请求转发给守护进程，再由守护进程透出/决策；守护进程不支持或超时时按“宿主未表态”放行 |
 | 子 Agent（task 工具） | 无 | 不静默提权：无回调即拒绝 |
@@ -216,29 +216,35 @@ Provider 凭据默认从**当前工作目录**向上的配置层解析。某些�
 
 ### MCP Server 配置（`./.fengagent/mcp-servers.json`）
 
+> ⚠️ **顶层是「服务器名 → 配置」的平铺结构**，不要包 `"servers": {}` 层——
+> 多包一层会解析失败、一个 MCP 工具都不注册。小白向说明见
+> [MCP-PERMISSIONS.md](./MCP-PERMISSIONS.md)。
+
 ```json
 {
-  "servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
-      "env": {}
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
-      }
+  "filesystem": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+    "env": {},
+    "timeout": 30000,
+    "enabled": true
+  },
+  "github": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
     }
   }
 }
 ```
 
-或通过环境变量：
+或通过环境变量（同样平铺，按服务器名与文件浅合并覆盖）：
 
 ```bash
-export FENG_MCP_SERVERS='{"servers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
+export FENG_MCP_SERVERS='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}'
 ```
 
 ### Agent 定义（`./.fengagent/agents/*.md`）

@@ -102,9 +102,9 @@ export function App({
   // 用于中断运行中的 Agent
   const abortRef = useRef<boolean>(false);
 
-  // 权限审批请求器
+  // 权限审批请求器（workdir 用于「永久允许」写 .fengagent/permissions.json）
   const { pendingRequest, requestPermission, respond, clear: clearPermission } =
-    usePermissionRequester();
+    usePermissionRequester(agent.getWorkdir());
 
   /** 添加系统消息 */
   const addSystemMessage = useCallback((msg: string) => {

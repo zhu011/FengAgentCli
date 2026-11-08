@@ -72,6 +72,7 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: "操作手册（保姆级）", link: "/GUIDE-CORDIS" },
+          { text: "MCP 与工具授权", link: "/MCP-PERMISSIONS" },
           { text: "接入外部 Agent（团队派单）", link: "/AGENTS-DISPATCH" },
           { text: "多 Agent 群聊", link: "/GROUPS" },
           { text: "插件与市场", link: "/PLUGINS" },
