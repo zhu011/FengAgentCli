@@ -534,6 +534,7 @@ export function App({
         onSubmit={handleSubmit}
         disabled={ui.status === "running"}
         draft={inputDraft}
+        workdir={agent.getWorkdir()}
       />
 
       {/* 状态栏 */}
