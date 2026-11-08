@@ -27,17 +27,9 @@ async function main() {
 
   log.info("main", `config loaded provider=${config.provider}, model=${config.model}, autoApproveTools=${config.autoApproveTools}`);
 
-  // 权限配置注入：config.autoApproveTools → FENG_AUTO_APPROVE_TOOLS 环境变量
-  // createPermissionChecker 读取的是环境变量，不是 config 对象，必须同步注入
-  if (config.autoApproveTools && !process.env.FENG_AUTO_APPROVE_TOOLS) {
-    process.env.FENG_AUTO_APPROVE_TOOLS = "true";
-  }
-  if (config.allowedTools && !process.env.FENG_ALLOWED_TOOLS) {
-    process.env.FENG_ALLOWED_TOOLS = config.allowedTools;
-  }
-  if (config.deniedTools && !process.env.FENG_DENIED_TOOLS) {
-    process.env.FENG_DENIED_TOOLS = config.deniedTools;
-  }
+  // 权限配置注入（config.autoApproveTools / allowedTools / deniedTools → FENG_*）已下沉到
+  // createRuntimeAgent（applyToolPermissionEnvFromConfig）：TUI / serve / acp / 本入口共用同一桥接，
+  // 不再在此重复注入（重复会让「哪几个入口生效」再次分叉）。
 
   // 与 CLI `serve` 共用同一装配：createRuntimeAgent
   // 模型/工具/上下文/存储/图/loop 全部经 createRuntime 插件化装配；

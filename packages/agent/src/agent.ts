@@ -329,6 +329,16 @@ export class Agent {
     return this.toolRegistry.list().map((t) => t.name);
   }
 
+  /**
+   * 获取工具注册表。
+   *
+   * 供 `/mcp reload` 这类**运行时增删工具**的场景使用：重新 `registerMcpTools`
+   * 直接落在同一张注册表上（同名工具会先注销再注册），Agent 无需重建。
+   */
+  getToolRegistry(): ToolRegistry {
+    return this.toolRegistry;
+  }
+
   /** 获取 ContextManager（供外部调用压缩/估算等） */
   getContextManager(): ContextManager {
     return this.contextManager;

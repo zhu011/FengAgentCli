@@ -12,7 +12,7 @@
  * 5. 方向键转义序列兜底兼容（\x1b[A/\x1b[B/\x1bOA/\x1bOB）。
  */
 
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import { ThinkingPet } from "./thinking-pet.tsx";
 import { filterCommands, COMMANDS } from "../commands.ts";
@@ -24,10 +24,56 @@ const MAX_VISIBLE = 10;
 /** 历史最大保留条数 */
 const MAX_HISTORY = 100;
 
+/** 输入框最多显示的行数（更长的草稿折叠，避免挤掉对话区） */
+const MAX_DISPLAY_LINES = 5;
+
+
+/** 折叠后单次最多显示的字符数（超长单行也会被截断显示） */
+const MAX_DISPLAY_CHARS = 400;
+
+/**
+ * 计算输入框的显示文本（只影响显示，`value` 本身始终是完整内容）。
+ *
+ * `/skill <name>` 会把技能 prompt（12~20 行）灌进输入框，原样铺开会把对话区
+ * 挤出屏幕；这里折叠成前 N 行 + 一行提示，回车发送仍是完整 prompt。
+ */
+function foldForDisplay(value: string): {
+  text: string;
+  folded: boolean;
+  hiddenLines: number;
+  hiddenChars: number;
+} {
+  const chars = [...value];
+  let text = chars.slice(0, MAX_DISPLAY_CHARS).join("");
+  let hiddenChars = chars.length - [...text].length;
+
+  const lines = text.split("\n");
+  let hiddenLines = 0;
+  if (lines.length > MAX_DISPLAY_LINES) {
+    hiddenLines = lines.length - MAX_DISPLAY_LINES;
+    // 折叠掉的行里还有字符，一并计入隐藏字数
+    hiddenChars += lines.slice(MAX_DISPLAY_LINES).join("\n").length;
+    text = lines.slice(0, MAX_DISPLAY_LINES).join("\n");
+  }
+
+  return {
+    text,
+    folded: hiddenLines > 0 || hiddenChars > 0,
+    hiddenLines,
+    hiddenChars,
+  };
+}
+
 export interface InputProps {
   onSubmit: (text: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  /**
+   * 外部注入的输入草稿（`/skill <name>` 把技能 prompt 填进输入框）。
+   *
+   * 用 `id` 判断「新的一次注入」：同 id 重渲染不会覆盖用户已经改过的内容。
+   */
+  draft?: { text: string; id: number };
 }
 
 /**
@@ -56,6 +102,7 @@ export function Input({
   onSubmit,
   disabled = false,
   placeholder = "发消息 · / 命令 · ↑ 历史 · Tab 补全",
+  draft,
 }: InputProps): React.ReactElement {
   const [value, setValue] = useState("");
   const [showAutocomplete, setShowAutocomplete] = useState(false);
@@ -72,12 +119,27 @@ export function Input({
   const selectedRef = useRef(0);
   const matchedRef = useRef<ReturnType<typeof filterCommands>>([]);
 
+  // 外部草稿注入：只在 id 变化时应用（不覆盖用户后续编辑）
+  const appliedDraftId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!draft || appliedDraftId.current === draft.id) return;
+    appliedDraftId.current = draft.id;
+    setValue(draft.text);
+    setShowAutocomplete(false);
+    showAutoRef.current = false;
+    setSelectedIdx(0);
+    selectedRef.current = 0;
+    setScrollOffset(0);
+  }, [draft]);
+
   const matchedCommands = useMemo(() => {
     if (showAutocomplete && value.startsWith("/")) {
       return filterCommands(value);
     }
     return [];
   }, [showAutocomplete, value]);
+
+  const display = useMemo(() => foldForDisplay(value), [value]);
 
   showAutoRef.current = showAutocomplete;
   matchedRef.current = matchedCommands;
@@ -320,13 +382,20 @@ export function Input({
             {disabled ? (
               <Text dimColor italic>{placeholder}（生成中，Esc 中断）</Text>
             ) : value ? (
-              <Text>{value}<Text color={theme.brand}>█</Text></Text>
+              <Text>{display.text}<Text color={theme.brand}>█</Text></Text>
             ) : (
               <Text dimColor italic>{placeholder}</Text>
             )}
           </Box>
         </Box>
       </Box>
+
+      {/* 折叠提示行 — 在输入框下方；只影响显示，Enter 发送仍是完整内容 */}
+      {!disabled && display.folded && (
+        <Text dimColor italic>
+          {"  "}… 已折叠 {display.hiddenLines} 行 / {display.hiddenChars} 字（Enter 发送时完整带上）
+        </Text>
+      )}
     </Box>
   );
 }

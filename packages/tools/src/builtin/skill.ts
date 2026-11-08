@@ -12,6 +12,7 @@
 import { z } from "zod";
 import { SKILLS_DIR } from "@fengagent/shared";
 import { expandTilde } from "@fengagent/shared/utils";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition, ToolResult, ToolContext } from "@fengagent/core";
 import { ALLOW } from "@fengagent/core";
@@ -231,14 +232,34 @@ export function createSkillLoader(options: SkillLoaderOptions) {
     };
   }
 
-  /** 加载所有 Skill 定义 */
+  /** 注册内置 Skills（自定义同名文件会覆盖它） */
+  function registerBuiltins(): void {
+    for (const skill of BUILTIN_SKILLS) {
+      skills.set(skill.name, skill);
+    }
+  }
+
+  /** 解析并注册单个 Skill 文件内容（解析失败静默跳过，与历史行为一致） */
+  function registerFileContent(content: string): void {
+    try {
+      const { frontmatter, body } = parseMarkdownFrontmatter(content);
+      const skill = toSkillDefinition(frontmatter, body);
+      skills.set(skill.name, skill);
+    } catch {
+      // 跳过解析失败的文件
+    }
+  }
+
+  /**
+   * 加载所有 Skill 定义（异步，Bun.file 实现）。
+   *
+   * 已经加载过则直接返回 —— 需要「重新读盘」请新建一个 loader 实例或改用 `loadSync()`。
+   */
   async function load(): Promise<void> {
     if (loaded) return;
 
     // 先注册内置 Skills
-    for (const skill of BUILTIN_SKILLS) {
-      skills.set(skill.name, skill);
-    }
+    registerBuiltins();
 
     // 加载自定义 Skills
     const dir = getSkillsDir();
@@ -250,12 +271,40 @@ export function createSkillLoader(options: SkillLoaderOptions) {
         try {
           const file = Bun.file(filePath);
           if (!(await file.exists())) continue;
-          const content = await file.text();
-          const { frontmatter, body } = parseMarkdownFrontmatter(content);
-          const skill = toSkillDefinition(frontmatter, body);
-          skills.set(skill.name, skill);
+          registerFileContent(await file.text());
         } catch {
-          // 跳过解析失败的文件
+          // 跳过不可读文件
+        }
+      }
+    } catch {
+      // 目录不存在或不可读 — 仅使用内置 Skills
+    }
+
+    loaded = true;
+  }
+
+  /**
+   * 同步加载所有 Skill 定义（`node:fs` 实现，供 TUI slash 命令等同步上下文使用）。
+   *
+   * 语义与 `load()` 完全一致（内置 → 自定义同名覆盖、解析失败跳过、目录缺失仅内置），
+   * 只是不做异步 I/O：`/skill list` 这类同步命令不必为了读几个 .md 变成异步链路。
+   */
+  function loadSync(): void {
+    if (loaded) return;
+
+    registerBuiltins();
+
+    const dir = getSkillsDir();
+    try {
+      const files = readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map((entry) => join(dir, entry.name));
+
+      for (const filePath of files) {
+        try {
+          registerFileContent(readFileSync(filePath, "utf-8"));
+        } catch {
+          // 跳过不可读文件
         }
       }
     } catch {
@@ -282,6 +331,7 @@ export function createSkillLoader(options: SkillLoaderOptions) {
 
   return {
     load,
+    loadSync,
     get,
     list,
     names,

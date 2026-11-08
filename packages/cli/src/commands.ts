@@ -8,6 +8,8 @@
 import type { Agent } from "@fengagent/agent";
 import type { Config, Session } from "@fengagent/core";
 import { maskApiKey, writeConfigFile } from "@fengagent/core";
+import type { McpRegistrationResult, SkillDefinition } from "@fengagent/tools";
+import { createSkillLoader } from "@fengagent/tools";
 import { readSync, writeFileSync, writeSync } from "node:fs";
 import { reloadProvider } from "./create-agent.ts";
 import { getThemeMode } from "./tui/theme.ts";
@@ -37,6 +39,8 @@ export const COMMANDS: CommandMeta[] = [
   { name: "provider", description: "查看/配置 Provider（apiKey 自动打码）", usage: "/provider show|set <type> [--api-key ..] [--base-url ..] [--model ..]", category: "模型" },
   { name: "export", description: "导出会话为 Markdown", usage: "/export [file]", category: "导出" },
   { name: "tool", description: "工具列表", usage: "/tool list", category: "工具" },
+  { name: "skill", description: "技能列表 / 载入技能 prompt 到输入框", usage: "/skill list|<name>", category: "工具" },
+  { name: "mcp", description: "MCP 服务器状态 / 重连", usage: "/mcp list|reload", category: "工具" },
   { name: "graph", description: "查看对话图（节点/分支/溯源链）", usage: "/graph", category: "图" },
   { name: "rollback", description: "回退到该轮提问处并重答（旧分支保留）", usage: "/rollback [节点id]", category: "图" },
   { name: "theme", description: "TUI 主题切换（dark/light）", usage: "/theme [dark|light]", category: "界面" },
@@ -64,6 +68,13 @@ export interface CommandResult {
   rollbackNodeId?: string;
   /** /theme 切换后的主题模式（App 层应用 + 触发重渲染） */
   themeMode?: "dark" | "light";
+  /**
+   * 要填入输入框的草稿（App 层写入，用户可编辑后再回车发送）。
+   *
+   * `/skill <name>` 用这条路把技能 prompt 递给用户，而不是直接当一条 user 消息跑掉
+   * —— claude 风格：填进去看得见、可改，不花 token。
+   */
+  inputDraft?: string;
 }
 
 /** 命令处理上下文 */
@@ -71,6 +82,16 @@ export interface CommandContext {
   agent: Agent;
   currentSession?: Session;
   currentModel: string;
+  /**
+   * MCP 注册结果快照（TUI 由 App 持有，`/mcp reload` 后会被更新）。
+   * 未传 = 本宿主没接 MCP（print 模式、单测直调）。
+   */
+  mcpResult?: McpRegistrationResult | null;
+  /**
+   * 预加载的技能列表（可选）。不传时 `/skill` 自己按 `agent.getWorkdir()` 同步加载。
+   * 测试用它注入固定技能集，避免依赖真实 `.fengagent/skills` 目录。
+   */
+  skills?: SkillDefinition[];
 }
 
 /**
@@ -123,6 +144,12 @@ export function handleCommand(
 
     case "tool":
       return handleToolCommand(args, ctx);
+
+    case "skill":
+      return handleSkillCommand(args, ctx);
+
+    case "mcp":
+      return handleMcpCommand(args, ctx);
 
     case "graph":
       return handleGraphCommand(ctx);
@@ -192,6 +219,168 @@ function handleToolCommand(
   }
 
   return { handled: true, message: `未知的 tool 子命令: ${subCmd}\n用法: /tool list` };
+}
+
+// ──────────────────────────────────────────────
+// /skill — 技能列表 / 载入技能 prompt
+// ──────────────────────────────────────────────
+
+/**
+ * 同步取得当前工作目录的技能集。
+ *
+ * 技能目录是 `workdir/.fengagent/skills/*.md`（内置 4 个 + 自定义同名覆盖）。
+ * 每次命令都新建 loader 再 `loadSync()`：目录小、开销可忽略，换来「新加的 .md
+ * 立刻可见」，不用为一个会话缓存失效问题埋坑。
+ */
+function loadSkillsForCommand(ctx: CommandContext): SkillDefinition[] {
+  if (ctx.skills) return ctx.skills;
+  const loader = createSkillLoader({ workdir: ctx.agent.getWorkdir() });
+  loader.loadSync();
+  return loader.list();
+}
+
+/** 处理 /skill 命令 */
+function handleSkillCommand(
+  args: string[],
+  ctx: CommandContext,
+): CommandResult {
+  const subCmd = args[0]?.toLowerCase();
+
+  let skills: SkillDefinition[];
+  try {
+    skills = loadSkillsForCommand(ctx);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { handled: true, message: `读取技能目录失败: ${message}` };
+  }
+
+  // /skill、/skill list — 列出技能
+  if (!subCmd || subCmd === "list") {
+    if (skills.length === 0) {
+      return { handled: true, message: "当前没有可用技能。" };
+    }
+    const lines = skills.map((s) => {
+      const desc = s.description ? ` — ${s.description}` : "";
+      return `  ${s.name}${desc}`;
+    });
+    return {
+      handled: true,
+      message:
+        `技能列表 (${skills.length}):\n${lines.join("\n")}\n` +
+        `\n用法: /skill <name> 把该技能的 prompt 填到输入框（可编辑后再发送）\n` +
+        `目录: ${ctx.agent.getWorkdir()}/.fengagent/skills/*.md（同名文件覆盖内置技能）`,
+    };
+  }
+
+  // /skill <name> — 把技能 prompt 填进输入框（claude 风格：可编辑、不花 token）
+  const name = args.join(" ").trim();
+  const skill = skills.find((s) => s.name === name);
+  if (!skill) {
+    const available = skills.map((s) => s.name).join(", ") || "（无）";
+    return {
+      handled: true,
+      message: `未找到技能 "${name}"。\n可用技能: ${available}`,
+    };
+  }
+
+  return {
+    handled: true,
+    message:
+      `已把技能 ${skill.name} 的 prompt 填入输入框（${skill.prompt.length} 字），` +
+      `可补充需求后回车发送。`,
+    inputDraft: skill.prompt,
+  };
+}
+
+// ──────────────────────────────────────────────
+// /mcp — MCP 服务器状态 / 重连
+// ──────────────────────────────────────────────
+
+/** `/mcp reload` 标记 — App 层执行真正的重连（需要 await registerMcpTools） */
+export const MCP_RELOAD_MARKER = "__MCP_RELOAD__";
+
+/** MCP 工具名前缀（`mcp__<server>__<tool>`，见 @fengagent/tools MCP adapter） */
+const MCP_TOOL_PREFIX = "mcp__";
+
+/**
+ * 渲染 MCP 状态文本（`/mcp list` 与 App 层 reload 后回显共用）。
+ *
+ * @param mcpResult - 注册结果快照；null/undefined 表示宿主未接 MCP
+ * @param toolNames - 已注册工具名（用于按 server 统计工具数）
+ * @param workdir - 工作目录（配置来源提示用）
+ */
+export function formatMcpStatus(
+  mcpResult: McpRegistrationResult | null | undefined,
+  toolNames: string[],
+  workdir?: string,
+): string {
+  const mcpTools = toolNames.filter((name) => name.startsWith(MCP_TOOL_PREFIX));
+  const configHint = workdir
+    ? `${workdir}/.fengagent/mcp-servers.json（可用 FENG_MCP_SERVERS 覆盖）`
+    : `.fengagent/mcp-servers.json（可用 FENG_MCP_SERVERS 覆盖）`;
+
+  if (!mcpResult) {
+    return (
+      "MCP: 未初始化（本宿主没有走 createRuntimeAgent 装配）。\n" +
+      `配置文件: ${configHint}`
+    );
+  }
+
+  const { connectedServers, failedServers, toolCount } = mcpResult;
+  if (connectedServers.length === 0 && failedServers.length === 0) {
+    return (
+      "MCP: 未配置任何 Server。\n" +
+      `配置文件: ${configHint}\n` +
+      "加一条配置后 /mcp reload 即可连接（格式见 docs/CONFIGURATION.md「MCP」）。"
+    );
+  }
+
+  const lines: string[] = [];
+  lines.push(
+    `MCP 服务器: ${connectedServers.length} 已连接 · ${failedServers.length} 失败 · ` +
+      `${mcpTools.length} 个工具（本次注册 ${toolCount} 个）`,
+  );
+  for (const name of connectedServers) {
+    const count = mcpTools.filter((t) => t.startsWith(`${MCP_TOOL_PREFIX}${name}__`)).length;
+    lines.push(`  ● ${name} — 已连接，${count} 个工具`);
+  }
+  for (const fail of failedServers) {
+    lines.push(`  ○ ${fail.name} — 连接失败: ${fail.error}`);
+  }
+  lines.push(`配置文件: ${configHint}`);
+  lines.push("提示: /mcp reload 重新连接；MCP 工具名形如 mcp__<server>__<tool>，可用 /tool list 查看。");
+  return lines.join("\n");
+}
+
+/** 处理 /mcp 命令 */
+function handleMcpCommand(
+  args: string[],
+  ctx: CommandContext,
+): CommandResult {
+  const subCmd = args[0]?.toLowerCase();
+
+  if (!subCmd || subCmd === "list" || subCmd === "status") {
+    return {
+      handled: true,
+      message: formatMcpStatus(
+        ctx.mcpResult,
+        ctx.agent.getToolNames(),
+        ctx.agent.getWorkdir(),
+      ),
+    };
+  }
+
+  if (subCmd === "reload" || subCmd === "reconnect") {
+    return {
+      handled: true,
+      message: MCP_RELOAD_MARKER,
+    };
+  }
+
+  return {
+    handled: true,
+    message: `未知的 mcp 子命令: ${subCmd}\n用法: /mcp list | /mcp reload`,
+  };
 }
 
 /** 处理 /session 命令 */

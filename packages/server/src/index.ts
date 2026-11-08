@@ -108,6 +108,7 @@ export {
   RuntimeAgent,
   reloadProvider,
   buildEnvForLLM,
+  applyToolPermissionEnvFromConfig,
 } from "./create-runtime-agent.ts";
 export type {
   CreateRuntimeAgentOptions,

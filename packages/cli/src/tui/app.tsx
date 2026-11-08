@@ -9,6 +9,8 @@ import React, { useState, useCallback, useRef } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { Agent } from "@fengagent/agent";
 import type { Session, Message, AgentEvent, ToolContext } from "@fengagent/core";
+import type { McpRegistrationResult } from "@fengagent/tools";
+import { registerMcpTools } from "@fengagent/tools";
 import { ChatView } from "./chat-view.tsx";
 import { Input } from "./input.tsx";
 import { StatusBar } from "./status-bar.tsx";
@@ -17,6 +19,8 @@ import { ThinkingPet } from "./thinking-pet.tsx";
 import {
   handleCommand,
   buildModelListMessage,
+  formatMcpStatus,
+  MCP_RELOAD_MARKER,
   type CommandContext,
 } from "../commands.ts";
 import type { ToolCallInfo } from "./tool-view.tsx";
@@ -33,6 +37,12 @@ export interface AppProps {
   initialSession?: Session;
   /** 退出回调 */
   onExit: () => void;
+  /**
+   * MCP 注册结果（`createAgent` 返回，entry 透传）。
+   *
+   * TUI 自己持有快照，`/mcp list` 直接读、`/mcp reload` 重连后更新。
+   */
+  mcpResult?: McpRegistrationResult | null;
 }
 
 /** 运行时 Agent 的图/回退扩展面（RuntimeAgent 提供，用于 /rollback） */
@@ -74,6 +84,7 @@ export function App({
   agent,
   initialSession,
   onExit,
+  mcpResult: initialMcpResult,
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout: stdoutStream } = useStdout();
@@ -92,6 +103,14 @@ export function App({
   const [messages, setMessages] = useState<Message[]>(
     initialSession?.messages ?? [],
   );
+
+  /** MCP 状态快照（/mcp list 读它，/mcp reload 重连后更新） */
+  const [mcpResult, setMcpResult] = useState<McpRegistrationResult | null>(
+    initialMcpResult ?? null,
+  );
+
+  /** 输入框草稿（/skill <name> 注入技能 prompt） */
+  const [inputDraft, setInputDraft] = useState<{ text: string; id: number }>();
 
   // UI 状态
   const [ui, setUi] = useState<UiState>({
@@ -123,6 +142,9 @@ export function App({
     }));
   }, []);
 
+  /** 草稿序号（单调递增，保证连续两次 /skill 都能刷新输入框） */
+  const draftSeq = useRef(0);
+
   /** 处理用户输入 */
   const handleSubmit = useCallback(
     async (text: string) => {
@@ -132,10 +154,43 @@ export function App({
           agent,
           currentSession: session,
           currentModel: model,
+          mcpResult,
         };
         const result = handleCommand(text, ctx);
 
         if (!result.handled) {
+          return;
+        }
+
+        // /skill <name> — 技能 prompt 填进输入框（用户可编辑后再发，不花 token）
+        if (result.inputDraft !== undefined) {
+          draftSeq.current += 1;
+          setInputDraft({ text: result.inputDraft, id: draftSeq.current });
+        }
+
+        // /mcp reload — 重新连接 MCP 服务器并刷新状态快照
+        if (result.message === MCP_RELOAD_MARKER) {
+          if (ui.status === "running") {
+            addSystemMessage("Agent 正在运行中，请等待完成后再重连 MCP。");
+            return;
+          }
+          addSystemMessage("正在重新连接 MCP 服务器…");
+          try {
+            const previous = mcpResult;
+            const next = await registerMcpTools(
+              agent.getToolRegistry(),
+              agent.getWorkdir(),
+            );
+            // 先连新的再断开旧的：新连接失败时旧工具仍可用
+            await previous?.client.disconnectAll();
+            setMcpResult(next);
+            addSystemMessage(
+              `MCP 重连完成\n${formatMcpStatus(next, agent.getToolNames(), agent.getWorkdir())}`,
+            );
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            addSystemMessage(`MCP 重连失败: ${message}`);
+          }
           return;
         }
 
@@ -332,7 +387,7 @@ export function App({
         addSystemMessage(`错误: ${message}`);
       }
     },
-    [agent, session, model, ui.status, exit, onExit, addSystemMessage, stdoutStream, requestPermission],
+    [agent, session, model, ui.status, exit, onExit, addSystemMessage, stdoutStream, requestPermission, mcpResult],
   );
 
   /** Ctrl+C 退出 / Ctrl+D 中断运行 / Ctrl+O 切换工具卡详情 */
@@ -478,6 +533,7 @@ export function App({
       <Input
         onSubmit={handleSubmit}
         disabled={ui.status === "running"}
+        draft={inputDraft}
       />
 
       {/* 状态栏 */}

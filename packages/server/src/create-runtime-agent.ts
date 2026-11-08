@@ -117,6 +117,48 @@ export function buildEnvForLLM(
   return envForLLM;
 }
 
+/* ------------------------------ 工具授权：config → env 桥接 ------------------------------ */
+
+/**
+ * 把 config 里的工具授权字段注入成 `FENG_*` 环境变量。
+ *
+ * 为什么必须桥接：权限检查器（`@fengagent/tools/permission.ts`）只读 `process.env`，
+ * 不认 config 对象；而 `createRuntimeAgent` 是 TUI / `fengagent serve` /
+ * `fengagent acp` / dev server 四个入口的共用装配点。
+ *
+ * 历史上这步只写在 `packages/server/src/entry.ts` 里，于是另外三个入口写进
+ * `config.json` 的 `autoApproveTools` / `allowedTools` / `deniedTools` 被静默忽略
+ * —— 用户配了「全授权」却不生效，只有 `FENG_AUTO_APPROVE_TOOLS=1` 一条路。
+ *
+ * 语义：env 显式设置优先（不覆盖），否则落 config 的已解析值
+ * （`loadConfig` 本身就是「文件 < env」，所以 config 值 = 生效值）。
+ *
+ * @param config - 已解析配置（含 autoApproveTools / allowedTools / deniedTools）
+ * @param env - 目标环境变量表，默认 `process.env`（权限检查器实际读取的那份）
+ * @returns 本次实际注入的变量名（便于调用方记录/测试）
+ */
+export function applyToolPermissionEnvFromConfig(
+  config: Pick<Config, "autoApproveTools" | "allowedTools" | "deniedTools">,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  const injected: string[] = [];
+
+  function inject(key: string, value: string | undefined): void {
+    if (value === undefined || value === "") return;
+    if (env[key]) return; // 显式 env 优先，不覆盖
+    env[key] = value;
+    injected.push(key);
+  }
+
+  if (config.autoApproveTools) {
+    inject("FENG_AUTO_APPROVE_TOOLS", "true");
+  }
+  inject("FENG_ALLOWED_TOOLS", config.allowedTools);
+  inject("FENG_DENIED_TOOLS", config.deniedTools);
+
+  return injected;
+}
+
 /* ------------------------------ 热切换状态（/model、/provider 底座） ------------------------------ */
 
 interface ReloadState {
@@ -277,6 +319,10 @@ export async function createRuntimeAgent(
   const toolRegistry = createToolRegistry();
   registerBuiltinTools(toolRegistry);
   const hookRegistry = createHookRegistry();
+  // 3.1 config → env 桥接：createPermissionChecker 只读 process.env，
+  //     不桥接的话 TUI / `fengagent serve` / `acp` 三个入口的 config 授权字段全部失效
+  //     （历史上只有 packages/server/src/entry.ts 做过这步）。
+  applyToolPermissionEnvFromConfig(config);
   const permissionChecker = createPermissionChecker(workdir);
   const toolExecutor = createToolExecutor(permissionChecker, hookRegistry);
 

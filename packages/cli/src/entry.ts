@@ -180,7 +180,7 @@ export async function main(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const { agent, sessionStore } = agentResult;
+  const { agent, sessionStore, mcpResult } = agentResult;
 
   // 恢复已有会话（如果指定了 --session）
   let initialSession: Session | undefined;
@@ -223,6 +223,8 @@ export async function main(argv: string[]): Promise<void> {
     React.createElement(App, {
       agent,
       initialSession,
+      // MCP 连接状态透传进 App：/mcp list 直接读，/mcp reload 重连后刷新
+      mcpResult,
       onExit: () => {
         sessionStore?.close();
         instance.unmount();

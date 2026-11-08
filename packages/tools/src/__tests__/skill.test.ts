@@ -184,6 +184,56 @@ describe("SkillLoader", () => {
     await loader.load();
     expect(loader.isLoaded).toBe(true);
   });
+
+  // loadSync — TUI slash 命令（同步上下文）用，语义必须与 load() 一致
+  it("loadSync: 无文件时加载内置技能，且置 isLoaded", () => {
+    const loader = createSkillLoader({ workdir: join(TEST_WORKDIR, "empty-sync") });
+    expect(loader.isLoaded).toBe(false);
+
+    loader.loadSync();
+
+    expect(loader.isLoaded).toBe(true);
+    expect(loader.names()).toContain("code-review");
+    expect(loader.names()).toContain("debug");
+  });
+
+  it("loadSync: 自定义技能覆盖内置同名技能", () => {
+    const workdir = join(TEST_WORKDIR, "sync-override");
+    const skillsDir = join(workdir, ".fengagent", "skills");
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(join(skillsDir, "debug-sync.md"), [
+      "---",
+      "name: debug-sync",
+      "description: 同步加载的自定义技能",
+      "---",
+      "",
+      "自定义 prompt。",
+    ].join("\n"));
+
+    const loader = createSkillLoader({ workdir });
+    loader.loadSync();
+
+    const skill = loader.get("debug-sync");
+    expect(skill).toBeDefined();
+    expect(skill!.description).toBe("同步加载的自定义技能");
+    expect(skill!.prompt.trim()).toBe("自定义 prompt。");
+    // 内置技能仍在
+    expect(loader.names()).toContain("code-review");
+  });
+
+  it("loadSync: 解析失败的 md 跳过，不影响其他技能", () => {
+    const workdir = join(TEST_WORKDIR, "sync-bad");
+    const skillsDir = join(workdir, ".fengagent", "skills");
+    mkdirSync(skillsDir, { recursive: true });
+    // 缺 name 的 frontmatter → 解析抛错 → 跳过
+    writeFileSync(join(skillsDir, "broken.md"), ["---", "description: 没有 name", "---", "body"].join("\n"));
+
+    const loader = createSkillLoader({ workdir });
+    loader.loadSync();
+
+    expect(loader.isLoaded).toBe(true);
+    expect(loader.names()).toContain("code-review");
+  });
 });
 
 // ──────────────────────────────────────────────
