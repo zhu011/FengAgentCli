@@ -487,6 +487,12 @@ export interface RuntimeInfo {
   name: string;
   /** 启动命令（含参数） */
   command: string;
+  /** 启动参数（编辑表单用；后端列表未带时缺省） */
+  args?: string[];
+  /** 启动协议（acp / claude-stream-json；编辑表单用） */
+  protocol?: string;
+  /** 追加环境变量（编辑表单用；后端列表未带时缺省） */
+  env?: Record<string, string>;
   /** initialize 握手返回的 agentInfo */
   agentName: string;
   agentVersion: string;
@@ -504,6 +510,36 @@ export interface RuntimeInfo {
   enabled: boolean;
   /** 最近 24h 任务数 */
   recentTaskCount: number;
+}
+
+/** runtime 注册条目的写入载荷（创建/编辑共用） */
+export interface RuntimeEntryInput {
+  /** 注册名（创建必填；编辑时以路径名为准不可改） */
+  name: string;
+  /** 可执行文件 */
+  command: string;
+  /** 参数 */
+  args?: string[];
+  /** 启动协议（默认 acp） */
+  protocol?: "acp" | "claude-stream-json";
+  /** 追加环境变量（凭据放这里） */
+  env?: Record<string, string>;
+  /** 是否启用 */
+  enabled?: boolean;
+}
+
+/** 表单「探测验证」的候选项探测结果（不落盘） */
+export interface RuntimeProbeResult {
+  probeStatus: "ok" | "unreachable";
+  /** 失败原因（后端返回什么就显示什么：命令不存在 / spawn 失败 / 协议不支持 / 凭据缺失…） */
+  probeError?: string;
+  agentName?: string;
+  agentVersion?: string;
+  capabilities?: {
+    resume: boolean;
+    loadSession: boolean;
+    image: boolean;
+  };
 }
 
 /** 外派任务事件（task_events 流的一行；对应 anet 任务详情的时间线） */

@@ -36,7 +36,9 @@ import type {
   PluginMutationResult,
   PluginsListResponse,
   RollbackResponse,
+  RuntimeEntryInput,
   RuntimeInfo,
+  RuntimeProbeResult,
   Session,
   SessionMeta,
   TraceAnalysisResponse,
@@ -242,6 +244,64 @@ export class ApiClient {
   async listRuntimes(): Promise<RuntimeInfo[]> {
     const res = await fetch(`${this.baseUrl}/api/runtimes`);
     if (!res.ok) throw await this.toApiError(res, "Failed to list runtimes");
+    return (await res.json()) as RuntimeInfo[];
+  }
+
+  /** POST /api/runtimes — 添加 runtime（失败回 {error:{message,code}} 具体原因） */
+  async createRuntime(req: RuntimeEntryInput): Promise<RuntimeInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/runtimes`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to create runtime");
+    return (await res.json()) as RuntimeInfo[];
+  }
+
+  /** PATCH /api/runtimes/:name — 编辑 runtime（command/args/protocol/env/enabled） */
+  async updateRuntime(name: string, req: Partial<RuntimeEntryInput>): Promise<RuntimeInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/runtimes/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to update runtime");
+    return (await res.json()) as RuntimeInfo[];
+  }
+
+  /** DELETE /api/runtimes/:name — 删除 runtime */
+  async deleteRuntime(name: string): Promise<RuntimeInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/runtimes/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to delete runtime");
+    return (await res.json()) as RuntimeInfo[];
+  }
+
+  /** POST /api/runtimes/probe-candidate — 探测表单里的候选项（不落盘，「探测验证」按钮用） */
+  async probeRuntimeCandidate(req: {
+    command: string;
+    args?: string[];
+    protocol?: string;
+    env?: Record<string, string>;
+  }): Promise<RuntimeProbeResult> {
+    const res = await fetch(`${this.baseUrl}/api/runtimes/probe-candidate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to probe runtime");
+    return (await res.json()) as RuntimeProbeResult;
+  }
+
+  /** POST /api/runtimes/:name/enabled — 启停 runtime */
+  async setRuntimeEnabled(name: string, enabled: boolean): Promise<RuntimeInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/runtimes/${encodeURIComponent(name)}/enabled`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to toggle runtime");
     return (await res.json()) as RuntimeInfo[];
   }
 

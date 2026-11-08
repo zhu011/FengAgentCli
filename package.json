@@ -69,6 +69,7 @@
     "smoke:teams": "node packages/web-ui/e2e/teams-smoke.mjs",
     "smoke:plugins": "node packages/web-ui/e2e/plugins-smoke.mjs",
     "smoke:market": "node packages/web-ui/e2e/market-smoke.mjs",
+    "smoke:runtimes": "node packages/web-ui/e2e/runtimes-smoke.mjs",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"

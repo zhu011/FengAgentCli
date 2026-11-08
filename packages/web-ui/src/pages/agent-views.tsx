@@ -33,6 +33,7 @@ import type {
   RuntimeInfo,
 } from "../api/types.ts";
 import { formatDuration } from "../lib/format.ts";
+import { EMPTY_RUNTIME_FORM, formToEntry, validateRuntimeForm, type RuntimeFormValue } from "./runtime-form.ts";
 
 export type StatusFilter = "all" | AgentTaskStatus;
 
@@ -185,19 +186,248 @@ export function useAgentTaskLibrary(
   return { runtimes, tasks, loading, error, reload, mergeTask, setError };
 }
 
-/** 成员库（原 Agents 总览）：运行时注册表卡片 */
-export function RuntimeLibraryView({ runtimes, loading }: { runtimes: RuntimeInfo[]; loading: boolean }) {
+/** 成员库（原 Agents 总览）：运行时注册表卡片 + 添加/编辑/删除/探测验证 */
+export function RuntimeLibraryView({
+  runtimes,
+  loading,
+  client,
+  onChanged,
+}: {
+  runtimes: RuntimeInfo[];
+  loading: boolean;
+  /** API 客户端（CRUD/探测验证；mock 模式下调用会报错并原样展示） */
+  client: ApiClient;
+  /** 增删改后刷新列表（团队页的 library.reload） */
+  onChanged: () => void;
+}) {
+  /** 表单开/关 + 当前编辑对象（null = 添加模式） */
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<RuntimeInfo | null>(null);
+  const [form, setForm] = useState<RuntimeFormValue>(EMPTY_RUNTIME_FORM);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
+  /** 探测验证进行中 */
+  const [probing, setProbing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  function openCreate() {
+    setEditing(null);
+    setForm(EMPTY_RUNTIME_FORM);
+    setFormError(null);
+    setFormNotice(null);
+    setFormOpen(true);
+  }
+
+  function openEdit(r: RuntimeInfo) {
+    setEditing(r);
+    setForm({
+      name: r.name,
+      command: r.command,
+      args: (r.args ?? []).join(" "),
+      protocol: r.protocol === "claude-stream-json" ? "claude-stream-json" : "acp",
+      env: Object.entries(r.env ?? {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join("\n"),
+    });
+    setFormError(null);
+    setFormNotice(null);
+    setFormOpen(true);
+  }
+
+  /** 探测验证：探测表单当前值（不落盘），失败原因原样显示 */
+  async function probeCandidate() {
+    if (probing || form.command.trim() === "") return;
+    setProbing(true);
+    setFormError(null);
+    setFormNotice(null);
+    try {
+      const entry = formToEntry(form);
+      const result = await client.probeRuntimeCandidate({
+        command: entry.command,
+        ...(entry.args ? { args: entry.args } : {}),
+        protocol: entry.protocol,
+        ...(entry.env ? { env: entry.env } : {}),
+      });
+      if (result.probeStatus === "ok") {
+        setFormNotice(
+          `探测通过：${result.agentName ?? "?"} ${result.agentVersion ?? ""}`.trim(),
+        );
+      } else {
+        setFormError(`探测失败：${result.probeError ?? "未知原因"}`);
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProbing(false);
+    }
+  }
+
+  /** 保存（添加或编辑） */
+  async function save() {
+    if (saving) return;
+    const errors = validateRuntimeForm(form, editing !== null);
+    if (errors.length > 0) {
+      setFormError(errors.join("；"));
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    setFormNotice(null);
+    try {
+      const entry = formToEntry(form);
+      if (editing) {
+        await client.updateRuntime(editing.name, {
+          command: entry.command,
+          ...(entry.args ? { args: entry.args } : {}),
+          protocol: entry.protocol,
+          ...(entry.env ? { env: entry.env } : {}),
+        });
+      } else {
+        await client.createRuntime(entry);
+      }
+      setFormOpen(false);
+      onChanged();
+    } catch (err) {
+      // 后端返回什么错就原样显示（命令不存在/协议不支持/重名/凭据缺失…）
+      setFormError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** 删除（两步确认） */
+  async function doDelete() {
+    const name = deleteTarget;
+    if (saving || name === null) return;
+    setSaving(true);
+    try {
+      await client.deleteRuntime(name);
+      setDeleteTarget(null);
+      onChanged();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="ag-section">
-      <h2 className="ag-section__title">
-        <Cpu size={14} aria-hidden="true" /> 成员库
-      </h2>
+      <div className="tm-libhead">
+        <h2 className="ag-section__title">
+          <Cpu size={14} aria-hidden="true" /> 成员库
+        </h2>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="ag-btn ag-btn--primary" onClick={openCreate}>
+            <Cpu size={14} aria-hidden="true" /> 添加 runtime
+          </button>
+        </div>
+      </div>
+
+      {formError && !formOpen ? <div className="ag-page__hint ag-page__hint--error">{formError}</div> : null}
+
+      {/* 添加 / 编辑表单 */}
+      {formOpen && (
+        <div className="ag-form" data-testid="runtime-form">
+          <div className="tm-libhead">
+            <h3 className="ag-section__title">{editing ? `编辑 ${editing.name}` : "添加 runtime"}</h3>
+          </div>
+          {formError ? <div className="ag-page__hint ag-page__hint--error">{formError}</div> : null}
+          {formNotice ? <div className="ag-page__hint">{formNotice}</div> : null}
+
+          <div className="ag-form__row">
+            <label className="ag-form__label" htmlFor="rt-name">名称</label>
+            <input
+              id="rt-name"
+              className="ag-form__select"
+              value={form.name}
+              disabled={editing !== null}
+              placeholder="如 opencode"
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="ag-form__row">
+            <label className="ag-form__label" htmlFor="rt-command">command</label>
+            <input
+              id="rt-command"
+              className="ag-form__select"
+              value={form.command}
+              placeholder="如 opencode / claude / kimi"
+              onChange={(e) => setForm((f) => ({ ...f, command: e.target.value }))}
+            />
+          </div>
+          <div className="ag-form__row">
+            <label className="ag-form__label" htmlFor="rt-args">args（空格分隔）</label>
+            <input
+              id="rt-args"
+              className="ag-form__select"
+              value={form.args}
+              placeholder="如 acp（可留空）"
+              onChange={(e) => setForm((f) => ({ ...f, args: e.target.value }))}
+            />
+          </div>
+          <div className="ag-form__row">
+            <label className="ag-form__label" htmlFor="rt-protocol">协议</label>
+            <select
+              id="rt-protocol"
+              className="ag-form__select"
+              value={form.protocol}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, protocol: e.target.value as RuntimeFormValue["protocol"] }))
+              }
+            >
+              <option value="acp">acp（NDJSON JSON-RPC，dsh/kimi/fengagent）</option>
+              <option value="claude-stream-json">claude-stream-json（claude 一次性进程）</option>
+            </select>
+          </div>
+          <div className="ag-form__row">
+            <label className="ag-form__label" htmlFor="rt-env">凭据 / 环境变量（逐行 KEY=VALUE）</label>
+            <textarea
+              id="rt-env"
+              className="ag-form__select"
+              rows={3}
+              value={form.env}
+              placeholder={"API_KEY=sk-...\nHTTP_PROXY=http://..."}
+              onChange={(e) => setForm((f) => ({ ...f, env: e.target.value }))}
+            />
+          </div>
+
+          <div className="ag-form__actions">
+            <button type="button" className="ag-btn" disabled={probing} onClick={() => void probeCandidate()}>
+              {probing ? <Loader2 className="ag-page__spin" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}
+              探测验证
+            </button>
+            <button type="button" className="ag-btn ag-btn--primary" disabled={saving} onClick={() => void save()}>
+              {saving ? <Loader2 className="ag-page__spin" size={14} aria-hidden="true" /> : null}
+              {editing ? "保存修改" : "添加"}
+            </button>
+            <button type="button" className="ag-btn ag-btn--ghost" onClick={() => setFormOpen(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 删除确认 */}
+      {deleteTarget !== null && (
+        <div className="ag-page__hint ag-page__hint--error">
+          确认删除 runtime「{deleteTarget}」？历史任务保留，但无法再向它派发新任务。
+          <button type="button" className="ag-btn ag-btn--mini ag-btn--ghost" style={{ marginLeft: 12 }} onClick={() => void doDelete()}>
+            确认删除
+          </button>
+          <button type="button" className="ag-btn ag-btn--mini ag-btn--ghost" style={{ marginLeft: 6 }} onClick={() => setDeleteTarget(null)}>
+            取消
+          </button>
+        </div>
+      )}
+
       {runtimes.length === 0 && !loading ? (
-        <div className="ag-page__empty">暂无已注册 runtime — 后端就绪后此处展示运行时注册表</div>
+        <div className="ag-page__empty">暂无已注册 runtime — 用上方「添加 runtime」录入外部 agent</div>
       ) : (
         <div className="ag-runtime-grid">
           {runtimes.map((r) => (
-            <div key={r.name} className="ag-runtime-card">
+            <div key={r.name} className="ag-runtime-card" data-testid="runtime-card" data-runtime-name={r.name}>
               <div className="ag-runtime-card__head">
                 <span className="ag-runtime-card__name">{r.name}</span>
                 <span
@@ -209,11 +439,24 @@ export function RuntimeLibraryView({ runtimes, loading }: { runtimes: RuntimeInf
                 {r.agentName} · {r.agentVersion}
               </div>
               <code className="ag-runtime-card__cmd">{r.command}</code>
+              {r.probeStatus === "unreachable" && r.probeError ? (
+                <div className="ag-runtime-card__meta" style={{ color: "var(--error, #e06c75)" }} title={r.probeError}>
+                  {r.probeError.length > 60 ? `${r.probeError.slice(0, 60)}…` : r.probeError}
+                </div>
+              ) : null}
               <div className="ag-runtime-card__chips">
                 {r.capabilities.resume ? <span className="ag-chip">resume</span> : null}
                 {r.capabilities.loadSession ? <span className="ag-chip">load</span> : null}
                 {r.capabilities.image ? <span className="ag-chip">image</span> : null}
                 <span className="ag-chip ag-chip--muted">24h 任务 {r.recentTaskCount}</span>
+              </div>
+              <div className="ag-runtime-card__actions" style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <button type="button" className="ag-btn ag-btn--mini" onClick={() => openEdit(r)}>
+                  编辑
+                </button>
+                <button type="button" className="ag-btn ag-btn--mini ag-btn--ghost" onClick={() => setDeleteTarget(r.name)}>
+                  删除
+                </button>
               </div>
             </div>
           ))}

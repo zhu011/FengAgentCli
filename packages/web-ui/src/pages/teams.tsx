@@ -672,7 +672,12 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
           mergeTask={library.mergeTask}
         />
       ) : subView === "members" ? (
-        <RuntimeLibraryView runtimes={library.runtimes} loading={library.loading} />
+        <RuntimeLibraryView
+          runtimes={library.runtimes}
+          loading={library.loading}
+          client={client}
+          onChanged={() => void library.reload()}
+        />
       ) : (
         /* ── 子视图：团队（列表 + 详情）────────────────────── */
         <div className="gr-layout">
