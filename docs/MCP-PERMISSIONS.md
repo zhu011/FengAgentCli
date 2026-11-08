@@ -63,7 +63,8 @@ Agent 用。**只需要写一个 JSON 文件**，不用写代码。
 ### 2. 重启并验证
 
 重启 TUI / WebUI 后，在对话里输 `/tool list`（或问 Agent「你有哪些工具」）——
-能看到 `mcp__filesystem__read_file` 这类名字就成功了。
+能看到 `mcp__filesystem__read_file` 这类名字就成功了；`/mcp list` 可看每个
+服务器的连接状态与失败原因，`/mcp reload` 重连。
 
 **工具命名规则**：`mcp__<服务器名>__<工具名>`（非安全字符会替换为 `_`）。
 
@@ -80,8 +81,8 @@ export FENG_MCP_SERVERS='{"filesystem":{"command":"npx","args":["-y","@modelcont
 | 现象 | 原因 |
 |---|---|
 | 启动时 `MCP: initialization error` | JSON 写错（最常见：多包了 `servers` 层） |
-| 工具列表里没有 | 服务器进程没起来（`command` 不存在）/ `enabled: false`；连接失败不阻断启动，只 stderr 一行 |
-| 想改了配置不重启 | 目前需要重启进程（配置只在启动时读） |
+| 工具列表里没有 | 服务器进程没起来（`command` 不存在）/ `enabled: false`；连接失败不阻断启动——**失败原因用 TUI 里 `/mcp list` 查看**（会显示每个服务器的连接状态与具体报错），`/mcp reload` 可重连 |
+| 想改了配置不重启 | 目前需要重启进程（配置只在启动时读；`/mcp reload` 只重连，不重读配置文件） |
 
 ## 二、工具授权：弹窗怎么看、怎么选
 

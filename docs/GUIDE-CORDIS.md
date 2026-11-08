@@ -341,6 +341,11 @@ bun run packages/cli/src/entry.ts --print "一句话问题"               # 强�
 
 工具:
   /tool list               — 工具列表
+  /skill list|<name>       — 技能列表 / 把技能 prompt 填进输入框（可编辑后再发送）
+  /mcp list|reload         — MCP 服务器状态（含失败原因）/ 重连
+
+界面:
+  /theme [dark|light]      — TUI 主题切换（重启保留）
 
 图:
   /graph                   — 查看对话图（节点/分支/溯源链）
@@ -349,6 +354,9 @@ bun run packages/cli/src/entry.ts --print "一句话问题"               # 强�
 直接输入文本并按 Enter 发送消息。
 输入 / 可查看命令补全列表。
 ```
+
+> MCP 接入与工具授权的保姆级说明（含 `/mcp`、权限三档）见
+> [MCP-PERMISSIONS.md](./MCP-PERMISSIONS.md)。
 
 逐个说明：
 
