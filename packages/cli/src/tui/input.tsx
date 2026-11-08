@@ -1,14 +1,15 @@
 /**
- * @fengagent/cli — TUI 输入框组件
+ * @fengagent/cli — TUI 输入框组件（claude-code 风格框状输入）
  *
- * 多行输入框，Enter 发送、Ctrl+C 退出。
- * 支持 / 命令自动补全（↑↓ 选择、Tab/Enter 补全、Esc 关闭）。
+ * 圆角边框输入区 + 占位提示 + ↑↓ 输入历史 recall；
+ * / 命令自动补全（↑↓ 选择、Tab/Enter 补全、Esc 关闭）优先于历史。
  *
  * 设计要点：
- * 1. 补全列表用流式布局 + 显式 height，防止被 flexGrow 压缩
- * 2. 滚动窗口：selectedIdx 变化时自动调整可视范围
- * 3. useRef 避免 useInput 闭包陈旧
- * 4. 方向键转义序列兜底兼容（\x1b[A/\x1b[B/\x1bOA/\x1bOB）
+ * 1. 输入区带圆角边框（claude-code 惯例），占位符随状态切换；
+ * 2. 历史 recall：面板关闭时空输入 ↑ 召回上一条、↓ 前进；提交后指针复位；
+ * 3. 补全列表用流式布局 + 显式 height，防止被 flexGrow 压缩；
+ * 4. useRef 避免 useInput 闭包陈旧；
+ * 5. 方向键转义序列兜底兼容（\x1b[A/\x1b[B/\x1bOA/\x1bOB）。
  */
 
 import React, { useState, useRef, useMemo } from "react";
@@ -20,21 +21,52 @@ import { theme } from "./theme.ts";
 /** 可视行数 */
 const MAX_VISIBLE = 10;
 
+/** 历史最大保留条数 */
+const MAX_HISTORY = 100;
+
 export interface InputProps {
   onSubmit: (text: string) => void;
   disabled?: boolean;
   placeholder?: string;
 }
 
+/**
+ * 历史导航（纯函数，供测试）。
+ *
+ * history 为旧→新排列；index === -1 表示「当前草稿」（未在历史中）。
+ * 返回新 index；越界钳制在 [-1, history.length - 1]。
+ */
+export function navigateHistory(
+  history: string[],
+  index: number,
+  direction: "prev" | "next",
+): number {
+  if (history.length === 0) return -1;
+  if (direction === "prev") {
+    // 草稿态（-1）→ 最新一条；已最旧则停在 0
+    if (index < 0) return history.length - 1;
+    return Math.max(0, index - 1);
+  }
+  // next：最新一条 → 草稿态（-1）；草稿态停留
+  if (index < 0) return -1;
+  return index >= history.length - 1 ? -1 : index + 1;
+}
+
 export function Input({
   onSubmit,
   disabled = false,
-  placeholder = "输入消息，按 Enter 发送...",
+  placeholder = "发消息 · / 命令 · ↑ 历史 · Tab 补全",
 }: InputProps): React.ReactElement {
   const [value, setValue] = useState("");
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
+
+  /** 已提交输入历史（旧→新） */
+  const historyRef = useRef<string[]>([]);
+  /** 当前历史指针（-1 = 草稿态）；草稿内容在进入历史浏览时暂存 */
+  const historyIndexRef = useRef(-1);
+  const draftRef = useRef("");
 
   const showAutoRef = useRef(false);
   const selectedRef = useRef(0);
@@ -64,6 +96,24 @@ export function Input({
       setScrollOffset(newIdx);
     } else if (newIdx >= scrollOffset + MAX_VISIBLE) {
       setScrollOffset(newIdx - MAX_VISIBLE + 1);
+    }
+  }
+
+  function submitCurrent() {
+    setShowAutocomplete(false);
+    showAutoRef.current = false;
+    const trimmed = value.trim();
+    if (trimmed) {
+      // 入历史（去重：与最新一条相同则不重复压栈）
+      const history = historyRef.current;
+      if (history[history.length - 1] !== trimmed) {
+        history.push(trimmed);
+        if (history.length > MAX_HISTORY) history.shift();
+      }
+      historyIndexRef.current = -1;
+      draftRef.current = "";
+      onSubmit(trimmed);
+      setValue("");
     }
   }
 
@@ -115,11 +165,7 @@ export function Input({
         }
         setShowAutocomplete(false);
         showAutoRef.current = false;
-        const trimmed = value.trim();
-        if (trimmed) {
-          onSubmit(trimmed);
-          setValue("");
-        }
+        submitCurrent();
         return;
       }
       if (key.escape) {
@@ -130,13 +176,7 @@ export function Input({
     }
 
     if (key.return) {
-      setShowAutocomplete(false);
-      showAutoRef.current = false;
-      const trimmed = value.trim();
-      if (trimmed) {
-        onSubmit(trimmed);
-        setValue("");
-      }
+      submitCurrent();
       return;
     }
 
@@ -160,7 +200,34 @@ export function Input({
 
     if (key.ctrl && input === "c") return;
     if (key.ctrl || key.meta) return;
-    if (key.upArrow || key.downArrow) return;
+
+    // ↑↓ 历史召回（补全面板关闭时；正在浏览草稿优先保存）
+    const isUpSeq = key.upArrow || input === "\x1b[A" || input === "\x1bOA";
+    const isDownSeq = key.downArrow || input === "\x1b[B" || input === "\x1bOB";
+    if (isUpSeq || isDownSeq) {
+      const history = historyRef.current;
+      if (history.length === 0) return;
+      if (isUpSeq) {
+        // 进入历史浏览前暂存草稿
+        if (historyIndexRef.current === -1) draftRef.current = value;
+        const next = navigateHistory(history, historyIndexRef.current, "prev");
+        if (next >= 0) {
+          historyIndexRef.current = next;
+          setValue(history[next]!);
+          setShowAutocomplete(false);
+          showAutoRef.current = false;
+        }
+      } else {
+        const next = navigateHistory(history, historyIndexRef.current, "next");
+        historyIndexRef.current = next;
+        if (next === -1) {
+          setValue(draftRef.current);
+        } else {
+          setValue(history[next]!);
+        }
+      }
+      return;
+    }
     if (key.leftArrow || key.rightArrow) return;
     // 翻页/跳转键由对话视图（ChatView）处理，不应进入输入框内容
     // （同时兼容 Windows/Bun 下未解析成 key 标志的原始转义序列）
@@ -174,13 +241,14 @@ export function Input({
       return;
     }
 
-    // 追加可打印字符（过滤转义序列）
+    // 追加可打印字符（过滤转义序列）；任何编辑都退出历史浏览回到草稿态
     if (input && input.length > 0 && input !== "\x1b") {
       const cleanInput = input.replace(/\x1b\[[A-D]/g, "");
       if (!cleanInput) return;
 
       setValue((prev) => {
         const newVal = prev + cleanInput;
+        historyIndexRef.current = -1;
         if (newVal === "/") {
           setShowAutocomplete(true);
           showAutoRef.current = true;
@@ -202,15 +270,9 @@ export function Input({
     }
   });
 
-  const promptText = disabled ? (
-    <ThinkingPet />
-  ) : (
-    <Text color={theme.prompt} bold>{"❯ "}</Text>
-  );
-
   return (
     <Box flexDirection="column">
-      {/* 补全列表 — 流式布局，输入行正上方，显式 height 防止被压缩 */}
+      {/* 补全列表 — 流式布局，输入框正上方，显式 height 防止被压缩 */}
       {showAutocomplete && matchedCommands.length > 0 && !disabled && (
         <Box flexDirection="column" height={listHeight}>
           {visibleStart > 0 && (
@@ -241,16 +303,29 @@ export function Input({
         </Box>
       )}
 
-      {/* 输入行 */}
-      <Box>
-        {promptText}
-        {disabled ? (
-          <Text dimColor italic> {placeholder}</Text>
-        ) : value ? (
-          <Text>{value}<Text color={theme.brand}>█</Text></Text>
-        ) : (
-          <Text><Text color={theme.brand}>█</Text><Text dimColor italic> {placeholder}</Text></Text>
-        )}
+      {/* 输入区 — claude-code 风格圆角边框 + 状态化占位符 */}
+      <Box
+        borderStyle="round"
+        borderColor={disabled ? theme.border : theme.brandDim}
+        paddingX={1}
+        flexShrink={0}
+      >
+        <Box flexDirection="row">
+          {disabled ? (
+            <ThinkingPet />
+          ) : (
+            <Text color={theme.prompt} bold>{"❯ "}</Text>
+          )}
+          <Box flexGrow={1}>
+            {disabled ? (
+              <Text dimColor italic>{placeholder}（生成中，Esc 中断）</Text>
+            ) : value ? (
+              <Text>{value}<Text color={theme.brand}>█</Text></Text>
+            ) : (
+              <Text dimColor italic>{placeholder}</Text>
+            )}
+          </Box>
+        </Box>
       </Box>
     </Box>
   );

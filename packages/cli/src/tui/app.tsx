@@ -12,6 +12,7 @@ import type { Session, Message, AgentEvent, ToolContext } from "@fengagent/core"
 import { ChatView } from "./chat-view.tsx";
 import { Input } from "./input.tsx";
 import { StatusBar } from "./status-bar.tsx";
+import { Header } from "./header.tsx";
 import { ThinkingPet } from "./thinking-pet.tsx";
 import {
   handleCommand,
@@ -23,7 +24,7 @@ import {
   PermissionDialog,
   usePermissionRequester,
 } from "./permission-dialog.tsx";
-import { theme } from "./theme.ts";
+import { theme, setThemeMode } from "./theme.ts";
 
 export interface AppProps {
   /** Agent 实例 */
@@ -83,6 +84,11 @@ export function App({
     initialSession ?? agent.createSession("New Session"),
   );
   const [model, setModel] = useState(config.model);
+  /** 工具卡详情开关（T1：默认单行折叠，Ctrl+O 切换） */
+  const [verboseTools, setVerboseTools] = useState(false);
+  /** 主题版本号（/theme 切换时自增，强制全树重渲染以刷新 Proxy 令牌读取） */
+  const [themeVersion, setThemeVersion] = useState(0);
+  void themeVersion;
   const [messages, setMessages] = useState<Message[]>(
     initialSession?.messages ?? [],
   );
@@ -147,6 +153,12 @@ export function App({
 
         if (result.message) {
           addSystemMessage(result.message);
+        }
+
+        // /theme — 切换主题并触发全树重渲染
+        if (result.themeMode) {
+          setThemeMode(result.themeMode);
+          setThemeVersion((v) => v + 1);
         }
 
         if (result.shouldExit) {
@@ -323,7 +335,7 @@ export function App({
     [agent, session, model, ui.status, exit, onExit, addSystemMessage, stdoutStream, requestPermission],
   );
 
-  /** Ctrl+C 退出 / Ctrl+D 中断运行 */
+  /** Ctrl+C 退出 / Ctrl+D 中断运行 / Ctrl+O 切换工具卡详情 */
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       if (ui.status === "running") {
@@ -341,6 +353,10 @@ export function App({
         onExit();
         exit();
       }
+    }
+    // Ctrl+O — 工具卡 详情/折叠 切换（T1）
+    if (key.ctrl && input === "o") {
+      setVerboseTools((v) => !v);
     }
   });
 
@@ -400,6 +416,13 @@ export function App({
         </Box>
       )}
 
+      {/* 顶部细 header：品牌 · 会话 · 模型（会话信息自状态栏上移） */}
+      <Header
+        sessionId={session.id}
+        model={model}
+        status={ui.status}
+      />
+
       {/* 对话区域（占满剩余空间，flexShrink 让出高度给补全列表）
           注意：必须 flexBasis={0} + minHeight={0}，否则消息内容很长时
           该区域按内容固有高度参与布局，会把宠物/输入框/状态栏挤出屏幕 */}
@@ -432,6 +455,7 @@ export function App({
           streamingThinking={ui.streamingThinking}
           toolCalls={ui.toolCalls}
           isRunning={ui.status === "running"}
+          verboseTools={verboseTools}
         />
       </Box>
 
@@ -463,6 +487,7 @@ export function App({
         status={ui.status}
         sessionId={session.id}
         contextWindow={config.contextWindow}
+        verboseTools={verboseTools}
       />
     </Box>
   );

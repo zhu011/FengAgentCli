@@ -27,9 +27,9 @@ describe("TUI 美化渲染快照", () => {
     );
     const out = stripAnsi(lastFrame() ?? "");
     expect(out).toContain("deepseek-chat");
-    expect(out).toContain("Tokens: 12,345");
-    expect(out).toContain("Session: abc12345");
-    expect(out).toContain("/help");
+    expect(out).toContain("12,345 tok");
+    expect(out).toContain("Ctrl+O");
+    expect(out).toContain("dark");
   });
 
   test("运行中状态栏渲染动态指示器", () => {
@@ -199,7 +199,7 @@ describe("长对话布局回归（内容较多不撑破界面）", () => {
     expect(out).toContain("HEADER");
     expect(out).toContain("执行工具中");
     expect(out).toContain("INPUT-LINE");
-    expect(out).toContain("Tokens: 12,345");
+    expect(out).toContain("12,345 tok");
     expect(out).toMatch(/[0-9]+%/); // token 使用百分比
     // 贴底：最新问答与故事结尾可见
     expect(out).toContain("继续讲");

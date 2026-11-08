@@ -1,7 +1,8 @@
 /**
  * @fengagent/cli — TUI 工具调用卡片组件
  *
- * 显示工具名、输入参数、执行结果。
+ * T1 起默认**单行折叠**（状态图标 + 工具名 + 结果摘要），详情模式（verbose）
+ * 显示完整参数与结果——由 App 的 Ctrl+O 全局切换。
  * 视觉语言借鉴 dsh design-system：语义状态图标（✓/✗/⏳）+ 状态色边框。
  */
 
@@ -26,8 +27,8 @@ export interface ToolCallInfo {
 
 export interface ToolViewProps {
   info: ToolCallInfo;
-  /** 是否折叠详情（默认展开） */
-  collapsed?: boolean;
+  /** 显示完整详情（参数 + 结果卡片）；默认单行折叠 */
+  verbose?: boolean;
 }
 
 /** 截断字符串到最大长度 */
@@ -47,13 +48,32 @@ function formatInput(input: unknown): string {
   }
 }
 
+/** 单行摘要：优先取首个字符串字段（command/path/pattern…），否则紧凑 JSON */
+function summarizeInput(input: unknown): string {
+  if (input === null || input === undefined) return "";
+  if (typeof input === "string") return truncate(input, 48);
+  if (typeof input === "object") {
+    const record = input as Record<string, unknown>;
+    for (const key of ["command", "path", "pattern", "query", "url", "file_path"]) {
+      const v = record[key];
+      if (typeof v === "string" && v) return truncate(v, 48);
+    }
+    try {
+      return truncate(JSON.stringify(input), 48);
+    } catch {
+      return "";
+    }
+  }
+  return truncate(String(input), 48);
+}
+
 /** 格式化工具结果为可读字符串 */
 function formatResult(content: string): string {
   return truncate(content, 500);
 }
 
-/** 工具调用卡片 — 显示工具名、参数、结果 */
-export function ToolView({ info, collapsed }: ToolViewProps): React.ReactElement {
+/** 工具调用卡片 — 默认单行折叠；verbose 展开完整卡片 */
+export function ToolView({ info, verbose = false }: ToolViewProps): React.ReactElement {
   const hasResult = info.result !== undefined;
   const isError = info.result?.isError === true;
   const statusIcon = hasResult
@@ -63,18 +83,25 @@ export function ToolView({ info, collapsed }: ToolViewProps): React.ReactElement
     ? (isError ? statusColors.error : statusColors.success)
     : theme.warning;
 
-  if (collapsed) {
+  // ── 默认：单行折叠（✓ 工具名 · 摘要 — 结果首行）──
+  if (!verbose) {
+    const argSummary = summarizeInput(info.input);
+    const resultSummary = hasResult
+      ? truncate(info.result!.content.split("\n")[0] ?? "", 40)
+      : "";
     return (
       <Box flexDirection="row">
         <Text color={statusColor}>{statusIcon}</Text>
         <Text dimColor> {info.name}</Text>
-        {hasResult && (
-          <Text dimColor> — {truncate(info.result!.content, 60)}</Text>
+        {argSummary && <Text color={theme.subtle}> · {argSummary}</Text>}
+        {resultSummary && (
+          <Text dimColor> — {resultSummary}</Text>
         )}
       </Box>
     );
   }
 
+  // ── verbose：完整卡片 ──
   return (
     <Box
       flexDirection="column"

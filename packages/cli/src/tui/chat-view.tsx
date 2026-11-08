@@ -36,6 +36,8 @@ export interface ChatViewProps {
   toolCalls: ToolCallInfo[];
   /** 是否正在运行 */
   isRunning: boolean;
+  /** 工具卡详情开关（T1：默认单行折叠） */
+  verboseTools?: boolean;
 }
 
 // ──────────────────────────────────────────────
@@ -280,10 +282,12 @@ function sliceTextToRows(
  */
 function MessageItem({
   message,
+  verboseTools = false,
   skipRows = 0,
   maxRows = Infinity,
 }: {
   message: Message;
+  verboseTools?: boolean;
   skipRows?: number;
   maxRows?: number;
 }): React.ReactElement | null {
@@ -365,7 +369,7 @@ function MessageItem({
         if (isRowVisible(rows)) {
           contentParts.push(
             <Box key={`b${i}`} flexDirection="column">
-              <ToolView info={{ id: block.id, name: block.name, input: block.input }} />
+              <ToolView info={{ id: block.id, name: block.name, input: block.input }} verbose={verboseTools} />
             </Box>,
           );
         }
@@ -793,6 +797,7 @@ function StreamingSection({
   streamingThinking,
   toolCalls,
   isRunning,
+  verboseTools = false,
   skipRows = 0,
   maxRows = Infinity,
 }: {
@@ -800,6 +805,7 @@ function StreamingSection({
   streamingThinking: string;
   toolCalls: ToolCallInfo[];
   isRunning: boolean;
+  verboseTools?: boolean;
   skipRows?: number;
   maxRows?: number;
 }): React.ReactElement | null {
@@ -850,7 +856,7 @@ function StreamingSection({
   for (const tc of toolCalls) {
     const rows = estimateToolCardHeight(tc.name, tc.input, tc.result, columns);
     if (row + rows > skipRows && row < windowEnd) {
-      parts.push(<Box key={tc.id} flexDirection="column"><ToolView info={tc} /></Box>);
+      parts.push(<Box key={tc.id} flexDirection="column"><ToolView info={tc} verbose={verboseTools} /></Box>);
     }
     row += rows;
   }
@@ -875,6 +881,7 @@ export function ChatView({
   streamingThinking = "",
   toolCalls,
   isRunning,
+  verboseTools = false,
 }: ChatViewProps): React.ReactElement {
   const { stdout } = useStdout();
   const { stdin } = useStdin();
@@ -1059,6 +1066,7 @@ export function ChatView({
           <MessageItem
             key={b.message.id ?? i}
             message={b.message}
+            verboseTools={verboseTools}
             skipRows={skipRows}
             maxRows={maxRows}
           />,
@@ -1071,6 +1079,7 @@ export function ChatView({
             streamingThinking={streamingThinking}
             toolCalls={toolCalls}
             isRunning={isRunning}
+            verboseTools={verboseTools}
             skipRows={skipRows}
             maxRows={maxRows}
           />,

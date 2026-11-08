@@ -10,6 +10,7 @@ import type { Config, Session } from "@fengagent/core";
 import { maskApiKey, writeConfigFile } from "@fengagent/core";
 import { readSync, writeFileSync, writeSync } from "node:fs";
 import { reloadProvider } from "./create-agent.ts";
+import { getThemeMode } from "./tui/theme.ts";
 
 /** 命令元数据 */
 export interface CommandMeta {
@@ -20,7 +21,7 @@ export interface CommandMeta {
   /** 用法示例 */
   usage: string;
   /** 分类 */
-  category: "基础" | "会话" | "模型" | "上下文" | "工具" | "导出" | "图";
+  category: "基础" | "会话" | "模型" | "上下文" | "工具" | "导出" | "图" | "界面";
 }
 
 /** 所有命令的元数据表（集中维护，供 handleCommand / help / 补全共用） */
@@ -38,6 +39,7 @@ export const COMMANDS: CommandMeta[] = [
   { name: "tool", description: "工具列表", usage: "/tool list", category: "工具" },
   { name: "graph", description: "查看对话图（节点/分支/溯源链）", usage: "/graph", category: "图" },
   { name: "rollback", description: "回退到该轮提问处并重答（旧分支保留）", usage: "/rollback [节点id]", category: "图" },
+  { name: "theme", description: "TUI 主题切换（dark/light）", usage: "/theme [dark|light]", category: "界面" },
 ];
 
 /** 命令处理结果 */
@@ -60,6 +62,8 @@ export interface CommandResult {
   newModel?: string;
   /** /rollback 指定的节点 id（App 层异步执行回退+重答） */
   rollbackNodeId?: string;
+  /** /theme 切换后的主题模式（App 层应用 + 触发重渲染） */
+  themeMode?: "dark" | "light";
 }
 
 /** 命令处理上下文 */
@@ -125,6 +129,9 @@ export function handleCommand(
 
     case "rollback":
       return handleRollbackCommand(args, ctx);
+
+    case "theme":
+      return handleThemeCommand(args);
 
     default:
       return {
@@ -899,6 +906,22 @@ function handleGraphCommand(ctx: CommandContext): CommandResult {
 }
 
 /** 处理 /rollback 命令 — 回退到该轮提问处并重答（Phase 4，异步由 App 层执行） */
+/** 处理 /theme 命令：无参显示当前主题，dark/light 切换（持久化到 ~/.fengagent/tui-theme） */
+function handleThemeCommand(args: string[]): CommandResult {
+  const arg = args[0]?.toLowerCase();
+  if (arg !== "dark" && arg !== "light") {
+    return {
+      handled: true,
+      message: `当前主题: ${getThemeMode()}\n用法: /theme dark | /theme light`,
+    };
+  }
+  return {
+    handled: true,
+    message: `主题已切换为 ${arg}（重启保留；配置在 ~/.fengagent/tui-theme）`,
+    themeMode: arg,
+  };
+}
+
 function handleRollbackCommand(
   args: string[],
   ctx: CommandContext,

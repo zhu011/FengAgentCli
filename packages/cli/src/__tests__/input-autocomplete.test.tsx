@@ -94,7 +94,9 @@ test("Input 组件: 初始渲染包含提示符和占位文本", () => {
   const { lastFrame } = render(<Input onSubmit={() => {}} />);
   const frame = lastFrame();
   expect(frame).toContain("❯");
-  expect(frame).toContain("输入消息");
+  expect(frame).toContain("发消息");
+  expect(frame).toContain("/ 命令");
+  expect(frame).toContain("↑ 历史");
 });
 
 test("Input 组件: disabled 状态显示 ThinkingPet", () => {
