@@ -116,8 +116,17 @@ export const SUBAGENT_MAX_DEPTH = 2 as const;
 /** Agent 定义目录（项目级） */
 export const AGENTS_DIR = ".fengagent/agents" as const;
 
-/** Skills 目录（项目级） */
+/** Skills 目录（项目级，main 遗留，只读兼容） */
 export const SKILLS_DIR = ".fengagent/skills" as const;
+
+/** 团队（用户级）数据根目录名 —— 挂在用户 home 下，跨 workdir 共享 */
+export const TEAM_HOME_DIR = ".fengagent-cordis" as const;
+
+/** 团队技能目录名（相对团队数据根） */
+export const TEAM_SKILLS_DIR = "skills" as const;
+
+/** 团队技能索引文件名（启用/停用名单，相对团队技能目录） */
+export const SKILL_INDEX_FILE = "skills.json" as const;
 
 /** 插件目录（项目级） */
 export const PLUGINS_DIR = ".fengagent/plugins" as const;

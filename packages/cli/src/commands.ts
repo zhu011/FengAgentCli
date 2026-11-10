@@ -228,15 +228,28 @@ function handleToolCommand(
 /**
  * 同步取得当前工作目录的技能集。
  *
- * 技能目录是 `workdir/.fengagent/skills/*.md`（内置 4 个 + 自定义同名覆盖）。
- * 每次命令都新建 loader 再 `loadSync()`：目录小、开销可忽略，换来「新加的 .md
- * 立刻可见」，不用为一个会话缓存失效问题埋坑。
+ * 技能来自三层合并（内置 → 团队 `<teamRoot>/skills` → 本目录 `.fengagent/skills`，
+ * 同名后者覆盖前者；团队索引里的停用名单对三层都生效）。每次命令都新建 loader 再
+ * `loadSync()`：目录小、开销可忽略，换来「新加/改/停用立刻可见」。
  */
-function loadSkillsForCommand(ctx: CommandContext): SkillDefinition[] {
-  if (ctx.skills) return ctx.skills;
+function loadSkillsForCommand(ctx: CommandContext): {
+  skills: SkillDefinition[];
+  teamDir: string;
+  projectDirs: string[];
+  errors: Array<{ path: string; message: string }>;
+} {
+  if (ctx.skills) {
+    return { skills: ctx.skills, teamDir: "", projectDirs: [], errors: [] };
+  }
   const loader = createSkillLoader({ workdir: ctx.agent.getWorkdir() });
   loader.loadSync();
-  return loader.list();
+  const roots = loader.roots();
+  return {
+    skills: loader.list(),
+    teamDir: roots.team,
+    projectDirs: roots.project,
+    errors: loader.errors(),
+  };
 }
 
 /** 处理 /skill 命令 */
@@ -246,13 +259,14 @@ function handleSkillCommand(
 ): CommandResult {
   const subCmd = args[0]?.toLowerCase();
 
-  let skills: SkillDefinition[];
+  let loaded: ReturnType<typeof loadSkillsForCommand>;
   try {
-    skills = loadSkillsForCommand(ctx);
+    loaded = loadSkillsForCommand(ctx);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { handled: true, message: `读取技能目录失败: ${message}` };
   }
+  const { skills, teamDir, projectDirs, errors } = loaded;
 
   // /skill、/skill list — 列出技能
   if (!subCmd || subCmd === "list") {
@@ -261,14 +275,23 @@ function handleSkillCommand(
     }
     const lines = skills.map((s) => {
       const desc = s.description ? ` — ${s.description}` : "";
-      return `  ${s.name}${desc}`;
+      const tag = s.source === "builtin" ? "" : ` [${s.source}]`;
+      return `  ${s.name}${tag}${desc}`;
     });
+    const dirLines = [teamDir, ...projectDirs].filter((d) => d !== "");
+    const errorLine =
+      errors.length > 0
+        ? `\n⚠ ${errors.length} 个技能文件解析失败（已跳过）:\n${errors
+            .map((e) => `  ${e.path} — ${e.message}`)
+            .join("\n")}`
+        : "";
     return {
       handled: true,
       message:
         `技能列表 (${skills.length}):\n${lines.join("\n")}\n` +
         `\n用法: /skill <name> 把该技能的 prompt 填到输入框（可编辑后再发送）\n` +
-        `目录: ${ctx.agent.getWorkdir()}/.fengagent/skills/*.md（同名文件覆盖内置技能）`,
+        `目录（低→高，同名覆盖）: 内置 → ${dirLines.join(" → ")}` +
+        errorLine,
     };
   }
 

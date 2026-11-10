@@ -31,6 +31,7 @@ import { createGroupMcpRoutes } from "./mcp-groups.ts";
 import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
 import { createPluginRoutes, type PluginRouteSource, type MarketRouteSource } from "./routes/plugins.ts";
 import { createSettingsRoutes, type SettingsRouteSource } from "./routes/settings.ts";
+import { createSkillRoutes } from "./routes/skills.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
 import type { GroupOrchestrator } from "@fengagent/groups";
@@ -98,6 +99,17 @@ export interface ServerOptions {
    * 前端据此把「模型」tab 显示为不可用。
    */
   settings?: SettingsRouteSource;
+  /**
+   * 团队级技能库（P0：`/api/skills`）。
+   *
+   * 缺省即挂载（技能是本地文件，无外部依赖）；`workdir` 决定「本目录」层，
+   * `teamDir` 给测试注入临时团队根，不传则按 `FENG_TEAM_HOME` / `~/.fengagent-cordis` 解析。
+   */
+  skills?: {
+    workdir?: string;
+    teamDir?: string;
+    env?: Record<string, string | undefined>;
+  };
 }
 
 /**
@@ -199,6 +211,17 @@ export function createApp(options: ServerOptions): {
   if (options.settings) {
     app.route("/api/settings", createSettingsRoutes(options.settings));
   }
+
+  // 团队级技能库（P0）：三层合并视图 + CRUD + 启用停用 + 恢复默认
+  // 常驻挂载：技能就是本地 .md，无外部服务依赖
+  app.route(
+    "/api/skills",
+    createSkillRoutes({
+      workdir: options.skills?.workdir ?? process.cwd(),
+      ...(options.skills?.teamDir ? { teamDir: options.skills.teamDir } : {}),
+      ...(options.skills?.env ? { env: options.skills.env } : {}),
+    }),
+  );
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）
   if (staticDir) {

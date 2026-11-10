@@ -10,9 +10,10 @@
  */
 
 import { z } from "zod";
-import { SKILLS_DIR } from "@fengagent/shared";
+import { SKILL_INDEX_FILE, SKILLS_DIR } from "@fengagent/shared";
+import { resolveDataRoot, resolveTeamSkillsDir } from "@fengagent/shared";
 import { expandTilde } from "@fengagent/shared/utils";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition, ToolResult, ToolContext } from "@fengagent/core";
 import { ALLOW } from "@fengagent/core";
@@ -91,6 +92,17 @@ function parseScalar(value: string): string | number | boolean {
 // Skill 定义类型
 // ──────────────────────────────────────────────
 
+/** 技能来源层：内置 < 团队（用户级，跨 workdir） < 项目（本目录） */
+export type SkillSource = "builtin" | "team" | "project";
+
+/** 被上层同名技能覆盖的低优先级层 */
+export interface SkillShadowedLayer {
+  /** 被覆盖的层 */
+  source: SkillSource;
+  /** 被覆盖定义的文件路径（内置层无） */
+  path?: string;
+}
+
 /** Skill 定义 */
 export interface SkillDefinition {
   /** 技能名称 */
@@ -101,13 +113,36 @@ export interface SkillDefinition {
   trigger: string;
   /** Prompt 模板内容 */
   prompt: string;
+  /** 来源层 */
+  source: SkillSource;
+  /** 定义文件绝对路径（内置技能无） */
+  path?: string;
+  /** 是否启用（团队索引 `skills.json` 的 disabled 名单，对内置层同样生效） */
+  enabled: boolean;
+  /** 被当前技能覆盖的低优先级同名层（由低到高） */
+  shadowed: SkillShadowedLayer[];
+  /** 定义文件字节数（内置技能无） */
+  bytes?: number;
+  /** 定义文件最后修改时间（ISO，内置技能无） */
+  updatedAt?: string;
+}
+
+/** 技能目录里解析失败的文件（不再静默吞掉，UI/TUI 可见） */
+export interface SkillLoadError {
+  /** 文件绝对路径 */
+  path: string;
+  /** 失败原因 */
+  message: string;
 }
 
 // ──────────────────────────────────────────────
 // 内置 Skills
 // ──────────────────────────────────────────────
 
-const BUILTIN_SKILLS: SkillDefinition[] = [
+/** 内置技能的静态定义（来源/启用/覆盖关系由 loader 补齐） */
+type BuiltinSkillSeed = Pick<SkillDefinition, "name" | "description" | "trigger" | "prompt">;
+
+const BUILTIN_SKILLS: BuiltinSkillSeed[] = [
   {
     name: "code-review",
     description: "代码审查技能 — 系统性地审查代码质量、安全性和最佳实践",
@@ -192,34 +227,181 @@ describe("模块名", () => {
 export interface SkillLoaderOptions {
   /** 工作目录 */
   workdir: string;
-  /** Skills 目录路径（覆盖默认 workdir/.fengagent/skills） */
+  /** Skills 目录路径（覆盖默认 project 层：`<workdir>/.fengagent/skills` + `<数据根>/skills`） */
   skillsDir?: string;
+  /** 团队技能目录（缺省 `FENG_TEAM_HOME` > `~/.fengagent-cordis/skills`） */
+  teamDir?: string;
+  /** 自定义 project 层目录（由低到高；提供时忽略 `skillsDir`/默认目录） */
+  projectDirs?: string[];
+  /** 环境变量（默认 process.env；测试可注入） */
+  env?: Record<string, string | undefined>;
+  /** home 目录（默认 env.HOME/USERPROFILE/home） */
+  home?: string;
+}
+
+/** 单层扫描结果 */
+interface ScannedLayer {
+  source: SkillSource;
+  skills: SkillDefinition[];
+  errors: SkillLoadError[];
 }
 
 /**
  * 创建 Skill 加载器。
  *
- * 职责：
- * - 从 `.fengagent/skills/*.md` 加载自定义 Skill 定义
- * - 合并内置 Skill 定义
- * - 提供 list() 和 get() 查询接口
+ * 合并序（低 → 高，同名后者覆盖前者）：
+ *
+ *   builtin（代码内 4 个） → team（`~/.fengagent-cordis/skills`，跨 workdir 共享）
+ *   → project（`<workdir>/.fengagent/skills` 只读兼容，`<数据根>/skills`）
+ *
+ * 停用语义：团队索引 `<team>/skills.json` 的 `disabled` 名单对**所有层**生效 —— 停用后
+ * `list()/get()/names()` 都不含（skill 工具与 `/skill` 因此同步不可见），而 `all()` 仍
+ * 能看到它（管理面要展示开关状态）。`shadowed` 记录被覆盖的低优先级层，供 UI 标「已被覆盖」。
+ *
+ * 缓存按「目录 mtime + 文件 mtime/size + 索引 mtime」判定失效：长驻 server 进程里新加/改
+ * 一个 .md 不需要重启也可见。
  */
 export function createSkillLoader(options: SkillLoaderOptions) {
-  const skills = new Map<string, SkillDefinition>();
+  const env = options.env ?? process.env;
   let loaded = false;
+  let cache: {
+    signature: string;
+    byName: Map<string, SkillDefinition>;
+    layers: Array<SkillDefinition & { overriddenBy?: SkillSource }>;
+    errors: SkillLoadError[];
+  } | null = null;
 
-  function getSkillsDir(): string {
-    if (options.skillsDir) {
-      return expandTilde(options.skillsDir);
+  function teamSkillsDir(): string {
+    if (options.teamDir) return expandTilde(options.teamDir);
+    return resolveTeamSkillsDir({ env, ...(options.home ? { home: options.home } : {}) });
+  }
+
+  function projectSkillsDirs(): string[] {
+    if (options.projectDirs && options.projectDirs.length > 0) {
+      return options.projectDirs.map((d) => expandTilde(d));
     }
-    return join(options.workdir, SKILLS_DIR);
+    if (options.skillsDir) return [expandTilde(options.skillsDir)];
+    const legacy = join(options.workdir, SKILLS_DIR);
+    const dataRoot = resolveDataRoot({ workdir: options.workdir, env });
+    const modern = join(dataRoot, "skills");
+    return legacy === modern ? [legacy] : [legacy, modern];
+  }
+
+  /** 各层目录（低 → 高） */
+  function layers(): Array<{ source: SkillSource; dir: string }> {
+    return [
+      { source: "team" as const, dir: teamSkillsDir() },
+      ...projectSkillsDirs().map((dir) => ({ source: "project" as const, dir })),
+    ];
+  }
+
+  /** 目录 + 文件 + 索引的 mtime/size 指纹（用于缓存失效） */
+  function signature(): string {
+    const parts: string[] = [];
+    for (const layer of layers()) {
+      try {
+        const st = statSync(layer.dir);
+        parts.push(`${layer.dir}|d|${st.mtimeMs}`);
+        const files = readdirSync(layer.dir, { withFileTypes: true })
+          .filter((e) => e.isFile() && e.name.endsWith(".md"))
+          .map((e) => e.name)
+          .sort();
+        for (const name of files) {
+          try {
+            const fst = statSync(join(layer.dir, name));
+            parts.push(`${name}|${fst.mtimeMs}|${fst.size}`);
+          } catch {
+            parts.push(`${name}|missing`);
+          }
+        }
+      } catch {
+        parts.push(`${layer.dir}|missing`);
+      }
+    }
+    const index = join(teamSkillsDir(), SKILL_INDEX_FILE);
+    try {
+      const st = statSync(index);
+      parts.push(`index|${st.mtimeMs}|${st.size}`);
+    } catch {
+      parts.push("index|missing");
+    }
+    return parts.join("\n");
+  }
+
+  /** 读取团队索引里的 disabled 名单（损坏时记一条 error，不影响其他技能） */
+  function readDisabled(errors: SkillLoadError[]): Set<string> {
+    const index = join(teamSkillsDir(), SKILL_INDEX_FILE);
+    let raw: string;
+    try {
+      raw = readFileSync(index, "utf-8");
+    } catch {
+      return new Set();
+    }
+    try {
+      const parsed = JSON.parse(raw) as { disabled?: unknown };
+      const list = Array.isArray(parsed.disabled) ? parsed.disabled : [];
+      return new Set(list.filter((v): v is string => typeof v === "string" && v.trim() !== "").map((v) => v));
+    } catch (err) {
+      errors.push({
+        path: index,
+        message: `技能索引不是合法 JSON: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return new Set();
+    }
+  }
+
+  /** 扫描单层目录（解析失败进 errors，不静默吞） */
+  function scanLayer(source: SkillSource, dir: string): ScannedLayer {
+    const skills: SkillDefinition[] = [];
+    const errors: SkillLoadError[] = [];
+    let files: string[];
+    try {
+      files = readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map((entry) => join(dir, entry.name));
+    } catch {
+      // 目录不存在/不可读 — 这一层为空
+      return { source, skills, errors };
+    }
+
+    for (const filePath of files) {
+      try {
+        const raw = readFileSync(filePath, "utf-8");
+        const { frontmatter, body } = parseMarkdownFrontmatter(raw);
+        const base = toSkillDefinition(frontmatter, body);
+        let updatedAt: string | undefined;
+        let bytes: number | undefined;
+        try {
+          const st = statSync(filePath);
+          updatedAt = new Date(st.mtimeMs).toISOString();
+          bytes = st.size;
+        } catch {
+          // 统计失败不影响技能本身
+        }
+        skills.push({
+          ...base,
+          source,
+          path: filePath,
+          enabled: true,
+          shadowed: [],
+          ...(updatedAt ? { updatedAt } : {}),
+          ...(bytes !== undefined ? { bytes } : {}),
+        });
+      } catch (err) {
+        errors.push({
+          path: filePath,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return { source, skills, errors };
   }
 
   /** 将 frontmatter + body 转换为 SkillDefinition */
   function toSkillDefinition(
     frontmatter: Record<string, unknown>,
     body: string,
-  ): SkillDefinition {
+  ): Omit<SkillDefinition, "source" | "enabled" | "shadowed"> {
     const name = String(frontmatter["name"] ?? "").trim();
     if (!name) {
       throw new Error("Skill definition missing 'name' in frontmatter");
@@ -232,109 +414,128 @@ export function createSkillLoader(options: SkillLoaderOptions) {
     };
   }
 
-  /** 注册内置 Skills（自定义同名文件会覆盖它） */
-  function registerBuiltins(): void {
+  /** 全量重建（内置 → team → project，同名覆盖） */
+  function build(): void {
+    const errors: SkillLoadError[] = [];
+    const byName = new Map<string, SkillDefinition>();
+    const layerEntries: Array<SkillDefinition & { overriddenBy?: SkillSource }> = [];
+
     for (const skill of BUILTIN_SKILLS) {
-      skills.set(skill.name, skill);
+      const entry: SkillDefinition = {
+        ...skill,
+        source: "builtin",
+        enabled: true,
+        shadowed: [],
+      };
+      byName.set(skill.name, entry);
+      layerEntries.push(entry);
     }
+
+    const disabled = readDisabled(errors);
+
+    for (const layer of layers()) {
+      const scanned = scanLayer(layer.source, layer.dir);
+      errors.push(...scanned.errors);
+      for (const skill of scanned.skills) {
+        const prev = byName.get(skill.name);
+        if (prev) {
+          skill.shadowed = [...prev.shadowed, { source: prev.source, ...(prev.path ? { path: prev.path } : {}) }];
+        }
+        byName.set(skill.name, skill);
+        layerEntries.push(skill);
+      }
+    }
+
+    // 停用名单对内置层同样生效
+    for (const skill of byName.values()) {
+      if (disabled.has(skill.name)) skill.enabled = false;
+    }
+
+    // 逐层明细：被更高优先级同名条目覆盖时标出「被谁覆盖」
+    for (const entry of layerEntries) {
+      const winner = byName.get(entry.name);
+      if (winner && winner !== entry) entry.overriddenBy = winner.source;
+    }
+
+    cache = { signature: signature(), byName, layers: layerEntries, errors };
   }
 
-  /** 解析并注册单个 Skill 文件内容（解析失败静默跳过，与历史行为一致） */
-  function registerFileContent(content: string): void {
-    try {
-      const { frontmatter, body } = parseMarkdownFrontmatter(content);
-      const skill = toSkillDefinition(frontmatter, body);
-      skills.set(skill.name, skill);
-    } catch {
-      // 跳过解析失败的文件
-    }
+  /** 指纹变了就重建（每次读都保证拿到最新盘上状态） */
+  function ensureFresh(force = false): void {
+    if (force || !cache || cache.signature !== signature()) build();
   }
 
-  /**
-   * 加载所有 Skill 定义（异步，Bun.file 实现）。
-   *
-   * 已经加载过则直接返回 —— 需要「重新读盘」请新建一个 loader 实例或改用 `loadSync()`。
-   */
+  /** 加载所有 Skill 定义（异步签名保留给既有调用方） */
   async function load(): Promise<void> {
-    if (loaded) return;
-
-    // 先注册内置 Skills
-    registerBuiltins();
-
-    // 加载自定义 Skills
-    const dir = getSkillsDir();
-    try {
-      const glob = new Bun.Glob("*.md");
-      const files = [...glob.scanSync({ cwd: dir, absolute: true })];
-
-      for (const filePath of files) {
-        try {
-          const file = Bun.file(filePath);
-          if (!(await file.exists())) continue;
-          registerFileContent(await file.text());
-        } catch {
-          // 跳过不可读文件
-        }
-      }
-    } catch {
-      // 目录不存在或不可读 — 仅使用内置 Skills
-    }
-
+    ensureFresh();
     loaded = true;
   }
 
-  /**
-   * 同步加载所有 Skill 定义（`node:fs` 实现，供 TUI slash 命令等同步上下文使用）。
-   *
-   * 语义与 `load()` 完全一致（内置 → 自定义同名覆盖、解析失败跳过、目录缺失仅内置），
-   * 只是不做异步 I/O：`/skill list` 这类同步命令不必为了读几个 .md 变成异步链路。
-   */
+  /** 同步加载（TUI slash 命令等同步上下文） */
   function loadSync(): void {
-    if (loaded) return;
-
-    registerBuiltins();
-
-    const dir = getSkillsDir();
-    try {
-      const files = readdirSync(dir, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-        .map((entry) => join(dir, entry.name));
-
-      for (const filePath of files) {
-        try {
-          registerFileContent(readFileSync(filePath, "utf-8"));
-        } catch {
-          // 跳过不可读文件
-        }
-      }
-    } catch {
-      // 目录不存在或不可读 — 仅使用内置 Skills
-    }
-
+    ensureFresh();
     loaded = true;
   }
 
-  /** 获取指定 Skill */
+  /** 强制重新读盘 */
+  function reload(): void {
+    ensureFresh(true);
+    loaded = true;
+  }
+
+  /** 获取指定 Skill（已停用的不可见） */
   function get(name: string): SkillDefinition | undefined {
-    return skills.get(name);
+    ensureFresh();
+    const skill = cache!.byName.get(name);
+    return skill?.enabled ? skill : undefined;
   }
 
-  /** 列出所有 Skill */
+  /** 列出所有已启用 Skill（按名称排序） */
   function list(): SkillDefinition[] {
-    return [...skills.values()];
+    ensureFresh();
+    return [...cache!.byName.values()].filter((s) => s.enabled).sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  /** 列出所有 Skill 名称 */
+  /** 列出所有已启用 Skill 名称 */
   function names(): string[] {
-    return [...skills.keys()];
+    return list().map((s) => s.name);
+  }
+
+  /** 列出全部 Skill（含已停用；管理面用） */
+  function all(): SkillDefinition[] {
+    ensureFresh();
+    return [...cache!.byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** 解析失败的文件（管理面 / `/skill list` 尾部提示） */
+  function errors(): SkillLoadError[] {
+    ensureFresh();
+    return [...cache!.errors];
+  }
+
+  /** 逐层明细（含被覆盖的条目；管理面用，`overriddenBy` 指出被谁覆盖） */
+  function layersDetail(): Array<SkillDefinition & { overriddenBy?: SkillSource }> {
+    ensureFresh();
+    return [...cache!.layers];
+  }
+
+  /** 各层根目录（管理面展示「技能从哪来」） */
+  function roots(): { team: string; project: string[] } {
+    return { team: teamSkillsDir(), project: projectSkillsDirs() };
   }
 
   return {
+    workdir: options.workdir,
     load,
     loadSync,
+    reload,
     get,
     list,
     names,
+    all,
+    layers: layersDetail,
+    errors,
+    roots,
     get isLoaded(): boolean {
       return loaded;
     },
@@ -364,15 +565,19 @@ type SkillInput = z.input<typeof skillSchema>;
  * 创建 skill 工具。
  *
  * 需要注入 SkillLoader 实例。
- * 如果未提供 SkillLoader，工具会自动创建一个并加载。
+ * 如果未提供 SkillLoader，工具会按 context.workdir 自动创建并加载 —— 同一进程里
+ * 换 workdir 会换 loader（skill 的 project 层是「本目录」语义，不能跨目录复用）。
  */
 export function createSkillTool(skillLoader?: SkillLoader): ToolDefinition<SkillInput> {
   let loader = skillLoader;
 
   async function ensureLoader(workdir: string): Promise<SkillLoader> {
-    if (!loader) {
+    if (!loader || loader.workdir !== workdir) {
       loader = createSkillLoader({ workdir });
       await loader.load();
+    } else {
+      // 长驻进程：盘上新增/修改/停用要在每次调用时可见
+      loader.reload();
     }
     return loader;
   }
@@ -381,7 +586,10 @@ export function createSkillTool(skillLoader?: SkillLoader): ToolDefinition<Skill
     name: "skill",
     description: [
       "List available skills or load a skill's prompt template.",
-      "Skills are reusable prompt templates loaded from .fengagent/skills/*.md.",
+      "Skills are reusable prompt templates merged from builtin skills,",
+      "the team skill library (~/.fengagent-cordis/skills, shared across workdirs),",
+      "and this workdir's .fengagent/skills/*.md (higher priority overrides lower).",
+      "Disabled skills are not listed and cannot be loaded.",
       "Use action='list' to see available skills, action='load' with a name to get the prompt.",
     ].join("\n"),
 
@@ -415,7 +623,8 @@ export function createSkillTool(skillLoader?: SkillLoader): ToolDefinition<Skill
         const lines: string[] = [`Available skills (${skills.length}):`];
         lines.push("");
         for (const skill of skills) {
-          lines.push(`  ${skill.name} — ${skill.description}`);
+          const sourceTag = skill.source === "builtin" ? "" : ` [${skill.source}]`;
+          lines.push(`  ${skill.name}${sourceTag} — ${skill.description}`);
           if (skill.trigger) {
             lines.push(`    Trigger: ${skill.trigger}`);
           }
@@ -424,7 +633,7 @@ export function createSkillTool(skillLoader?: SkillLoader): ToolDefinition<Skill
           content: lines.join("\n"),
           metadata: {
             count: skills.length,
-            skills: skills.map((s) => ({ name: s.name, description: s.description })),
+            skills: skills.map((s) => ({ name: s.name, description: s.description, source: s.source })),
           },
         };
       }
@@ -452,6 +661,7 @@ export function createSkillTool(skillLoader?: SkillLoader): ToolDefinition<Skill
             name: skill.name,
             description: skill.description,
             trigger: skill.trigger,
+            source: skill.source,
           },
         };
       }

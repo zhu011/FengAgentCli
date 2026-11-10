@@ -296,7 +296,18 @@ export default function myPlugin(ctx: Context, config: { greeting?: string }) {
 > 兼容：旧的 `.fengagent/plugins/<name>/index.ts`（导出 `FengPlugin` 类）加载器
 > （`packages/agent/src/plugin-loader.ts`）仍可用（经适配器薄包裹），但**推荐走 Cordis 插件**。
 
-### Skills（`./.fengagent/skills/*.md`）
+### Skills（团队级共享 + 本目录覆盖）
+
+技能按三层合并，**同名高优先级覆盖低优先级**：
+
+| 层 | 位置 | 可写 | 说明 |
+|---|---|---|---|
+| `builtin` | 代码内置 4 个（code-review / debug / refactor / test） | 否 | 可覆盖、可停用、不可删改 |
+| `team` | `~/.fengagent-cordis/skills/*.md`（`FENG_TEAM_HOME` 可改根） | 是 | **团队级共享**：同机同用户、跨 workdir 一套 |
+| `project` | `<workdir>/.fengagent/skills/*.md`（旧目录，只读兼容）+ `<数据根>/skills/*.md` | 是（手工） | 本目录覆盖，优先级最高 |
+
+停用名单在 `<team>/skills.json`（`{ "version": 1, "disabled": ["name"] }`），对三层都生效：
+停用后 `skill` 工具（list/load）与 TUI `/skill` 都不再列出/加载它。
 
 ```markdown
 ---
@@ -311,6 +322,20 @@ trigger: review|审查|code review
 - 类型安全
 - 性能问题
 ```
+
+WebUI 的团队页「技能库」走 `/api/skills` 管理这套技能：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/skills?merge=1` | 三层合并视图（`source` / `shadowed` / `layers[].overriddenBy` / `errors`） |
+| GET | `/api/skills` | 只回团队层 |
+| GET | `/api/skills/:name` | 详情（含 prompt 正文） |
+| POST | `/api/skills` | 新建团队技能（团队层重名 409） |
+| PATCH/PUT | `/api/skills/:name` | 改 `description/trigger/prompt/enabled`（名称锁定；改内置=创建团队级同名覆盖） |
+| DELETE | `/api/skills/:name` | 删团队技能；内置/本目录 409（用「恢复默认」） |
+| POST | `/api/skills/:name/reset` | 恢复默认（移除团队覆盖 + 解除停用） |
+
+错误体统一 `{ "error": { "message": "...", "code": "bad_request|not_found|conflict|not_editable|internal" } }`。
 
 ## 命令行参数
 

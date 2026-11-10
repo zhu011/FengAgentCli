@@ -10,11 +10,14 @@
  */
 
 import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 import {
   CORDIS_DATA_DIR,
   DEFAULT_DATA_DIR,
   MAIN_DATA_DIR,
   MAIN_GLOBAL_DATA_DIR,
+  TEAM_HOME_DIR,
+  TEAM_SKILLS_DIR,
 } from "./constants.ts";
 import { expandTilde } from "./utils.ts";
 
@@ -50,6 +53,36 @@ export function resolveDataRoot(opts: DataRootOptions = {}): string {
 /** 日志目录 = <数据根>/logs */
 export function resolveLogsDir(opts: DataRootOptions = {}): string {
   return join(resolveDataRoot(opts), "logs");
+}
+
+/**
+ * 解析「团队（用户级）」数据根 —— 团队级共享 skill 的落盘位置。
+ *
+ * 优先级：`FENG_TEAM_HOME` > `<home>/.fengagent-cordis`。
+ *
+ * 为什么挂在 home 下而不是 workdir 的数据根：团队库的定义就是「同机同用户、跨 workdir
+ * 共享一套」。放进 workdir 的数据根等同于项目私有，换目录就看不到，达不到团队级语义。
+ * 需要整库迁移时拷这个目录即可。
+ */
+export function resolveTeamRoot(opts: {
+  env?: Record<string, string | undefined>;
+  home?: string;
+} = {}): string {
+  const env = opts.env ?? process.env;
+  const explicit = env.FENG_TEAM_HOME;
+  if (explicit && explicit !== "") {
+    return expandTilde(explicit);
+  }
+  const home = opts.home ?? env.HOME ?? env.USERPROFILE ?? homedir();
+  return join(home, TEAM_HOME_DIR);
+}
+
+/** 团队技能目录 = <团队根>/skills */
+export function resolveTeamSkillsDir(opts: {
+  env?: Record<string, string | undefined>;
+  home?: string;
+} = {}): string {
+  return join(resolveTeamRoot(opts), TEAM_SKILLS_DIR);
 }
 
 /**
