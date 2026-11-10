@@ -74,6 +74,11 @@ export interface SkillView {
   shadowed: Array<{ source: SkillApiSource; path?: string }>;
   bytes?: number;
   updatedAt?: string;
+  /**
+   * prompt 正文。列表也带上：UI「编辑」可直接回填，不必再单独取详情
+   * （契约里该字段本就可选，列表带上属于向后兼容的超集）。
+   */
+  prompt?: string;
 }
 
 /** 对外来源枚举（内部 project → 对外 workdir） */
@@ -206,6 +211,7 @@ export class SkillService {
       })),
       ...(skill.bytes !== undefined ? { bytes: skill.bytes } : {}),
       ...(skill.updatedAt ? { updatedAt: skill.updatedAt } : {}),
+      prompt: skill.prompt,
     };
   }
 

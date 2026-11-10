@@ -246,6 +246,23 @@ describe("/api/skills", () => {
     expect(merged.layers.find((l) => l.name === "code-review" && l.source === "team")?.overriddenBy).toBe("workdir");
   });
 
+  test("列表条目带 prompt（UI 编辑可直接回填，不必再取详情）", async () => {
+    mkdirSync(teamDir, { recursive: true });
+    writeFileSync(
+      join(teamDir, "with-body.md"),
+      ["---", "name: with-body", "description: 带正文", "trigger: 当需要时", "---", "", "正文内容"].join("\n"),
+      "utf-8",
+    );
+    const body = (await (await app.request("/?merge=1")).json()) as {
+      skills: Array<{ name: string; prompt?: string }>;
+      layers: Array<{ name: string; source: string; prompt?: string }>;
+    };
+    expect(body.skills.find((s) => s.name === "with-body")?.prompt).toBe("正文内容");
+    expect(body.layers.find((l) => l.name === "with-body" && l.source === "team")?.prompt).toBe("正文内容");
+    // 内置层也要带 prompt（UI 点「编辑」时能回填）
+    expect(body.skills.find((s) => s.name === "code-review")?.prompt?.length).toBeGreaterThan(0);
+  });
+
   test("解析失败文件进 errors 数组（列表不阻塞）", async () => {
     mkdirSync(teamDir, { recursive: true });
     writeFileSync(join(teamDir, "broken.md"), ["---", "description: 缺 name", "---", "body"].join("\n"));
