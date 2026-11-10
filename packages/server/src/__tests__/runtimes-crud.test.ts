@@ -53,6 +53,7 @@ interface ErrorBody {
 interface RuntimeCard {
   name: string;
   command: string;
+  executable?: string;
   args?: string[];
   protocol?: string;
   env?: Record<string, string>;
@@ -135,6 +136,7 @@ describe("外部 agent 管理面 — /api/runtimes CRUD + 探测", () => {
     expect(list).toHaveLength(1);
     expect(list[0]!.name).toBe("fake");
     expect(list[0]!.args).toEqual([FIXTURE]);
+    expect(list[0]!.executable).toBe(process.execPath);
     expect(list[0]!.protocol).toBe("acp");
     expect(list[0]!.enabled).toBe(true);
     expect(list[0]!.probeStatus).toBe("unprobed");

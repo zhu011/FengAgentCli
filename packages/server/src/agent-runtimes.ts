@@ -65,7 +65,10 @@ export interface RuntimeProbeResult {
 /** 对外的 runtime 卡片（与 WebUI `RuntimeInfo` 契约一致） */
 export interface RuntimeInfo {
   name: string;
+  /** 启动命令（含参数，卡片展示用） */
   command: string;
+  /** 纯可执行文件（编辑表单回填用，不含 args；toInfo 总会带） */
+  executable?: string;
   /** 启动参数（编辑表单要回填，所以单独给一份而不只给拼好的 command） */
   args?: string[];
   /** 启动协议（`acp` / `claude-stream-json`） */
@@ -586,6 +589,7 @@ export class AgentRuntimeRegistry {
     const base = {
       name: entry.name,
       command: [entry.command, ...(entry.args ?? [])].join(" "),
+      executable: entry.command,
       ...(entry.args === undefined ? {} : { args: [...entry.args] }),
       protocol: entry.protocol ?? "acp",
       ...(entry.env === undefined ? {} : { env: { ...entry.env } }),

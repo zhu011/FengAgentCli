@@ -223,7 +223,7 @@ export function RuntimeLibraryView({
     setEditing(r);
     setForm({
       name: r.name,
-      command: r.command,
+      command: r.executable ?? r.command,
       args: (r.args ?? []).join(" "),
       protocol: r.protocol === "claude-stream-json" ? "claude-stream-json" : "acp",
       env: Object.entries(r.env ?? {})
