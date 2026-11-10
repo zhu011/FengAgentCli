@@ -2,9 +2,11 @@
  * @fengagent/web-ui — 技能库视图（团队级共享 skill P0）
  *
  * 团队页第四个子视图：三层技能（内置 / 团队 / 本目录）的合并管理。
- * - 合并视图列出所有层定义：同名高优先层（workdir > team > builtin）胜出，
- *   被覆盖的定义带「已被 X 覆盖」徽章（管理界面要能看出 /skill 行为差异的来源）；
- * - 添加/编辑团队级技能（编辑内置 = 团队级同名覆盖，沿用同名覆盖语义）；
+ * 契约对齐后端 4c67aca：GET /api/skills?merge=1 回 {skills, layers, errors}，
+ * 本视图以 layers（逐层明细，被覆盖的带 overriddenBy）为主列表——
+ * 管理界面要能看出 /skill 行为差异的来源。
+ * - 添加/编辑团队级技能（编辑内置 = 团队级同名覆盖，沿用同名覆盖语义；
+ *   本目录层优先级最高，编辑它反而会被本地文件压住，所以不给编辑入口）；
  * - 启停为名字级状态：停用 = 该技能对 agent 侧不可见（skill 工具与 /skill 都不含）；
  * - 删除团队技能 / 恢复内置默认（两步确认）；
  * - 「填入输入框」跳 ?view=chat&prefill-skill=<name>（等价 TUI /skill <name> 的可编辑再发）。
@@ -81,6 +83,8 @@ export function SkillLibraryView({
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 各层 .md 解析失败的文件（后端 loader 报上来的） */
+  const [loadErrors, setLoadErrors] = useState<Array<{ path: string; message: string }>>([]);
   const [search, setSearch] = useState("");
 
   /** 表单开/关 + 当前编辑对象（null = 添加模式） */
@@ -97,7 +101,10 @@ export function SkillLibraryView({
     setLoading(true);
     setError(null);
     try {
-      setSkills(await source.listSkills(true));
+      // 合并视图：layers = 逐层明细（含被覆盖条目，管理面主列表）
+      const view = await source.listSkills(true);
+      setSkills(view.layers);
+      setLoadErrors(view.errors ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -202,7 +209,7 @@ export function SkillLibraryView({
     );
   }, [skills, search]);
 
-  // 同名分组：组内按层优先级排序（胜出者在前），并标注该名是否有内置层
+  // 同名分组：组内胜出者在前、被覆盖的在后，并标注该名是否有内置层
   const groups = useMemo(() => {
     const byName = new Map<string, SkillInfo[]>();
     for (const s of visible) {
@@ -212,7 +219,9 @@ export function SkillLibraryView({
     }
     return [...byName.entries()].map(([name, entries]) => ({
       name,
-      entries: [...entries].sort((a, b) => Number(Boolean(b.overriddenBy)) - Number(Boolean(a.overriddenBy))),
+      entries: [...entries].sort(
+        (a, b) => Number(Boolean(a.overriddenBy)) - Number(Boolean(b.overriddenBy)),
+      ),
       hasBuiltin: entries.some((e) => e.source === "builtin"),
     }));
   }, [visible]);
@@ -243,6 +252,12 @@ export function SkillLibraryView({
         <div className="ag-page__hint">技能后端探测失败：{probeError}，已回退演示数据</div>
       ) : null}
       {error ? <div className="ag-page__hint ag-page__hint--error">{error}</div> : null}
+      {loadErrors.length > 0 ? (
+        <div className="ag-page__hint">
+          {loadErrors.length} 个技能文件解析失败（已跳过）：
+          {loadErrors.map((e) => ` ${e.path} — ${e.message}`).join("；")}
+        </div>
+      ) : null}
 
       {/* 添加 / 编辑表单 */}
       {formOpen && (

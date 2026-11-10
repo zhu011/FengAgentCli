@@ -1,18 +1,24 @@
 /**
- * @fengagent/web-ui — 团队级技能库的 mock 后端（P0）
+ * @fengagent/web-ui — 团队级技能库的 mock 后端（对齐 DSH 4c67aca 契约）
  *
- * 后端（/api/skills）落地前的演示数据源：技能库页探测失败时自动回退。
- * 契约与 client.ts 技能方法一一对齐，错误抛 ApiError（与真实后端
- * `{error:{message,code}}` 同形），页面无需区分真实/mock。
+ * 后端（/api/skills）未就绪时的演示数据源：技能库页探测失败时自动回退。
+ * 契约与 client.ts 技能方法一一对齐（列表回 SkillListView 对象、CRUD 回
+ * 单条 SkillView、错误抛 ApiError 与 `{error:{message,code}}` 同形）。
  *
- * 合并视图语义：列出所有层的定义（内置/团队/本目录），同名时高优先层
- * （workdir > team > builtin）胜出，被覆盖的定义带 `overriddenBy`
- * 指向覆盖它的层 —— 管理界面正是要能看出「/skill 行为为什么和团队版不一样」。
- * 启停是名字级状态：停用 = 该技能对 agent 侧不可见，无论由哪层定义。
+ * 合并视图语义：skills = 每名字一条胜出项（workdir > team > builtin），
+ * layers = 逐层明细（被覆盖的带 overriddenBy）——管理界面正是要能看出
+ * 「/skill 行为为什么和团队版不一样」。启停是名字级状态：
+ * 停用 = 该技能对 agent 侧不可见，无论由哪层定义。
  */
 
 import { ApiError } from "./client.ts";
-import type { SkillEntryInput, SkillInfo, SkillSourceLayer } from "./types.ts";
+import type {
+  SkillEntryInput,
+  SkillInfo,
+  SkillListView,
+  SkillShadowedLayer,
+  SkillSourceLayer,
+} from "./types.ts";
 
 /** 层优先级（大者胜出） */
 const LAYER_ORDER: Record<SkillSourceLayer, number> = { builtin: 0, team: 1, workdir: 2 };
@@ -26,16 +32,16 @@ export const SKILL_SOURCE_LABEL: Record<SkillSourceLayer, string> = {
 
 /** 技能库数据源（client 与 mock 共同满足；页面统一走这个接口） */
 export interface SkillLibrarySource {
-  listSkills(merge?: boolean): Promise<SkillInfo[]>;
+  listSkills(merge?: boolean): Promise<SkillListView>;
   getSkill(name: string): Promise<SkillInfo>;
-  createSkill(req: SkillEntryInput): Promise<SkillInfo[]>;
-  updateSkill(name: string, patch: Partial<SkillEntryInput>): Promise<SkillInfo[]>;
-  deleteSkill(name: string): Promise<SkillInfo[]>;
-  resetSkill(name: string): Promise<SkillInfo[]>;
+  createSkill(req: SkillEntryInput): Promise<SkillInfo>;
+  updateSkill(name: string, patch: Partial<SkillEntryInput>): Promise<SkillInfo>;
+  deleteSkill(name: string): Promise<{ ok: boolean; name: string }>;
+  resetSkill(name: string): Promise<SkillInfo>;
 }
 
 function builtin(name: string, description: string, trigger: string, prompt: string): SkillInfo {
-  return { name, description, trigger, prompt, source: "builtin", enabled: true };
+  return { name, description, trigger, prompt, source: "builtin", enabled: true, editable: false, shadowed: [] };
 }
 
 /** mock 技能库（页面实例持有，仅演示；CRUD 内存生效） */
@@ -59,10 +65,10 @@ export class SkillsMock implements SkillLibrarySource {
     seed(builtin("test", "测试编写技能 — 编写高质量单元测试和集成测试", "当用户请求编写测试、增加测试覆盖或修复测试时使用", "你是测试专家。遵循 Arrange-Act-Assert 三段式、单一职责、描述性命名，覆盖正常/边界/异常/空值。"), "builtin");
 
     // 团队级共享示例
-    seed({ name: "release-notes", description: "发版说明技能 — 按团队模板生成 CHANGELOG 与发版公告", trigger: "当用户请求生成发版说明、变更日志或版本公告时使用", prompt: "按团队模板生成发版说明：先归类变更（新增/修复/破坏性），再按用户视角重写每条，最后附升级注意事项。", source: "team", enabled: true }, "team");
+    seed({ name: "release-notes", description: "发版说明技能 — 按团队模板生成 CHANGELOG 与发版公告", trigger: "当用户请求生成发版说明、变更日志或版本公告时使用", prompt: "按团队模板生成发版说明：先归类变更（新增/修复/破坏性），再按用户视角重写每条，最后附升级注意事项。", source: "team", enabled: true, editable: true, shadowed: [] }, "team");
 
     // 本目录覆盖示例：workdir 的 debug.md 覆盖内置 debug
-    seed({ name: "debug", description: "本目录定制版调试技能 — 额外要求先跑测试再定位", trigger: "当用户遇到 bug 需要调试时使用（本目录定制版）", prompt: "先跑一遍现有测试确认基线，再按复现→定位→分析→修复→验证定位问题。", source: "workdir", enabled: true }, "workdir");
+    seed({ name: "debug", description: "本目录定制版调试技能 — 额外要求先跑测试再定位", trigger: "当用户遇到 bug 需要调试时使用（本目录定制版）", prompt: "先跑一遍现有测试确认基线，再按复现→定位→分析→修复→验证定位问题。", source: "workdir", enabled: true, editable: false, shadowed: [] }, "workdir");
   }
 
   /** 同名各层按优先级排序（胜出者在前） */
@@ -72,50 +78,64 @@ export class SkillsMock implements SkillLibrarySource {
     return [...byLayer.entries()].sort((a, b) => LAYER_ORDER[b[0]] - LAYER_ORDER[a[0]]);
   }
 
-  /** 合并视图：所有层定义平铺，同名被覆盖的带 overriddenBy，启停为名字级 */
-  private merged(): SkillInfo[] {
-    const out: SkillInfo[] = [];
+  /** 胜出层（workdir > team > builtin；名字级启停生效） */
+  private winner(name: string): SkillInfo | undefined {
+    const entries = this.sortedLayers(name);
+    if (entries.length === 0) return undefined;
+    const [, skill] = entries[0]!;
+    return { ...skill, enabled: !this.disabledNames.has(name) };
+  }
+
+  /** 列表视图（merge=1 时三层全量 + 逐层明细；否则只回团队层） */
+  async listSkills(merge = false): Promise<SkillListView> {
+    const skills: SkillInfo[] = [];
+    const layerDetail: SkillInfo[] = [];
     for (const name of this.layers.keys()) {
       const entries = this.sortedLayers(name);
-      const winner = entries[0]![0];
+      const winnerLayer = entries[0]![0];
       const enabled = !this.disabledNames.has(name);
+      // 胜出项：shadowed 记录被它覆盖的低优先级层（与后端 loader 同构）
+      const shadowed: SkillShadowedLayer[] = entries
+        .slice(1)
+        .map(([layer]) => ({ source: layer }));
       for (const [layer, skill] of entries) {
-        out.push({
+        const view: SkillInfo = {
           ...skill,
           enabled,
-          ...(layer === winner ? {} : { overriddenBy: winner }),
-        });
+          editable: layer === "team",
+          ...(layer === winnerLayer ? { shadowed } : { overriddenBy: winnerLayer }),
+        };
+        layerDetail.push(view);
+        if (layer === winnerLayer) skills.push(view);
       }
     }
-    return out;
-  }
-
-  /** 团队级视图（仅 team 层） */
-  private teamOnly(): SkillInfo[] {
-    const out: SkillInfo[] = [];
-    for (const name of this.layers.keys()) {
-      const skill = this.layers.get(name)?.get("team");
-      if (skill) out.push({ ...skill, enabled: !this.disabledNames.has(name) });
+    if (!merge) {
+      return {
+        roots: { team: "(mock)", project: ["(mock)"] },
+        skills: skills.filter((s) => s.source === "team"),
+        layers: [],
+        errors: [],
+      };
     }
-    return out;
-  }
-
-  async listSkills(merge = false): Promise<SkillInfo[]> {
-    return merge ? this.merged() : this.teamOnly();
+    return {
+      roots: { team: "(mock)", project: ["(mock)"] },
+      skills,
+      layers: layerDetail,
+      errors: [],
+    };
   }
 
   async getSkill(name: string): Promise<SkillInfo> {
-    const entries = this.sortedLayers(name);
-    if (entries.length === 0) {
-      throw new ApiError(`技能「${name}」不存在`, 404, "not_found");
+    const winner = this.winner(name);
+    if (!winner) {
+      throw new ApiError(`技能不存在: ${name}`, 404, "not_found");
     }
-    // 合并语义：返回胜出层（workdir > team > builtin）
-    return { ...entries[0]![1], enabled: !this.disabledNames.has(name) };
+    return winner;
   }
 
-  async createSkill(req: SkillEntryInput): Promise<SkillInfo[]> {
+  async createSkill(req: SkillEntryInput): Promise<SkillInfo> {
     if (this.layers.get(req.name)?.has("team")) {
-      throw new ApiError(`技能「${req.name}」已存在（团队级）`, 409, "conflict");
+      throw new ApiError(`团队技能已存在: ${req.name}`, 409, "conflict");
     }
     const byLayer = this.layers.get(req.name) ?? new Map<SkillSourceLayer, SkillInfo>();
     byLayer.set("team", {
@@ -125,16 +145,20 @@ export class SkillsMock implements SkillLibrarySource {
       prompt: req.prompt,
       source: "team",
       enabled: true,
+      editable: true,
+      shadowed: [],
     });
     this.layers.set(req.name, byLayer);
     if (req.enabled === false) this.disabledNames.add(req.name);
-    return this.merged();
+    else this.disabledNames.delete(req.name);
+    const created = this.winner(req.name)!;
+    return created;
   }
 
-  async updateSkill(name: string, patch: Partial<SkillEntryInput>): Promise<SkillInfo[]> {
+  async updateSkill(name: string, patch: Partial<SkillEntryInput>): Promise<SkillInfo> {
     const byLayer = this.layers.get(name);
     if (!byLayer) {
-      throw new ApiError(`技能「${name}」不存在`, 404, "not_found");
+      throw new ApiError(`技能不存在: ${name}`, 404, "not_found");
     }
     // 启停是名字级状态，与内容字段分开处理
     if (patch.enabled !== undefined) {
@@ -154,6 +178,8 @@ export class SkillsMock implements SkillLibrarySource {
         prompt: "",
         source: "team" as const,
         enabled: true,
+        editable: true,
+        shadowed: [],
       };
       byLayer.set("team", {
         ...current,
@@ -162,36 +188,46 @@ export class SkillsMock implements SkillLibrarySource {
         ...(patch.prompt !== undefined ? { prompt: patch.prompt } : {}),
       });
     }
-    return this.merged();
+    const updated = this.winner(name);
+    if (!updated) {
+      throw new ApiError(`技能不存在: ${name}`, 404, "not_found");
+    }
+    return updated;
   }
 
-  async deleteSkill(name: string): Promise<SkillInfo[]> {
+  async deleteSkill(name: string): Promise<{ ok: boolean; name: string }> {
     const byLayer = this.layers.get(name);
     if (!byLayer) {
-      throw new ApiError(`技能「${name}」不存在`, 404, "not_found");
+      throw new ApiError(`技能不存在: ${name}`, 404, "not_found");
     }
     if (!byLayer.has("team")) {
       const isBuiltin = byLayer.has("builtin");
       throw new ApiError(
         isBuiltin
-          ? `内置技能「${name}」不能删除，只能恢复默认（reset）或用团队级同名覆盖`
-          : `本目录技能「${name}」是 workdir 下的 .md 文件，请直接编辑该文件`,
+          ? `「${name}」来自 builtin 层，不能删除；内置/本目录技能请用「恢复默认」或直接删除本目录文件`
+          : `「${name}」来自 workdir 层，不能删除；内置/本目录技能请用「恢复默认」或直接删除本目录文件`,
         409,
-        "conflict",
+        "not_editable",
       );
     }
     byLayer.delete("team");
     if (byLayer.size === 0) this.layers.delete(name);
-    return this.merged();
+    this.disabledNames.delete(name);
+    return { ok: true, name };
   }
 
-  async resetSkill(name: string): Promise<SkillInfo[]> {
+  async resetSkill(name: string): Promise<SkillInfo> {
     const byLayer = this.layers.get(name);
-    if (!byLayer?.has("builtin")) {
-      throw new ApiError(`技能「${name}」不是内置技能，没有可恢复的默认版本`, 404, "not_found");
+    if (!byLayer) {
+      throw new ApiError(`技能不存在: ${name}`, 404, "not_found");
     }
-    // 恢复默认 = 移除团队级覆盖；workdir 下的本地文件不动（那是用户自己的文件）
+    // 恢复默认 = 移除团队级覆盖 + 解除停用；workdir 下的本地文件不动
     byLayer.delete("team");
-    return this.merged();
+    this.disabledNames.delete(name);
+    const restored = this.winner(name);
+    if (!restored) {
+      throw new ApiError(`「${name}」已无任何定义可恢复`, 404, "not_found");
+    }
+    return restored;
   }
 }

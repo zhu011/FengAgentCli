@@ -544,25 +544,51 @@ export interface RuntimeProbeResult {
   };
 }
 
-/* ─── 团队级技能库（P0 契约；后端未落地时页面回退 mock） ─── */
+/* ─── 团队级技能库（对齐 DSH 后端 4c67aca 契约；后端未落地时页面回退 mock） ─── */
 
-/** 技能来源层（合并视图标注每个技能解析自哪一层） */
+/** 技能来源层（后端把内部 project 层对外统一叫 workdir） */
 export type SkillSourceLayer = "builtin" | "team" | "workdir";
 
-/** 技能条目（团队级列表 / 合并视图共用） */
+/** 被覆盖/覆盖了哪些层的明细（合并视图标注用） */
+export interface SkillShadowedLayer {
+  source: SkillSourceLayer;
+  path?: string;
+}
+
+/** 技能条目（列表 / 合并视图 / 详情共用；详情另带 prompt 正文） */
 export interface SkillInfo {
   name: string;
   description: string;
   /** 触发条件（给 LLM 的使用时机说明） */
   trigger: string;
-  /** Prompt 模板正文（详情 / 「填入输入框」用；列表可省） */
+  /** Prompt 模板正文（详情 / 「填入输入框」用；列表不带） */
   prompt?: string;
   /** 来源层（合并视图标注） */
   source: SkillSourceLayer;
-  /** 被哪一层覆盖（如内置被团队级同名覆盖 → "team"） */
-  overriddenBy?: SkillSourceLayer;
   /** 是否启用（停用 = agent 侧不可见：skill 工具与 /skill 都不含） */
   enabled: boolean;
+  /** 是否可在 UI 直接编辑（后端标 only-team；内置走「同名覆盖」、本目录走本地文件） */
+  editable?: boolean;
+  /** 团队层文件路径 */
+  path?: string;
+  /** 被哪个更高优先级层覆盖（逐层明细里用） */
+  overriddenBy?: SkillSourceLayer;
+  /** 当前条目覆盖了哪些低优先级层（合并视图里用） */
+  shadowed?: SkillShadowedLayer[];
+  bytes?: number;
+  updatedAt?: string;
+}
+
+/** 技能库列表响应（GET /api/skills[?merge=1]） */
+export interface SkillListView {
+  /** 各层根目录（管理面展示「技能从哪来」） */
+  roots: { team: string; project: string[] };
+  /** 合并视图：每个名字一条胜出项（含已停用）；不带 merge 时只回团队层 */
+  skills: SkillInfo[];
+  /** 逐层明细：所有层定义（被覆盖的带 overriddenBy）——管理面主列表 */
+  layers: SkillInfo[];
+  /** 解析失败的文件 */
+  errors: Array<{ path: string; message: string }>;
 }
 
 /** 技能写入载荷（创建/编辑共用；frontmatter .md 由后端拼装落盘） */
