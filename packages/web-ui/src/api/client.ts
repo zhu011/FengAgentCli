@@ -41,6 +41,8 @@ import type {
   RuntimeProbeResult,
   Session,
   SessionMeta,
+  SkillEntryInput,
+  SkillInfo,
   TraceAnalysisResponse,
   TraceFileMeta,
 } from "./types.ts";
@@ -303,6 +305,60 @@ export class ApiClient {
     });
     if (!res.ok) throw await this.toApiError(res, "Failed to toggle runtime");
     return (await res.json()) as RuntimeInfo[];
+  }
+
+  // ──────────────────────────────────────────────
+  // 团队级技能库（P0 契约；后端未落地时技能库页回退 mock）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/skills — 技能列表（merge=1 时合并内置/团队/本目录并标注 source） */
+  async listSkills(merge = false): Promise<SkillInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/skills${merge ? "?merge=1" : ""}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list skills");
+    return (await res.json()) as SkillInfo[];
+  }
+
+  /** GET /api/skills/:name?merge=1 — 单个技能详情（含 prompt，「填入输入框」用） */
+  async getSkill(name: string): Promise<SkillInfo> {
+    const res = await fetch(`${this.baseUrl}/api/skills/${encodeURIComponent(name)}?merge=1`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get skill");
+    return (await res.json()) as SkillInfo;
+  }
+
+  /** POST /api/skills — 添加团队级技能（.md 由后端拼装落盘；重名 409） */
+  async createSkill(req: SkillEntryInput): Promise<SkillInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to create skill");
+    return (await res.json()) as SkillInfo[];
+  }
+
+  /** PATCH /api/skills/:name — 编辑团队级技能（名称锁定；内置名 = 创建团队级覆盖） */
+  async updateSkill(name: string, patch: Partial<SkillEntryInput>): Promise<SkillInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/skills/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to update skill");
+    return (await res.json()) as SkillInfo[];
+  }
+
+  /** DELETE /api/skills/:name — 删除团队级技能（目标是未覆盖的内置 → 409 提示用 reset） */
+  async deleteSkill(name: string): Promise<SkillInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+    if (!res.ok) throw await this.toApiError(res, "Failed to delete skill");
+    return (await res.json()) as SkillInfo[];
+  }
+
+  /** POST /api/skills/:name/reset — 移除团队级覆盖，恢复内置默认 */
+  async resetSkill(name: string): Promise<SkillInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/skills/${encodeURIComponent(name)}/reset`, { method: "POST" });
+    if (!res.ok) throw await this.toApiError(res, "Failed to reset skill");
+    return (await res.json()) as SkillInfo[];
   }
 
   /** GET /api/agent-tasks — 外派任务列表 */

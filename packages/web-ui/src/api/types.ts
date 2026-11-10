@@ -485,8 +485,10 @@ export type AgentTaskStatus =
 export interface RuntimeInfo {
   /** 注册名（dispatch_task 的 agent 参数） */
   name: string;
-  /** 启动命令（含参数） */
+  /** 启动命令（含参数，卡片展示用） */
   command: string;
+  /** 纯命令（编辑表单回填用；后端未带时回退到 command） */
+  executable?: string;
   /** 启动参数（编辑表单用；后端列表未带时缺省） */
   args?: string[];
   /** 启动协议（acp / claude-stream-json；编辑表单用） */
@@ -540,6 +542,36 @@ export interface RuntimeProbeResult {
     loadSession: boolean;
     image: boolean;
   };
+}
+
+/* ─── 团队级技能库（P0 契约；后端未落地时页面回退 mock） ─── */
+
+/** 技能来源层（合并视图标注每个技能解析自哪一层） */
+export type SkillSourceLayer = "builtin" | "team" | "workdir";
+
+/** 技能条目（团队级列表 / 合并视图共用） */
+export interface SkillInfo {
+  name: string;
+  description: string;
+  /** 触发条件（给 LLM 的使用时机说明） */
+  trigger: string;
+  /** Prompt 模板正文（详情 / 「填入输入框」用；列表可省） */
+  prompt?: string;
+  /** 来源层（合并视图标注） */
+  source: SkillSourceLayer;
+  /** 被哪一层覆盖（如内置被团队级同名覆盖 → "team"） */
+  overriddenBy?: SkillSourceLayer;
+  /** 是否启用（停用 = agent 侧不可见：skill 工具与 /skill 都不含） */
+  enabled: boolean;
+}
+
+/** 技能写入载荷（创建/编辑共用；frontmatter .md 由后端拼装落盘） */
+export interface SkillEntryInput {
+  name: string;
+  description: string;
+  trigger: string;
+  prompt: string;
+  enabled?: boolean;
 }
 
 /** 外派任务事件（task_events 流的一行；对应 anet 任务详情的时间线） */

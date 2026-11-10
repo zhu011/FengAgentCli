@@ -2,12 +2,13 @@
  * @fengagent/web-ui — 「agent 团队」统一模块（M1）
  *
  * 团队 = 群 = 聊天 + 派单 + 任务卡：合并原 Agents 页（运行时/任务台账）与群聊页。
- * 三个子视图（顶部分段控件）：
+ * 四个子视图（顶部分段控件）：
  * - 团队：左团队列表（=群）+ 右团队详情（聊天流 + 任务卡就地展开 + 派单 + 收口状态条）
  * - 任务库：跨团队任务台账（7 态筛选 + 发起/取消/重试 + 详情），无群任务也在此
  * - 成员库：运行时注册表卡片（与建团队的成员选择器同源）
+ * - 技能库：团队级共享技能（内置/团队/本目录三层合并管理 + 填入输入框）
  *
- * 深链：?view=teams（团队）、&group=<id>（团队详情）、&sub=tasks|members（子视图）、
+ * 深链：?view=teams（团队）、&group=<id>（团队详情）、&sub=tasks|members|skills（子视图）、
  * &task=<id>（有 groupId 的任务在对应团队内展开任务卡；无群的进任务库详情）。
  * 旧路由 ?view=agents / ?view=groups 由 app.tsx 别名映射重定向到本页（不断链）。
  */
@@ -38,9 +39,10 @@ import {
   useAgentTaskLibrary,
   useAgentTaskSource,
 } from "./agent-views.tsx";
+import { SkillLibraryView } from "./skill-views.tsx";
 
 /** 团队页子视图 */
-type TeamsSubView = "teams" | "tasks" | "members";
+type TeamsSubView = "teams" | "tasks" | "members" | "skills";
 
 interface TeamsPageProps {
   client: ApiClient;
@@ -174,7 +176,7 @@ function taskCardBadge(content: string): { label: string; cls: string } {
 
 /* ------------------------------ 页面 ------------------------------ */
 
-export function TeamsPage({ client, deepLink }: TeamsPageProps) {
+export function TeamsPage({ client, deepLink, onNavigate }: TeamsPageProps) {
   const forceMock = useMemo(() => {
     return new URLSearchParams(window.location.search).get("mock") === "1";
   }, []);
@@ -191,7 +193,7 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
   // 子视图 + 选中态（URL 参数初始化；页内切换用 replaceState 同步，避免历史堆叠）
   const [subView, setSubView] = useState<TeamsSubView>(() => {
     const s = new URLSearchParams(window.location.search).get("sub");
-    return s === "tasks" || s === "members" ? s : "teams";
+    return s === "tasks" || s === "members" || s === "skills" ? s : "teams";
   });
   const [libTaskId, setLibTaskId] = useState<string | null>(null);
 
@@ -636,6 +638,7 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
             ["teams", "团队"],
             ["tasks", `任务库 ${library.tasks.length || ""}`],
             ["members", "成员库"],
+            ["skills", "技能库"],
           ] as Array<[TeamsSubView, string]>
         ).map(([key, label]) => (
           <button
@@ -670,6 +673,11 @@ export function TeamsPage({ client, deepLink }: TeamsPageProps) {
           selectedTaskId={libTaskId}
           onSelectTask={selectLibTask}
           mergeTask={library.mergeTask}
+        />
+      ) : subView === "skills" ? (
+        <SkillLibraryView
+          client={client}
+          onPrefill={(name) => onNavigate?.("chat", { prefillSkill: name })}
         />
       ) : subView === "members" ? (
         <RuntimeLibraryView

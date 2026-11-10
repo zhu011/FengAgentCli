@@ -145,6 +145,27 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
     setComposerKey((k) => k + 1);
   };
 
+  // 技能库「填入输入框」深链：?prefill-skill=<name> → 取该技能 prompt 预填输入框
+  // （等价 TUI /skill <name> 的「可编辑再发」；prompt 取合并视图胜出层）
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const skill = params.get("prefill-skill");
+    if (!skill) return;
+    // 用完即摘参数，刷新/分享不重复触发
+    params.delete("prefill-skill");
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+    void (async () => {
+      try {
+        const detail = await client.getSkill(skill);
+        setSuggestedPrompt(detail.prompt ?? "");
+        setComposerKey((k) => k + 1);
+      } catch {
+        // 后端未就绪时静默跳过（技能库页会显示探测失败原因）
+      }
+    })();
+  }, [client]);
+
   const commitTitleEdit = () => {
     const id = session.activeSession?.id;
     if (id) onRenameSession(id, titleDraft);
@@ -416,8 +437,10 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
       <footer className="chat-page__footer">
         {session.activeSession ? (
           <MessageInput
+            key={composerKey}
             busy={session.isStreaming}
             placeholder="问 FengAgent 任何问题..."
+            initialValue={suggestedPrompt}
             onSubmit={(text) => void session.sendMessage(text, selectedModel ?? undefined)}
             onCancel={() => void session.interrupt()}
           />

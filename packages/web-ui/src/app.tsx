@@ -40,7 +40,7 @@ import "./index.css";
 export type AppView = "chat" | "observability" | "eval" | "teams" | "settings";
 
 /** 团队页子视图（?sub= 参数） */
-export type TeamsSubViewParam = "tasks" | "members";
+export type TeamsSubViewParam = "tasks" | "members" | "skills";
 
 /** deep-link 目标（会话 + 可选消息；团队深链可带群/子视图/任务） */
 export interface DeepLinkTarget {
@@ -50,8 +50,10 @@ export interface DeepLinkTarget {
   taskId?: string;
   /** 团队深链：定位到某团队（?group=<id>） */
   groupId?: string;
-  /** 团队子视图（?sub=tasks|members，缺省为团队视图） */
+  /** 团队子视图（?sub=tasks|members|skills，缺省为团队视图） */
   subView?: TeamsSubViewParam;
+  /** 聊天深链：技能库「填入输入框」（?prefill-skill=<name>，进入后取 prompt 预填输入框） */
+  prefillSkill?: string;
 }
 
 /** URL 里的 view 值 → 规范视图（旧别名 agents/groups 归一到 teams；未知值忽略） */
@@ -114,11 +116,12 @@ function App() {
       groupId: params.get("group") ?? undefined,
       subView: ((): TeamsSubViewParam | undefined => {
         const sub = params.get("sub");
-        if (sub === "tasks" || sub === "members") return sub;
+        if (sub === "tasks" || sub === "members" || sub === "skills") return sub;
         // 旧 Agents 页语义 ≈ 任务库（无任务深链时）
         if (v === "agents" && !params.get("task")) return "tasks";
         return undefined;
       })(),
+      prefillSkill: params.get("prefill-skill") ?? undefined,
     };
     setView(targetView);
     setDeepLink(target);
@@ -145,6 +148,7 @@ function App() {
     if (target?.taskId) params.set("task", target.taskId);
     if (target?.groupId) params.set("group", target.groupId);
     if (target?.subView) params.set("sub", target.subView);
+    if (target?.prefillSkill) params.set("prefill-skill", target.prefillSkill);
     const qs = params.toString();
     window.history.pushState(null, "", qs ? `?${qs}` : window.location.pathname);
   }, []);
