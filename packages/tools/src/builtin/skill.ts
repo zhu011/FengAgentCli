@@ -95,6 +95,17 @@ function parseScalar(value: string): string | number | boolean {
 /** 技能来源层：内置 < 团队（用户级，跨 workdir） < 项目（本目录） */
 export type SkillSource = "builtin" | "team" | "project";
 
+/**
+ * 对外展示用的层名。
+ *
+ * 内部层名 `project` 指的是「本目录」这一层，但对外契约、UI、错误信息统一叫
+ * `workdir`（见 `/api/skills` 的 `source` 字段）。用户可见的地方一律用这个函数
+ * 取名字，避免同一层在两处叫两个名字。
+ */
+export function skillSourceLabel(source: SkillSource): string {
+  return source === "project" ? "workdir" : source;
+}
+
 /** 被上层同名技能覆盖的低优先级层 */
 export interface SkillShadowedLayer {
   /** 被覆盖的层 */
@@ -623,7 +634,7 @@ export function createSkillTool(skillLoader?: SkillLoader): ToolDefinition<Skill
         const lines: string[] = [`Available skills (${skills.length}):`];
         lines.push("");
         for (const skill of skills) {
-          const sourceTag = skill.source === "builtin" ? "" : ` [${skill.source}]`;
+          const sourceTag = skill.source === "builtin" ? "" : ` [${skillSourceLabel(skill.source)}]`;
           lines.push(`  ${skill.name}${sourceTag} — ${skill.description}`);
           if (skill.trigger) {
             lines.push(`    Trigger: ${skill.trigger}`);

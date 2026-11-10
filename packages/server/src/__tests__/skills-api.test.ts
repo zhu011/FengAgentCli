@@ -269,6 +269,23 @@ describe("/api/skills", () => {
     const body = (await (await app.request("/?merge=1")).json()) as { errors: Array<{ path: string }> };
     expect(body.errors.some((e) => e.path.endsWith("broken.md"))).toBe(true);
   });
+
+  test("删除本目录技能的 409 文案用对外层名 workdir（不漏内部名 project）", async () => {
+    const localDir = join(workdir, ".fengagent", "skills");
+    mkdirSync(localDir, { recursive: true });
+    writeFileSync(
+      join(localDir, "local-only.md"),
+      ["---", "name: local-only", "description: 本目录技能", "---", "", "local prompt"].join("\n"),
+      "utf-8",
+    );
+
+    const del = await app.request("/local-only", { method: "DELETE" });
+    expect(del.status).toBe(409);
+    const err = (await del.json()) as { error: { code: string; message: string } };
+    expect(err.error.code).toBe("not_editable");
+    expect(err.error.message).toContain("workdir 层");
+    expect(err.error.message).not.toContain("project");
+  });
 });
 
 describe("createApp 装配", () => {

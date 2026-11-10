@@ -308,7 +308,7 @@ export class SkillService {
       const existing = this.loader().all().find((s) => s.name === name);
       if (!existing) throw new SkillServiceError(`技能不存在: ${name}`, "not_found");
       throw new SkillServiceError(
-        `「${name}」来自 ${existing.source} 层，不能删除；内置/本目录技能请用「恢复默认」或直接删除本目录文件`,
+        `「${name}」来自 ${apiSource(existing.source)} 层，不能删除；内置/本目录技能请用「恢复默认」或直接删除本目录文件`,
         "not_editable",
       );
     }

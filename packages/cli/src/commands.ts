@@ -9,7 +9,7 @@ import type { Agent } from "@fengagent/agent";
 import type { Config, Session } from "@fengagent/core";
 import { maskApiKey, writeConfigFile } from "@fengagent/core";
 import type { McpRegistrationResult, SkillDefinition } from "@fengagent/tools";
-import { createSkillLoader } from "@fengagent/tools";
+import { createSkillLoader, skillSourceLabel } from "@fengagent/tools";
 import { readSync, writeFileSync, writeSync } from "node:fs";
 import { reloadProvider } from "./create-agent.ts";
 import { getThemeMode } from "./tui/theme.ts";
@@ -275,7 +275,7 @@ function handleSkillCommand(
     }
     const lines = skills.map((s) => {
       const desc = s.description ? ` — ${s.description}` : "";
-      const tag = s.source === "builtin" ? "" : ` [${s.source}]`;
+      const tag = s.source === "builtin" ? "" : ` [${skillSourceLabel(s.source)}]`;
       return `  ${s.name}${tag}${desc}`;
     });
     const dirLines = [teamDir, ...projectDirs].filter((d) => d !== "");

@@ -72,8 +72,8 @@ export type { GroupToolHandler, GroupToolsOptions } from "./builtin/group-tools.
 export { memorySave } from "./builtin/memory.ts";
 export { memorySearch } from "./builtin/memory.ts";
 export { memoryList } from "./builtin/memory.ts";
-export { skillTool, createSkillTool, createSkillLoader } from "./builtin/skill.ts";
-export type { SkillDefinition, SkillLoader, SkillLoaderOptions } from "./builtin/skill.ts";
+export { skillTool, createSkillTool, createSkillLoader, skillSourceLabel } from "./builtin/skill.ts";
+export type { SkillDefinition, SkillLoader, SkillLoaderOptions, SkillSource } from "./builtin/skill.ts";
 
 // MCP 集成
 export {

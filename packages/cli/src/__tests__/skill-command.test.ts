@@ -99,4 +99,18 @@ describe("/skill — 团队级技能可见", () => {
     const result = handleCommand("/skill code-review", ctx());
     expect(result.inputDraft).toBe("本目录 prompt");
   });
+
+  test("/skill list 的本目录来源标 [workdir]（不暴露内部层名 project）", () => {
+    const localDir = join(workdir, ".fengagent", "skills");
+    mkdirSync(localDir, { recursive: true });
+    writeFileSync(
+      join(localDir, "local-only.md"),
+      ["---", "name: local-only", "description: 本目录技能", "---", "", "本目录 prompt"].join("\n"),
+      "utf-8",
+    );
+
+    const result = handleCommand("/skill list", ctx());
+    expect(result.message).toContain("[workdir]");
+    expect(result.message).not.toContain("[project]");
+  });
 });
