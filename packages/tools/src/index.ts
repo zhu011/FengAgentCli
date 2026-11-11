@@ -33,13 +33,20 @@ export type {
 export {
   loadPermissionConfig,
   appendPermissionRule,
+  removePermissionRule,
   findMatchingRule,
   PermissionConfigSchema,
   PermissionRuleSchema,
   PERMISSIONS_CONFIG_PATH,
   EMPTY_PERMISSION_CONFIG,
 } from "./permission-config.ts";
-export type { PermissionConfig, PermissionRule } from "./permission-config.ts";
+export type {
+  PermissionConfig,
+  PermissionRule,
+  PermissionAction,
+  PermissionRuleMatcher,
+  RemovePermissionRuleResult,
+} from "./permission-config.ts";
 
 export { truncateOutput, getOutputDir } from "./truncate.ts";
 export type { TruncateResult } from "./truncate.ts";

@@ -33,6 +33,17 @@ export interface PermissionChecker {
 
   /** 清除决策缓存 */
   clearCache(): void;
+
+  /**
+   * 重新读取 `.fengagent/permissions.json` 并清空决策缓存。
+   *
+   * 权限规则是磁盘上的可变配置（界面上「永久允许 / 收回」都会改它），而本检查器
+   * 在启动时就把规则读进了内存 —— 不重载的话撤销要等到下次启动才生效，界面看起来
+   * 「收不回」。撤销/新增规则后调用本方法即可让运行中的会话立刻按新规则判定。
+   *
+   * @returns 重载后的权限配置
+   */
+  reload(): PermissionConfig;
 }
 
 /**
@@ -85,11 +96,11 @@ export function createPermissionChecker(
   options?: PermissionCheckerOptions,
 ): PermissionChecker {
   // 加载权限配置（文件级规则）
-  const permConfig: PermissionConfig =
+  let permConfig: PermissionConfig =
     config ?? (workdir ? loadPermissionConfig(workdir) : EMPTY_PERMISSION_CONFIG);
 
   // 决策缓存
-  const cacheEnabled = permConfig.cache;
+  let cacheEnabled = permConfig.cache;
   const decisionCache = new Map<CacheKey, PermissionResult>();
   // 非交互宿主预授权（ACP / Multica 路径）：见 PermissionCheckerOptions.unattendedPermissionPolicy
   const unattendedPolicy = options?.unattendedPermissionPolicy ?? "deny";
@@ -193,6 +204,19 @@ export function createPermissionChecker(
     checkPermissions,
     clearCache(): void {
       decisionCache.clear();
+    },
+    reload(): PermissionConfig {
+      // 只在有 workdir 时重读文件；纯内存配置（测试 / 子 agent）保持原样。
+      if (workdir) {
+        permConfig = loadPermissionConfig(workdir);
+      }
+      cacheEnabled = permConfig.cache;
+      decisionCache.clear();
+      log.info(
+        "reload",
+        `permissions reloaded rules=${permConfig.rules.length}, cache=${cacheEnabled}`,
+      );
+      return permConfig;
     },
   };
 }

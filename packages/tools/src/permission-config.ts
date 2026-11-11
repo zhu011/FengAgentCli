@@ -49,6 +49,26 @@ export const PermissionConfigSchema = z.object({
 
 export type PermissionRule = z.infer<typeof PermissionRuleSchema>;
 export type PermissionConfig = z.infer<typeof PermissionConfigSchema>;
+/** 单条规则的决策动作（allow / deny / ask） */
+export type PermissionAction = PermissionRule["action"];
+
+/**
+ * 规则匹配器 —— 定位要撤销的规则。
+ *
+ * - `tool` 按**字面**匹配（不做 `"*"` 通配展开：撤销 `"*"` 只删通配那一条，
+ *   不会顺带删掉所有具体工具规则）；
+ * - `action` 缺省时删除该 tool 的全部动作规则。
+ */
+export interface PermissionRuleMatcher {
+  tool: string;
+  action?: PermissionAction;
+}
+
+/** `removePermissionRule` 的返回：撤销后的配置 + 实际删掉的规则（供界面回显） */
+export interface RemovePermissionRuleResult {
+  config: PermissionConfig;
+  removed: PermissionRule[];
+}
 
 // ──────────────────────────────────────────────
 // 常量
@@ -103,6 +123,21 @@ export function loadPermissionConfig(workdir: string): PermissionConfig {
 // ──────────────────────────────────────────────
 
 /**
+ * 把配置原子写入 `.fengagent/permissions.json`（tmp + rename）。
+ *
+ * @param workdir - 工作目录
+ * @param config - 要落盘的配置
+ */
+function writePermissionConfig(workdir: string, config: PermissionConfig): void {
+  const configPath = resolve(workdir, PERMISSIONS_CONFIG_PATH);
+  const body = `${JSON.stringify(config, null, 2)}\n`;
+  mkdirSync(dirname(configPath), { recursive: true });
+  const tmp = `${configPath}.tmp`;
+  writeFileSync(tmp, body, "utf-8");
+  renameSync(tmp, configPath);
+}
+
+/**
  * 追加一条权限规则到 `.fengagent/permissions.json`（TUI「永久放行」用）。
  *
  * - 已存在同 `tool` + `action` 的规则时不重复添加；
@@ -123,13 +158,50 @@ export function appendPermissionRule(
     config.rules.push(rule);
   }
 
-  const configPath = resolve(workdir, PERMISSIONS_CONFIG_PATH);
-  const body = `${JSON.stringify(config, null, 2)}\n`;
-  mkdirSync(dirname(configPath), { recursive: true });
-  const tmp = `${configPath}.tmp`;
-  writeFileSync(tmp, body, "utf-8");
-  renameSync(tmp, configPath);
+  writePermissionConfig(workdir, config);
   return config;
+}
+
+/**
+ * 撤销 `.fengagent/permissions.json` 里的永久规则（WebUI Permissions 面板「收回」）。
+ *
+ * - 按 {@link PermissionRuleMatcher} 匹配：`tool` 字面相等；给了 `action` 时动作也必须相等；
+ * - 命中几条删几条（同 tool 的 allow/deny/ask 可被一并撤销）；
+ * - 文件不存在 / 无命中 → 不写盘（不会凭空创建配置文件），`removed` 为空；
+ * - 其余规则与 `cache` 开关原样保留，原子写（tmp + rename）；
+ * - 返回撤销后的配置 + 实际删掉的规则（供界面回显）。
+ *
+ * @param workdir - 工作目录
+ * @param matcher - 匹配条件（tool 必填，action 可选）
+ * @returns 撤销结果
+ */
+export function removePermissionRule(
+  workdir: string,
+  matcher: PermissionRuleMatcher,
+): RemovePermissionRuleResult {
+  const tool = matcher.tool.trim();
+  const loaded = loadPermissionConfig(workdir);
+  if (!tool || loaded.rules.length === 0) {
+    return { config: loaded, removed: [] };
+  }
+
+  const removed: PermissionRule[] = [];
+  const kept: PermissionRule[] = [];
+  for (const rule of loaded.rules) {
+    const hit =
+      rule.tool === tool &&
+      (matcher.action === undefined || rule.action === matcher.action);
+    if (hit) removed.push(rule);
+    else kept.push(rule);
+  }
+
+  if (removed.length === 0) {
+    return { config: loaded, removed };
+  }
+
+  const config: PermissionConfig = { cache: loaded.cache, rules: kept };
+  writePermissionConfig(workdir, config);
+  return { config, removed };
 }
 
 // ──────────────────────────────────────────────

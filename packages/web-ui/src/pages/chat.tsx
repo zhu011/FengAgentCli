@@ -7,7 +7,7 @@
  * - 对话流：居中窄栏（max-width 768px），助手带头像、用户右对齐气泡
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -17,9 +17,10 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Settings,
+  Trash2,
 } from "lucide-react";
 import type { ApiClient } from "../api/client.ts";
-import type { PermissionRequest } from "../api/types.ts";
+import type { PermissionGrants, PermissionRequest } from "../api/types.ts";
 import { formatValue } from "../lib/format.ts";
 import { useModels } from "../hooks/use-models.ts";
 import type { UseSessionResult, TokenStats } from "../hooks/use-session.ts";
@@ -81,9 +82,67 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
   // 欢迎页建议卡片 → 填入输入框（Round 3：DeepSeek 式「点卡片填框待编辑」）
   const [suggestedPrompt, setSuggestedPrompt] = useState("");
   const [composerKey, setComposerKey] = useState(0);
+  // Permissions 面板「已授权项」：会话级放行 + permissions.json 永久规则（可撤销）
+  const [grants, setGrants] = useState<PermissionGrants | null>(null);
+  const [grantsError, setGrantsError] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const activeSessionId = session.activeSession?.id ?? null;
+
+  /** 拉取「已授权项」（会话级 + 永久规则） */
+  const refreshGrants = useCallback(async () => {
+    if (!activeSessionId) {
+      setGrants(null);
+      return;
+    }
+    try {
+      setGrants(await client.getPermissionGrants(activeSessionId));
+      setGrantsError(null);
+    } catch (err) {
+      setGrantsError(err instanceof Error ? err.message : "已授权项加载失败");
+    }
+  }, [client, activeSessionId]);
+
+  // 打开检查器 / 切换会话 / 出现待处理请求时刷新（授权完回来也能看到）
+  useEffect(() => {
+    if (showInspector) void refreshGrants();
+  }, [showInspector, activeSessionId, session.pendingPermissions.length, refreshGrants]);
+
+  /** 收回会话级放行（「本会话允许」） */
+  const revokeSessionGrant = async (tool: string) => {
+    if (!activeSessionId || revoking) return;
+    setRevoking(`session:${tool}`);
+    try {
+      const result = await client.revokeSessionPermission(activeSessionId, tool);
+      setGrants(result.grants);
+      setGrantsError(null);
+    } catch (err) {
+      setGrantsError(err instanceof Error ? err.message : "撤销失败");
+    } finally {
+      setRevoking(null);
+    }
+  };
+
+  /** 撤销 permissions.json 永久规则 */
+  const revokePermanentRule = async (
+    tool: string,
+    action: "allow" | "deny" | "ask",
+  ) => {
+    if (!activeSessionId || revoking) return;
+    setRevoking(`permanent:${tool}:${action}`);
+    try {
+      const result = await client.revokePermissionRule(activeSessionId, { tool, action });
+      setGrants(result.grants);
+      setGrantsError(null);
+    } catch (err) {
+      setGrantsError(err instanceof Error ? err.message : "撤销失败");
+    } finally {
+      setRevoking(null);
+    }
+  };
 
   // 自动选择默认模型
   useEffect(() => {
@@ -512,12 +571,15 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
                 <PermissionCard
                   key={req.reqId}
                   request={req}
-                  onAllow={(input) =>
-                    void session.respondPermission(req.reqId, {
-                      decision: "allow",
-                      ...(input !== undefined ? { input } : {}),
-                    })
-                  }
+                  onAllow={(input, scope) => {
+                    void session
+                      .respondPermission(req.reqId, {
+                        decision: "allow",
+                        ...(input !== undefined ? { input } : {}),
+                        ...(scope === "session" ? { scope } : {}),
+                      })
+                      .then(() => refreshGrants());
+                  }}
                   onDeny={() =>
                     void session.respondPermission(req.reqId, {
                       decision: "deny",
@@ -527,6 +589,66 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
               ))}
             </div>
           )}
+
+          {/* 已授权项：会话级放行 + 永久规则，均可「收回」 */}
+          <h3 className="chat-page__inspector-title">已授权项</h3>
+          {grantsError && (
+            <p className="permission-grants__error">{grantsError}</p>
+          )}
+          {!grantsError &&
+            grants &&
+            grants.session.length === 0 &&
+            grants.permanent.length === 0 && (
+              <p className="chat-page__inspector-empty">暂无已授权项。</p>
+            )}
+          {grants && (grants.session.length > 0 || grants.permanent.length > 0) && (
+            <div className="permission-grants">
+              {grants.session.map((grant) => (
+                <div className="permission-grants__item" key={`session:${grant.tool}`}>
+                  <span className="permission-grants__tool">{grant.tool}</span>
+                  <span className="permission-grants__badge">本会话</span>
+                  <button
+                    type="button"
+                    className="permission-grants__revoke"
+                    onClick={() => void revokeSessionGrant(grant.tool)}
+                    disabled={revoking === `session:${grant.tool}`}
+                    title="收回该工具的会话级放行，下次调用重新询问"
+                  >
+                    <Trash2 size={12} />
+                    {revoking === `session:${grant.tool}` ? "撤销中…" : "撤销"}
+                  </button>
+                </div>
+              ))}
+              {grants.permanent.map((rule) => (
+                <div
+                  className="permission-grants__item"
+                  key={`permanent:${rule.tool}:${rule.action}`}
+                >
+                  <span className="permission-grants__tool">{rule.tool}</span>
+                  <span
+                    className={`permission-grants__badge permission-grants__badge--${rule.action}`}
+                    title={rule.reason ?? undefined}
+                  >
+                    永久 · {rule.action}
+                  </span>
+                  <button
+                    type="button"
+                    className="permission-grants__revoke"
+                    onClick={() => void revokePermanentRule(rule.tool, rule.action)}
+                    disabled={revoking === `permanent:${rule.tool}:${rule.action}`}
+                    title={`从 ${grants.path} 中删除该规则（立即生效）`}
+                  >
+                    <Trash2 size={12} />
+                    {revoking === `permanent:${rule.tool}:${rule.action}` ? "撤销中…" : "撤销"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {grants && grants.permanent.length > 0 && (
+            <p className="permission-grants__hint">永久规则文件：{grants.path}</p>
+          )}
+
           <h3 className="chat-page__inspector-title">Messages</h3>
           <div className="chat-page__inspector-messages">
             {session.activeMessages.map((msg) => (
@@ -565,8 +687,11 @@ function PermissionCard({
   onDeny,
 }: {
   request: PermissionRequest;
-  /** input 为 undefined 表示未改参（原参数放行）；有值表示用户修改后的入参 */
-  onAllow: (input?: unknown) => void;
+  /**
+   * input 为 undefined 表示未改参（原参数放行）；有值表示用户修改后的入参。
+   * scope = "session" 表示「本会话允许」：本会话内该工具不再询问，可撤销。
+   */
+  onAllow: (input?: unknown, scope?: "once" | "session") => void;
   onDeny: () => void;
 }) {
   const originalStr = useMemo(
@@ -586,18 +711,18 @@ function PermissionCard({
 
   const modified = draft.trim() !== originalStr.trim();
 
-  const submitAllow = () => {
+  const submitAllow = (scope: "once" | "session" = "once") => {
     if (submitting) return;
     setSubmitting(true);
     try {
       if (!modified) {
         // 未修改参数 → 原参数放行
-        onAllow(undefined);
+        onAllow(undefined, scope);
         return;
       }
       const parsed: unknown = JSON.parse(draft);
       setParseError(null);
-      onAllow(parsed);
+      onAllow(parsed, scope);
     } catch {
       setParseError("JSON 格式无效 — 请修正后重试，或 Deny 拒绝本次调用");
       setSubmitting(false);
@@ -636,9 +761,17 @@ function PermissionCard({
             <button
               type="button"
               className="permission-card__btn permission-card__btn--allow"
-              onClick={submitAllow}
+              onClick={() => submitAllow("once")}
             >
               Allow
+            </button>
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--session"
+              onClick={() => submitAllow("session")}
+              title="本会话内该工具不再询问；可在下方「已授权项」里撤销"
+            >
+              本会话允许
             </button>
             <button
               type="button"
@@ -681,9 +814,17 @@ function PermissionCard({
             <button
               type="button"
               className="permission-card__btn permission-card__btn--allow"
-              onClick={submitAllow}
+              onClick={() => submitAllow("once")}
             >
               {modified ? "以修改参数执行" : "Allow 执行"}
+            </button>
+            <button
+              type="button"
+              className="permission-card__btn permission-card__btn--session"
+              onClick={() => submitAllow("session")}
+              title="本会话内该工具不再询问；可在下方「已授权项」里撤销"
+            >
+              本会话允许
             </button>
             <button
               type="button"

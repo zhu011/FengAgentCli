@@ -19,7 +19,9 @@ export type { ServerOptions } from "./server.ts";
 export { SessionManager, SessionNotFoundError } from "./session-manager.ts";
 export type {
   PermissionRequest,
+  RespondPermissionOptions,
   SessionManagerOptions,
+  SessionPermissionGrant,
 } from "./session-manager.ts";
 
 // SSE 工具
@@ -55,6 +57,7 @@ export type {
 
 // 路由
 export { createSessionRoutes } from "./routes/sessions.ts";
+export type { PermissionRuleSource } from "./routes/sessions.ts";
 export { createModelRoutes, getDefaultModels } from "./routes/models.ts";
 export { createHealthRoutes } from "./routes/health.ts";
 

@@ -111,7 +111,24 @@ Agent 调用「有副作用」的工具（bash、文件写入、MCP 工具等）
 
 > `p` 写盘后**当次会话立即生效**（同时进了会话放行集）；文件规则对**下次启动**生效。
 
-WebUI 的审批在右上角检查器面板（入参 JSON 可编辑，等价于 TUI 的 `e`）。
+WebUI 的审批在右上角检查器面板（入参 JSON 可编辑，等价于 TUI 的 `e`）；卡片上的
+「本会话允许」等价于 TUI 的 `s`，点完会出现在面板下半部分的「已授权项」里。
+
+### 已授权项怎么收回（WebUI）
+
+检查器「Permissions」面板下半部分是**已授权项**，两类都能一键撤销：
+
+| 类型 | 来源 | 撤销后 |
+|---|---|---|
+| 本会话 | 卡片上点「本会话允许」（进程内，重启即失效） | 该工具下次调用重新弹窗 |
+| 永久 · allow/deny/ask | `.fengagent/permissions.json` 的规则 | 规则从文件删除，**立即生效**（服务端重载检查器并清空决策缓存） |
+
+对应接口（实现见 `packages/server/src/routes/sessions.ts`）：
+
+- `GET /api/sessions/:id/permissions/grants` → `{ session, permanent, path, workdir }`
+- `DELETE /api/sessions/:id/permissions/grants` `{ tool? }` → 收回会话级放行（不传 `tool` = 全部）
+- `DELETE /api/sessions/:id/permissions/rules` `{ tool, action? }` → 删除永久规则（不传 `action` = 该工具全部动作）
+
 
 ## 三、三档授权模式（不想一直点允许？）
 

@@ -962,6 +962,94 @@ body {
   color: var(--danger);
   margin-bottom: 8px;
 }
+.permission-card__btn--session {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.permission-card__btn--session:hover {
+  opacity: 0.85;
+}
+
+/* ──────────────────────────────────────────────
+   Permission Grants — 已授权项（收回）
+   ────────────────────────────────────────────── */
+.permission-grants {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.permission-grants__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+}
+.permission-grants__tool {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.permission-grants__badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.permission-grants__badge--allow {
+  color: var(--success);
+  border-color: var(--success);
+}
+.permission-grants__badge--deny {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.permission-grants__badge--ask {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.permission-grants__revoke {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.permission-grants__revoke:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.permission-grants__revoke:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.permission-grants__hint {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+.permission-grants__error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-bottom: 8px;
+}
 
 /* ──────────────────────────────────────────────
    Message List

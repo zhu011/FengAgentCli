@@ -21,6 +21,7 @@ import type { Agent } from "@fengagent/agent";
 import type { LLMClient } from "@fengagent/llm";
 import { SessionManager } from "./session-manager.ts";
 import { createSessionRoutes } from "./routes/sessions.ts";
+import type { PermissionRuleSource } from "./routes/sessions.ts";
 import { createModelRoutes } from "./routes/models.ts";
 import { createHealthRoutes } from "./routes/health.ts";
 import { createObservabilityRoutes, extractLiveSession } from "./routes/observability.ts";
@@ -110,6 +111,13 @@ export interface ServerOptions {
     teamDir?: string;
     env?: Record<string, string | undefined>;
   };
+  /**
+   * 永久权限规则面（`/api/sessions/:id/permissions/rules`，撤销 permissions.json 规则）。
+   *
+   * 缺省时该子路由返回 503（测试 / 无工作目录场景不会误写真实配置文件）；
+   * 会话级放行的撤销（`/permissions/grants`）不依赖它。
+   */
+  permissionRules?: PermissionRuleSource;
 }
 
 /**
@@ -149,7 +157,7 @@ export function createApp(options: ServerOptions): {
 
   // API 路由
   app.route("/api/health", createHealthRoutes());
-  app.route("/api/sessions", createSessionRoutes(sessionManager));
+  app.route("/api/sessions", createSessionRoutes(sessionManager, options.permissionRules));
   app.route("/api/models", createModelRoutes(config));
 
   // Agents 外派能力（P2 契约：runtime 卡片 + 任务列表/详情/取消/重试/SSE）

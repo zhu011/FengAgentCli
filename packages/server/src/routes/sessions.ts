@@ -11,6 +11,30 @@ import type { SessionEvent } from "../session-manager.ts";
 import { agentEventToSSE } from "../sse.ts";
 import type { AgentEvent } from "@fengagent/core";
 import { createLogger } from "@fengagent/shared";
+import {
+  loadPermissionConfig,
+  removePermissionRule,
+  PERMISSIONS_CONFIG_PATH,
+  type PermissionAction,
+} from "@fengagent/tools";
+
+/**
+ * 永久权限规则来源（`.fengagent/permissions.json`）。
+ *
+ * 规则是磁盘上的可变配置，服务启动时被权限检查器读进内存；`reload` 让撤销/新增
+ * 立刻对运行中的会话生效（不传则下一次启动才生效）。
+ */
+export interface PermissionRuleSource {
+  /** 规则文件所属工作目录 */
+  workdir: string;
+  /** 规则变更后重读（清空决策缓存） */
+  reload?: () => void;
+}
+
+/** 解析 `allow | deny | ask`（非法值返回 undefined，由调用方决定是否校验失败） */
+function parsePermissionAction(value: unknown): PermissionAction | undefined {
+  return value === "allow" || value === "deny" || value === "ask" ? value : undefined;
+}
 
 /**
  * 事件桥 — 把订阅回调投递的会话事件排入队列，供 SSE writer 顺序写出。
@@ -101,9 +125,26 @@ async function writeAgentEventSSE(
 }
 
 /** 创建会话路由 */
-export function createSessionRoutes(sessionManager: SessionManager): Hono {
+export function createSessionRoutes(
+  sessionManager: SessionManager,
+  permissionRules?: PermissionRuleSource,
+): Hono {
   const app = new Hono();
   const log = createLogger("server");
+
+  /** 汇总「已授权项」：会话级放行 + permissions.json 永久规则 */
+  function grantsView(sessionId: string) {
+    let permanent: ReturnType<typeof loadPermissionConfig>["rules"] = [];
+    if (permissionRules) {
+      permanent = loadPermissionConfig(permissionRules.workdir).rules;
+    }
+    return {
+      session: sessionManager.getSessionPermissionGrants(sessionId),
+      permanent,
+      path: PERMISSIONS_CONFIG_PATH,
+      workdir: permissionRules?.workdir ?? null,
+    };
+  }
 
   // POST / — 创建会话
   app.post("/", async (c) => {
@@ -244,6 +285,83 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
     return c.json({ interrupted }, interrupted ? 200 : 404);
   });
 
+  // GET /:id/permissions/grants — 已授权项（会话级放行 + permissions.json 永久规则）
+  //
+  // WebUI「Permissions」面板据此展示「本会话允许 / 永久允许」并给出撤销入口。
+  app.get("/:id/permissions/grants", (c) => {
+    const id = c.req.param("id");
+    if (!sessionManager.getSession(id)) {
+      return c.json({ error: `Session "${id}" not found` }, 404);
+    }
+    return c.json(grantsView(id));
+  });
+
+  // DELETE /:id/permissions/grants — 撤销会话级放行（「本会话允许」收回）
+  //
+  // body: { tool?: string }（缺省 = 清空该会话全部会话级授权）；也接受 ?tool= 查询参数。
+  app.delete("/:id/permissions/grants", async (c) => {
+    const id = c.req.param("id");
+    if (!sessionManager.getSession(id)) {
+      return c.json({ error: `Session "${id}" not found` }, 404);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const rawTool = body?.tool ?? c.req.query("tool");
+    const tool = typeof rawTool === "string" && rawTool.trim() ? rawTool.trim() : undefined;
+    const revoked = sessionManager.revokeSessionPermission(id, tool);
+    log.info(
+      "revokeSessionPermission",
+      `sessionId=${id}, tool=${tool ?? "(all)"}, revoked=${revoked.join(",") || "(none)"}`,
+    );
+    return c.json({ revoked, grants: grantsView(id) });
+  });
+
+  // DELETE /:id/permissions/rules — 撤销 permissions.json 永久规则
+  //
+  // body: { tool: string, action?: "allow" | "deny" | "ask" }（action 缺省 = 该工具全部规则）；
+  // 也接受 ?tool=&action= 查询参数。撤销后若提供 reload 回调，立即对运行中的会话生效。
+  app.delete("/:id/permissions/rules", async (c) => {
+    const id = c.req.param("id");
+    if (!sessionManager.getSession(id)) {
+      return c.json({ error: `Session "${id}" not found` }, 404);
+    }
+    if (!permissionRules) {
+      return c.json(
+        { error: "权限规则面未启用（服务未配置 permissions workdir）" },
+        503,
+      );
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const rawTool = body?.tool ?? c.req.query("tool");
+    const tool = typeof rawTool === "string" ? rawTool.trim() : "";
+    if (!tool) {
+      return c.json({ error: "tool is required" }, 400);
+    }
+
+    const rawAction = body?.action ?? c.req.query("action");
+    const action = parsePermissionAction(rawAction);
+    if (rawAction !== undefined && rawAction !== null && rawAction !== "" && action === undefined) {
+      return c.json({ error: 'action must be "allow" | "deny" | "ask"' }, 400);
+    }
+
+    const result = removePermissionRule(permissionRules.workdir, {
+      tool,
+      ...(action ? { action } : {}),
+    });
+    if (result.removed.length > 0) {
+      permissionRules.reload?.();
+    }
+    log.info(
+      "removePermissionRule",
+      `sessionId=${id}, tool=${tool}, action=${action ?? "(all)"}, removed=${result.removed.length}`,
+    );
+    return c.json({
+      removed: result.removed.length,
+      rules: result.config.rules,
+      grants: grantsView(id),
+    });
+  });
+
   // POST /:id/permissions/:reqId — 权限响应
   app.post("/:id/permissions/:reqId", async (c) => {
     const id = c.req.param("id");
@@ -252,7 +370,12 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
 
     // 构造 PermissionResult
     const decision = body.decision === "deny" ? "deny" : "allow";
-    log.info("respondPermission", `sessionId=${id}, reqId=${reqId}, decision=${decision}`);
+    // 「本会话允许」：scope=session 时放行同时记入会话级放行集（可经 grants 接口收回）
+    const scope = body.scope === "session" ? "session" : "once";
+    log.info(
+      "respondPermission",
+      `sessionId=${id}, reqId=${reqId}, decision=${decision}, scope=${scope}`,
+    );
     const result =
       decision === "deny"
         ? { decision: "deny" as const, reason: body.reason }
@@ -261,9 +384,9 @@ export function createSessionRoutes(sessionManager: SessionManager): Hono {
             { decision: "allow" as const, input: body.input }
           : { decision: "allow" as const };
 
-    const responded = sessionManager.respondPermission(id, reqId, result);
+    const responded = sessionManager.respondPermission(id, reqId, result, { scope });
     log.info("respondPermission", `sessionId=${id}, reqId=${reqId}, responded=${responded}`);
-    return c.json({ responded }, responded ? 200 : 404);
+    return c.json({ responded, grants: responded ? grantsView(id) : undefined }, responded ? 200 : 404);
   });
 
   // GET /:id/permissions — 获取待处理权限请求列表

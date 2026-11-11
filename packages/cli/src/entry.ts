@@ -94,6 +94,13 @@ export async function main(argv: string[]): Promise<void> {
       sessionStore: runtimeResult.sessionStore ?? undefined,
       // per-message LLM-judge（评测模块 judgeMessage）
       llmClient: runtimeResult.llmClient,
+      // Permissions 面板「收回」：permissions.json 规则列表 / 撤销 + 撤销后重载
+      permissionRules: {
+        workdir: process.cwd(),
+        reload: () => {
+          runtimeResult.permissionChecker.reload();
+        },
+      },
     });
     return;
   }

@@ -43,7 +43,12 @@ import {
   registerMcpTools,
   createDispatchTaskTool,
 } from "@fengagent/tools";
-import type { HookRegistry, McpRegistrationResult, ToolRegistry } from "@fengagent/tools";
+import type {
+  HookRegistry,
+  McpRegistrationResult,
+  PermissionChecker,
+  ToolRegistry,
+} from "@fengagent/tools";
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
@@ -265,6 +270,13 @@ export interface CreateRuntimeAgentResult {
   modelSettings: ModelSettingsService;
   /** 插件市场目录（A/B：`/api/plugins/market` + 市场安装策展校验） */
   marketCatalog: MarketCatalog;
+  /**
+   * 运行时权限检查器（`permissions.json` 规则的内存快照）。
+   *
+   * 撤销/新增永久规则后调用 `reload()` 让运行中的会话立刻按新规则判定
+   * （见 `/api/sessions/:id/permissions/rules`）。
+   */
+  permissionChecker: PermissionChecker;
 }
 
 /** 简易内存会话存储（enableSessionStore=false 时兜底，避免插件落到磁盘） */
@@ -733,6 +745,7 @@ export async function createRuntimeAgent(
     runtime,
     modelSettings,
     marketCatalog,
+    permissionChecker,
   };
 }
 

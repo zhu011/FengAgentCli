@@ -650,6 +650,76 @@ export class ApiClient {
     return await res.json();
   }
 
+  /** GET /api/sessions/:id/permissions/grants — 已授权项（会话级 + permissions.json） */
+  async getPermissionGrants(
+    sessionId: string,
+  ): Promise<import("./types.ts").PermissionGrants> {
+    const res = await fetch(
+      `${this.baseUrl}/api/sessions/${sessionId}/permissions/grants`,
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to get permission grants");
+    }
+    return (await res.json()) as import("./types.ts").PermissionGrants;
+  }
+
+  /**
+   * DELETE /api/sessions/:id/permissions/grants — 收回会话级放行（「本会话允许」）。
+   *
+   * @param tool - 工具名；不传 = 收回该会话全部会话级授权
+   */
+  async revokeSessionPermission(
+    sessionId: string,
+    tool?: string,
+  ): Promise<{ revoked: string[]; grants: import("./types.ts").PermissionGrants }> {
+    const res = await fetch(
+      `${this.baseUrl}/api/sessions/${sessionId}/permissions/grants`,
+      {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(tool ? { tool } : {}),
+      },
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to revoke session permission");
+    }
+    return (await res.json()) as {
+      revoked: string[];
+      grants: import("./types.ts").PermissionGrants;
+    };
+  }
+
+  /**
+   * DELETE /api/sessions/:id/permissions/rules — 撤销 permissions.json 永久规则。
+   *
+   * @param rule - `tool` 必填；`action` 缺省 = 撤销该工具的全部规则
+   */
+  async revokePermissionRule(
+    sessionId: string,
+    rule: { tool: string; action?: "allow" | "deny" | "ask" },
+  ): Promise<{
+    removed: number;
+    rules: import("./types.ts").PermanentPermissionRule[];
+    grants: import("./types.ts").PermissionGrants;
+  }> {
+    const res = await fetch(
+      `${this.baseUrl}/api/sessions/${sessionId}/permissions/rules`,
+      {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(rule),
+      },
+    );
+    if (!res.ok) {
+      throw await this.toApiError(res, "Failed to revoke permission rule");
+    }
+    return (await res.json()) as {
+      removed: number;
+      rules: import("./types.ts").PermanentPermissionRule[];
+      grants: import("./types.ts").PermissionGrants;
+    };
+  }
+
   // ──────────────────────────────────────────────
   // 模型
   // ──────────────────────────────────────────────

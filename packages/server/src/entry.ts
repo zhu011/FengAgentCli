@@ -79,6 +79,13 @@ async function main() {
     market: runtimeResult.marketCatalog,
     // S3：模型设置面 → /api/settings/model + /api/settings/providers
     settings: runtimeResult.modelSettings,
+    // Permissions 面板「收回」：permissions.json 规则列表 / 撤销 + 撤销后重载
+    permissionRules: {
+      workdir,
+      reload: () => {
+        runtimeResult.permissionChecker.reload();
+      },
+    },
   });
 }
 

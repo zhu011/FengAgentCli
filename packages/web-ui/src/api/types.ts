@@ -134,8 +134,36 @@ export interface PermissionRequest {
 }
 
 export type PermissionResult =
-  | { decision: "allow"; input?: unknown }
+  | {
+      decision: "allow";
+      input?: unknown;
+      /** 生效范围：once（默认，仅本次）/ session（本会话内同工具不再弹窗，可撤销） */
+      scope?: "once" | "session";
+    }
   | { decision: "deny"; reason?: string };
+
+/** 会话级放行条目（「本会话允许」） */
+export interface SessionPermissionGrant {
+  tool: string;
+  grantedAt: number;
+}
+
+/** permissions.json 里的一条永久规则 */
+export interface PermanentPermissionRule {
+  tool: string;
+  action: "allow" | "deny" | "ask";
+  reason?: string;
+}
+
+/** 已授权项（Permissions 面板「收回」用：会话级 + 永久规则） */
+export interface PermissionGrants {
+  session: SessionPermissionGrant[];
+  permanent: PermanentPermissionRule[];
+  /** 永久规则文件路径（相对 workdir） */
+  path: string;
+  /** 规则所属工作目录（未接规则面时为 null） */
+  workdir: string | null;
+}
 
 // ──────────────────────────────────────────────
 // 对话图（镜像 @fengagent/graph，Phase 3/4 分支可视化）
