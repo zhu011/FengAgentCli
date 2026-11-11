@@ -18,6 +18,7 @@ import {
   PanelRightOpen,
   Settings,
   Trash2,
+  X,
 } from "lucide-react";
 import type { ApiClient } from "../api/client.ts";
 import type { PermissionGrants, PermissionRequest } from "../api/types.ts";
@@ -560,6 +561,19 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
       {/* 检查器面板 */}
       {showInspector && (
         <aside className="chat-page__inspector">
+          {/* 面板头：标签 + 关闭按钮（面板内直接收起，不依赖顶栏切换按钮） */}
+          <div className="chat-page__inspector-toolbar">
+            <span className="chat-page__inspector-toolbar-label">检查器</span>
+            <button
+              type="button"
+              className="chat-page__inspector-close"
+              onClick={() => setShowInspector(false)}
+              aria-label="收起检查器"
+              title="收起检查器面板"
+            >
+              <X size={14} />
+            </button>
+          </div>
           <h3 className="chat-page__inspector-title">Permissions</h3>
           {session.pendingPermissions.length === 0 ? (
             <p className="chat-page__inspector-empty">

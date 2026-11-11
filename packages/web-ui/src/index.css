@@ -482,18 +482,23 @@ body {
   flex-direction: column;
   min-height: 0;
   background: var(--bg-primary);
+  /* 检查器/对话图浮层的定位基准（原 fixed 相对 viewport，top 撞进本页顶栏） */
+  position: relative;
 }
 
-/* 顶部栏 — 半透明 + 底部渐变线 */
+/* 顶部栏 — 半透明 + 底部渐变线（固定高度 = --header-height：检查器/对话图浮层的
+   top 锚点，内容经 flex 居中，不随内容撑高漂移） */
 .chat-page__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
-  min-height: var(--header-height);
+  height: var(--header-height);
   position: relative;
+  /* 顶栏（切换/设置按钮）始终压在浮层面板之上，可点不被盖 */
+  z-index: 60;
 }
 .chat-page__header::after {
   content: "";
@@ -759,7 +764,9 @@ body {
    Inspector Panel — 暗色 slide-in
    ────────────────────────────────────────────── */
 .chat-page__inspector {
-  position: fixed;
+  /* absolute 于 .chat-page（而非 fixed 于 viewport）：top 恰在本页顶栏之下，
+     不再因 app-nav 偏移盖住顶栏右侧的切换/设置按钮 */
+  position: absolute;
   top: var(--header-height);
   right: 0;
   bottom: 0;
@@ -771,6 +778,39 @@ body {
   z-index: 50;
   box-shadow: var(--shadow-lg);
   animation: slideInRight 0.25s ease-out;
+}
+
+/* 检查器面板头：标签 + 关闭按钮（面板可自行收起，不必去顶栏找切换按钮） */
+.chat-page__inspector-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px 0 8px;
+}
+
+.chat-page__inspector-toolbar-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #888);
+  letter-spacing: 0.04em;
+}
+
+.chat-page__inspector-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+}
+
+.chat-page__inspector-close:hover {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
+  color: var(--text-primary, inherit);
 }
 
 @keyframes slideInRight {
@@ -786,7 +826,8 @@ body {
 
 /* 对话图面板（Phase 4 分支可视化）— 固定在检查器左侧 */
 .chat-page__graph-panel {
-  position: fixed;
+  /* 与检查器同基准：absolute 于 .chat-page，不再盖顶栏 */
+  position: absolute;
   top: var(--header-height);
   right: 340px;
   bottom: 0;
