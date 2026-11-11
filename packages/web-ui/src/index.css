@@ -1003,17 +1003,9 @@ body {
   color: var(--danger);
   margin-bottom: 8px;
 }
-.permission-card__btn--session {
-  background: transparent;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-}
-.permission-card__btn--session:hover {
-  opacity: 0.85;
-}
 
 /* ──────────────────────────────────────────────
-   Permission Grants — 已授权项（收回）
+   Permission Grants — 全局权限规则（permissions.json，可撤销）
    ────────────────────────────────────────────── */
 .permission-grants {
   display: flex;
@@ -1031,6 +1023,8 @@ body {
   background: var(--bg-tertiary);
 }
 .permission-grants__tool {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
@@ -1059,7 +1053,6 @@ body {
   border-color: var(--warning);
 }
 .permission-grants__revoke {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1083,7 +1076,7 @@ body {
 .permission-grants__hint {
   font-size: 10px;
   color: var(--text-tertiary);
-  margin-bottom: 8px;
+  margin: 2px 0 8px;
   word-break: break-all;
 }
 .permission-grants__error {

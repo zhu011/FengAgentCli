@@ -87,25 +87,6 @@ export interface PermissionRequest {
   reject: (error: Error) => void;
 }
 
-/** 会话级授权条目（「本会话允许」） */
-export interface SessionPermissionGrant {
-  /** 工具名 */
-  tool: string;
-  /** 授权时间（epoch ms） */
-  grantedAt: number;
-}
-
-/** 权限响应的可选语义 */
-export interface RespondPermissionOptions {
-  /**
-   * 生效范围：
-   * - `once`（默认）：只放行这一次调用；
-   * - `session`：同时记入会话级放行集，本会话内同工具后续调用不再弹窗
-   *   （界面上「本会话允许」按钮；可经 {@link SessionManager.revokeSessionPermission} 收回）。
-   */
-  scope?: "once" | "session";
-}
-
 /** 运行中的 Agent 任务句柄 */
 interface RunningTask {
   /** 中断信号 */
@@ -158,13 +139,6 @@ export class SessionManager {
   private runningTasks = new Map<string, RunningTask>();
   /** sessionId → 待处理权限请求列表 */
   private pendingPermissions = new Map<string, PermissionRequest[]>();
-  /**
-   * sessionId → (工具名 → 授权时间)：会话级放行集（界面上的「本会话允许」）。
-   *
-   * 只存在于内存 —— 会话本身是进程内对象，销毁会话即失效；跨会话/跨重启的
-   * 永久放行仍落在 `.fengagent/permissions.json`（走 removePermissionRule 收回）。
-   */
-  private sessionGrants = new Map<string, Map<string, number>>();
   /** sessionId → 权限请求监听器（SSE 消费者） */
   private permissionListeners = new Map<
     string,
@@ -331,7 +305,6 @@ export class SessionManager {
     this.runningTasks.delete(sessionId);
     this.pendingPermissions.delete(sessionId);
     this.permissionListeners.delete(sessionId);
-    this.sessionGrants.delete(sessionId);
     this.subscribers.delete(sessionId);
     this.runEventLogs.delete(sessionId);
   }
@@ -656,17 +629,6 @@ export class SessionManager {
       reason?: string;
     },
   ): Promise<PermissionResult> {
-    // 会话级放行（「本会话允许」）：同一工具在本会话内不再重复弹窗。
-    // 撤销（revokeSessionPermission）后自动回到逐次审批。
-    const grantedAt = this.sessionGrants.get(sessionId)?.get(permission.toolName);
-    if (grantedAt !== undefined) {
-      log.info(
-        "requestPermission",
-        `sessionId=${sessionId}, toolName=${permission.toolName}, auto-allow=session-grant`,
-      );
-      return { decision: "allow" };
-    }
-
     const reqId = crypto.randomUUID();
 
     log.info("requestPermission", `sessionId=${sessionId}, toolName=${permission.toolName}, reqId=${reqId}`);
@@ -710,14 +672,12 @@ export class SessionManager {
    * @param sessionId - 会话 ID
    * @param reqId - 权限请求 ID
    * @param decision - 决策结果
-   * @param options - 可选语义（`scope: "session"` 时放行同时记入会话级放行集）
    * @returns 是否成功响应（找到对应请求）
    */
   respondPermission(
     sessionId: string,
     reqId: string,
     decision: PermissionResult,
-    options?: RespondPermissionOptions,
   ): boolean {
     const pending = this.pendingPermissions.get(sessionId);
     if (!pending) return false;
@@ -727,78 +687,12 @@ export class SessionManager {
 
     const [request] = pending.splice(idx, 1);
     if (!request) return false;
-    // 放行 + session 范围 → 记入会话级放行集（在 resolve 之前登记，避免
-    // 同一轮里紧接着的下一次调用又弹一次窗）。
-    if (options?.scope === "session" && decision.decision === "allow") {
-      this.grantSessionPermission(sessionId, request.toolName);
-    }
     request.resolve(decision);
     log.info(
       "respondPermission",
-      `sessionId=${sessionId}, reqId=${reqId}, decision=${decision.decision}, scope=${options?.scope ?? "once"}`,
+      `sessionId=${sessionId}, reqId=${reqId}, decision=${decision.decision}`,
     );
     return true;
-  }
-
-  /**
-   * 记入一条会话级放行（「本会话允许」）。
-   *
-   * 已存在时刷新授权时间（不重复登记）。
-   *
-   * @param sessionId - 会话 ID
-   * @param tool - 工具名
-   * @returns 授权条目；工具名为空时返回 null
-   */
-  grantSessionPermission(sessionId: string, tool: string): SessionPermissionGrant | null {
-    const name = tool.trim();
-    if (!name) return null;
-    let grants = this.sessionGrants.get(sessionId);
-    if (!grants) {
-      grants = new Map<string, number>();
-      this.sessionGrants.set(sessionId, grants);
-    }
-    const grantedAt = Date.now();
-    grants.set(name, grantedAt);
-    log.info("grantSessionPermission", `sessionId=${sessionId}, tool=${name}`);
-    return { tool: name, grantedAt };
-  }
-
-  /**
-   * 撤销会话级放行 —— `tool` 缺省时清空该会话全部会话级授权。
-   *
-   * @param sessionId - 会话 ID
-   * @param tool - 工具名（可选；不传 = 全部收回）
-   * @returns 实际被撤销的工具名
-   */
-  revokeSessionPermission(sessionId: string, tool?: string): string[] {
-    const grants = this.sessionGrants.get(sessionId);
-    if (!grants || grants.size === 0) return [];
-
-    const name = tool?.trim();
-    if (!name) {
-      const all = [...grants.keys()];
-      this.sessionGrants.delete(sessionId);
-      log.info("revokeSessionPermission", `sessionId=${sessionId}, tools=${all.join(",") || "(none)"}`);
-      return all;
-    }
-
-    const revoked = grants.delete(name) ? [name] : [];
-    if (grants.size === 0) this.sessionGrants.delete(sessionId);
-    log.info("revokeSessionPermission", `sessionId=${sessionId}, tool=${name}, revoked=${revoked.length > 0}`);
-    return revoked;
-  }
-
-  /**
-   * 列出会话级放行（按授权时间升序）。
-   *
-   * @param sessionId - 会话 ID
-   */
-  getSessionPermissionGrants(sessionId: string): SessionPermissionGrant[] {
-    const grants = this.sessionGrants.get(sessionId);
-    if (!grants) return [];
-    return [...grants.entries()]
-      .map(([tool, grantedAt]) => ({ tool, grantedAt }))
-      .sort((a, b) => a.grantedAt - b.grantedAt);
   }
 
   /**

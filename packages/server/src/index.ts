@@ -19,9 +19,7 @@ export type { ServerOptions } from "./server.ts";
 export { SessionManager, SessionNotFoundError } from "./session-manager.ts";
 export type {
   PermissionRequest,
-  RespondPermissionOptions,
   SessionManagerOptions,
-  SessionPermissionGrant,
 } from "./session-manager.ts";
 
 // SSE 工具

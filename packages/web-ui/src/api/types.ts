@@ -134,19 +134,8 @@ export interface PermissionRequest {
 }
 
 export type PermissionResult =
-  | {
-      decision: "allow";
-      input?: unknown;
-      /** 生效范围：once（默认，仅本次）/ session（本会话内同工具不再弹窗，可撤销） */
-      scope?: "once" | "session";
-    }
+  | { decision: "allow"; input?: unknown }
   | { decision: "deny"; reason?: string };
-
-/** 会话级放行条目（「本会话允许」） */
-export interface SessionPermissionGrant {
-  tool: string;
-  grantedAt: number;
-}
 
 /** permissions.json 里的一条永久规则 */
 export interface PermanentPermissionRule {
@@ -155,9 +144,8 @@ export interface PermanentPermissionRule {
   reason?: string;
 }
 
-/** 已授权项（Permissions 面板「收回」用：会话级 + 永久规则） */
+/** 全局权限规则视图（Permissions 面板展示与撤销用） */
 export interface PermissionGrants {
-  session: SessionPermissionGrant[];
   permanent: PermanentPermissionRule[];
   /** 永久规则文件路径（相对 workdir） */
   path: string;

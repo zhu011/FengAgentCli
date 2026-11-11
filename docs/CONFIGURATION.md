@@ -214,8 +214,8 @@ Provider 凭据默认从**当前工作目录**向上的配置层解析。某些�
 - `deny` — 自动拒绝
 - `ask` — 询问用户（CLI 弹框 / WebUI SSE 推送）
 
-> WebUI 检查器的「已授权项」可以直接撤销这里的永久规则（以及「本会话允许」的会话级放行），
-> 撤销后立即生效，不必再手改文件或重启。见 [MCP-PERMISSIONS.md](./MCP-PERMISSIONS.md)。
+> WebUI 检查器的「全局权限规则」可以直接撤销这里的规则，撤销后立即生效（恢复每次询问），
+> 不必再手改文件或重启。见 [MCP-PERMISSIONS.md](./MCP-PERMISSIONS.md)。
 
 ### MCP Server 配置（`./.fengagent/mcp-servers.json`）
 

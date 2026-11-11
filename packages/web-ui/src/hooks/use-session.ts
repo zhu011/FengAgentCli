@@ -119,9 +119,7 @@ export interface UseSessionResult {
   interrupt: () => Promise<void>;
   respondPermission: (
     reqId: string,
-    result:
-      | { decision: "allow"; input?: unknown; scope?: "once" | "session" }
-      | { decision: "deny"; reason?: string },
+    result: { decision: "allow"; input?: unknown } | { decision: "deny"; reason?: string },
   ) => Promise<void>;
   refreshSession: () => Promise<void>;
   refreshGraph: () => Promise<void>;
@@ -890,9 +888,7 @@ export function useSession(client: ApiClient): UseSessionResult {
   const respondPermission = useCallback(
     async (
       reqId: string,
-      result:
-        | { decision: "allow"; input?: unknown; scope?: "once" | "session" }
-        | { decision: "deny"; reason?: string },
+      result: { decision: "allow"; input?: unknown } | { decision: "deny"; reason?: string },
     ) => {
       const sessionId = activeSessionIdRef.current;
       if (!sessionId) return;

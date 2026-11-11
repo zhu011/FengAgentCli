@@ -132,14 +132,13 @@ export function createSessionRoutes(
   const app = new Hono();
   const log = createLogger("server");
 
-  /** 汇总「已授权项」：会话级放行 + permissions.json 永久规则 */
-  function grantsView(sessionId: string) {
+  /** 汇总「已授权项」：permissions.json 永久规则（跨会话、跨重启生效） */
+  function grantsView() {
     let permanent: ReturnType<typeof loadPermissionConfig>["rules"] = [];
     if (permissionRules) {
       permanent = loadPermissionConfig(permissionRules.workdir).rules;
     }
     return {
-      session: sessionManager.getSessionPermissionGrants(sessionId),
       permanent,
       path: PERMISSIONS_CONFIG_PATH,
       workdir: permissionRules?.workdir ?? null,
@@ -285,34 +284,15 @@ export function createSessionRoutes(
     return c.json({ interrupted }, interrupted ? 200 : 404);
   });
 
-  // GET /:id/permissions/grants — 已授权项（会话级放行 + permissions.json 永久规则）
+  // GET /:id/permissions/grants — 已授权项（permissions.json 永久规则）
   //
-  // WebUI「Permissions」面板据此展示「本会话允许 / 永久允许」并给出撤销入口。
+  // WebUI「Permissions」面板据此展示全局权限规则并给出撤销入口。
   app.get("/:id/permissions/grants", (c) => {
     const id = c.req.param("id");
     if (!sessionManager.getSession(id)) {
       return c.json({ error: `Session "${id}" not found` }, 404);
     }
-    return c.json(grantsView(id));
-  });
-
-  // DELETE /:id/permissions/grants — 撤销会话级放行（「本会话允许」收回）
-  //
-  // body: { tool?: string }（缺省 = 清空该会话全部会话级授权）；也接受 ?tool= 查询参数。
-  app.delete("/:id/permissions/grants", async (c) => {
-    const id = c.req.param("id");
-    if (!sessionManager.getSession(id)) {
-      return c.json({ error: `Session "${id}" not found` }, 404);
-    }
-    const body = await c.req.json().catch(() => ({}));
-    const rawTool = body?.tool ?? c.req.query("tool");
-    const tool = typeof rawTool === "string" && rawTool.trim() ? rawTool.trim() : undefined;
-    const revoked = sessionManager.revokeSessionPermission(id, tool);
-    log.info(
-      "revokeSessionPermission",
-      `sessionId=${id}, tool=${tool ?? "(all)"}, revoked=${revoked.join(",") || "(none)"}`,
-    );
-    return c.json({ revoked, grants: grantsView(id) });
+    return c.json(grantsView());
   });
 
   // DELETE /:id/permissions/rules — 撤销 permissions.json 永久规则
@@ -358,7 +338,7 @@ export function createSessionRoutes(
     return c.json({
       removed: result.removed.length,
       rules: result.config.rules,
-      grants: grantsView(id),
+      grants: grantsView(),
     });
   });
 
@@ -370,12 +350,7 @@ export function createSessionRoutes(
 
     // 构造 PermissionResult
     const decision = body.decision === "deny" ? "deny" : "allow";
-    // 「本会话允许」：scope=session 时放行同时记入会话级放行集（可经 grants 接口收回）
-    const scope = body.scope === "session" ? "session" : "once";
-    log.info(
-      "respondPermission",
-      `sessionId=${id}, reqId=${reqId}, decision=${decision}, scope=${scope}`,
-    );
+    log.info("respondPermission", `sessionId=${id}, reqId=${reqId}, decision=${decision}`);
     const result =
       decision === "deny"
         ? { decision: "deny" as const, reason: body.reason }
@@ -384,9 +359,9 @@ export function createSessionRoutes(
             { decision: "allow" as const, input: body.input }
           : { decision: "allow" as const };
 
-    const responded = sessionManager.respondPermission(id, reqId, result, { scope });
+    const responded = sessionManager.respondPermission(id, reqId, result);
     log.info("respondPermission", `sessionId=${id}, reqId=${reqId}, responded=${responded}`);
-    return c.json({ responded, grants: responded ? grantsView(id) : undefined }, responded ? 200 : 404);
+    return c.json({ responded, grants: responded ? grantsView() : undefined }, responded ? 200 : 404);
   });
 
   // GET /:id/permissions — 获取待处理权限请求列表

@@ -652,7 +652,7 @@ export class ApiClient {
     return await res.json();
   }
 
-  /** GET /api/sessions/:id/permissions/grants — 已授权项（会话级 + permissions.json） */
+  /** GET /api/sessions/:id/permissions/grants — 全局权限规则（permissions.json） */
   async getPermissionGrants(sessionId: string): Promise<PermissionGrants> {
     const res = await fetch(
       `${this.baseUrl}/api/sessions/${sessionId}/permissions/grants`,
@@ -661,29 +661,6 @@ export class ApiClient {
       throw await this.toApiError(res, "Failed to get permission grants");
     }
     return (await res.json()) as PermissionGrants;
-  }
-
-  /**
-   * DELETE /api/sessions/:id/permissions/grants — 收回会话级放行（「本会话允许」）。
-   *
-   * @param tool - 工具名；不传 = 收回该会话全部会话级授权
-   */
-  async revokeSessionPermission(
-    sessionId: string,
-    tool?: string,
-  ): Promise<{ revoked: string[]; grants: PermissionGrants }> {
-    const res = await fetch(
-      `${this.baseUrl}/api/sessions/${sessionId}/permissions/grants`,
-      {
-        method: "DELETE",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(tool ? { tool } : {}),
-      },
-    );
-    if (!res.ok) {
-      throw await this.toApiError(res, "Failed to revoke session permission");
-    }
-    return (await res.json()) as { revoked: string[]; grants: PermissionGrants };
   }
 
   /**
