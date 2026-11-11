@@ -32,6 +32,8 @@ import type {
   MessageEvalResponse,
   MessageTracesResponse,
   ModelsResponse,
+  PermanentPermissionRule,
+  PermissionGrants,
   PermissionResult,
   PluginMutationResult,
   PluginsListResponse,
@@ -651,16 +653,14 @@ export class ApiClient {
   }
 
   /** GET /api/sessions/:id/permissions/grants — 已授权项（会话级 + permissions.json） */
-  async getPermissionGrants(
-    sessionId: string,
-  ): Promise<import("./types.ts").PermissionGrants> {
+  async getPermissionGrants(sessionId: string): Promise<PermissionGrants> {
     const res = await fetch(
       `${this.baseUrl}/api/sessions/${sessionId}/permissions/grants`,
     );
     if (!res.ok) {
       throw await this.toApiError(res, "Failed to get permission grants");
     }
-    return (await res.json()) as import("./types.ts").PermissionGrants;
+    return (await res.json()) as PermissionGrants;
   }
 
   /**
@@ -671,7 +671,7 @@ export class ApiClient {
   async revokeSessionPermission(
     sessionId: string,
     tool?: string,
-  ): Promise<{ revoked: string[]; grants: import("./types.ts").PermissionGrants }> {
+  ): Promise<{ revoked: string[]; grants: PermissionGrants }> {
     const res = await fetch(
       `${this.baseUrl}/api/sessions/${sessionId}/permissions/grants`,
       {
@@ -683,10 +683,7 @@ export class ApiClient {
     if (!res.ok) {
       throw await this.toApiError(res, "Failed to revoke session permission");
     }
-    return (await res.json()) as {
-      revoked: string[];
-      grants: import("./types.ts").PermissionGrants;
-    };
+    return (await res.json()) as { revoked: string[]; grants: PermissionGrants };
   }
 
   /**
@@ -699,8 +696,8 @@ export class ApiClient {
     rule: { tool: string; action?: "allow" | "deny" | "ask" },
   ): Promise<{
     removed: number;
-    rules: import("./types.ts").PermanentPermissionRule[];
-    grants: import("./types.ts").PermissionGrants;
+    rules: PermanentPermissionRule[];
+    grants: PermissionGrants;
   }> {
     const res = await fetch(
       `${this.baseUrl}/api/sessions/${sessionId}/permissions/rules`,
@@ -715,8 +712,8 @@ export class ApiClient {
     }
     return (await res.json()) as {
       removed: number;
-      rules: import("./types.ts").PermanentPermissionRule[];
-      grants: import("./types.ts").PermissionGrants;
+      rules: PermanentPermissionRule[];
+      grants: PermissionGrants;
     };
   }
 
