@@ -124,6 +124,7 @@ WebUI 的审批在右上角检查器面板（入参 JSON 可编辑，等价于 T
 对应接口（实现见 `packages/server/src/routes/sessions.ts`）：
 
 - `GET /api/sessions/:id/permissions/grants` → `{ permanent, path, workdir }`
+- `POST /api/sessions/:id/permissions/rules` `{ tool, action, reason? }` → 添加全局规则（同 tool+action 幂等，立即生效）
 - `DELETE /api/sessions/:id/permissions/rules` `{ tool, action? }` → 删除永久规则（不传 `action` = 该工具全部动作）
 
 

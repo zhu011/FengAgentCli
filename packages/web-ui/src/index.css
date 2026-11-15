@@ -1076,8 +1076,63 @@ body {
 .permission-grants__hint {
   font-size: 10px;
   color: var(--text-tertiary);
-  margin: 2px 0 8px;
+  margin: 8px 0 0;
   word-break: break-all;
+}
+
+/* 「添加全局权限」行：与规则行同高对齐（输入 + 动作下拉 + 添加按钮） */
+.permission-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.permission-add__input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.permission-add__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.permission-add__select {
+  height: 30px;
+  padding: 0 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+.permission-add__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+.permission-add__btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.permission-add__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .permission-grants__error {
   font-size: 12px;

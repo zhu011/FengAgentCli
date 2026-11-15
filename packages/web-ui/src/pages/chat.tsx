@@ -16,6 +16,7 @@ import {
   Loader2,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   Settings,
   Trash2,
   X,
@@ -83,10 +84,15 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
   // 欢迎页建议卡片 → 填入输入框（Round 3：DeepSeek 式「点卡片填框待编辑」）
   const [suggestedPrompt, setSuggestedPrompt] = useState("");
   const [composerKey, setComposerKey] = useState(0);
-  // Permissions 面板「全局权限规则」：permissions.json 永久规则（跨会话生效，可撤销）
+  // Permissions 面板「全局权限规则」：permissions.json 永久规则（跨会话生效，可增可撤）
   const [grants, setGrants] = useState<PermissionGrants | null>(null);
   const [grantsError, setGrantsError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  // 「添加全局权限」表单
+  const [addTool, setAddTool] = useState("");
+  const [addAction, setAddAction] = useState<"allow" | "deny" | "ask">("allow");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -127,6 +133,25 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
       setGrantsError(err instanceof Error ? err.message : "撤销失败");
     } finally {
       setRevoking(null);
+    }
+  };
+
+  /** 添加全局权限规则（写 permissions.json，同 tool+action 幂等） */
+  const addGlobalRule = async () => {
+    if (!activeSessionId || adding) return;
+    const tool = addTool.trim();
+    if (!tool) return;
+    setAdding(true);
+    setAddError(null);
+    try {
+      const result = await client.addPermissionRule(activeSessionId, { tool, action: addAction });
+      setGrants(result.grants);
+      setGrantsError(null);
+      setAddTool("");
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : "添加失败");
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -588,7 +613,7 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
             </div>
           )}
 
-          {/* 全局权限规则（permissions.json，跨会话生效）：面板打开即可见，逐条可撤销 */}
+          {/* 全局权限规则（permissions.json，跨会话生效）：面板打开即可见，可增可撤 */}
           <h3 className="chat-page__inspector-title">全局权限规则</h3>
           {grantsError && (
             <p className="permission-grants__error">{grantsError}</p>
@@ -616,17 +641,58 @@ export function ChatPage({ client, session, theme, onSelectTheme, onRenameSessio
                     className="permission-grants__revoke"
                     onClick={() => void revokePermanentRule(rule.tool, rule.action)}
                     disabled={revoking === `${rule.tool}:${rule.action}`}
-                    title={`从 ${grants.path} 中删除该规则，恢复每次询问（立即生效）`}
+                    title={`从 ${grants.path} 中删除该规则，恢复默认行为（立即生效）`}
                   >
                     <Trash2 size={12} />
                     {revoking === `${rule.tool}:${rule.action}` ? "撤销中…" : "撤销"}
                   </button>
                 </div>
               ))}
-              <p className="permission-grants__hint" title={grants.workdir ?? undefined}>
-                规则文件：{grants.path}（跨会话生效，撤销立即生效）
-              </p>
             </div>
+          )}
+          {grants && (
+            <div className="permission-add">
+              <input
+                type="text"
+                className="permission-add__input"
+                placeholder="工具名（如 bash）"
+                value={addTool}
+                aria-label="工具名"
+                onChange={(e) => setAddTool(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void addGlobalRule();
+                  }
+                }}
+              />
+              <select
+                className="permission-add__select"
+                value={addAction}
+                aria-label="动作"
+                onChange={(e) => setAddAction(e.target.value as "allow" | "deny" | "ask")}
+              >
+                <option value="allow">allow · 总是允许</option>
+                <option value="ask">ask · 每次询问</option>
+                <option value="deny">deny · 总是拒绝</option>
+              </select>
+              <button
+                type="button"
+                className="permission-add__btn"
+                disabled={adding || addTool.trim() === ""}
+                onClick={() => void addGlobalRule()}
+                title="添加一条全局权限规则（写入 permissions.json，立即生效）"
+              >
+                <Plus size={12} aria-hidden="true" />
+                {adding ? "添加中…" : "添加"}
+              </button>
+            </div>
+          )}
+          {addError && <p className="permission-grants__error">{addError}</p>}
+          {grants && (
+            <p className="permission-grants__hint" title={grants.workdir ?? undefined}>
+              规则文件：{grants.path} · 跨会话生效，增删立即生效
+            </p>
           )}
 
           <h3 className="chat-page__inspector-title">Messages</h3>

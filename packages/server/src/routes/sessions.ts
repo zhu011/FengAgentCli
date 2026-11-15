@@ -12,6 +12,7 @@ import { agentEventToSSE } from "../sse.ts";
 import type { AgentEvent } from "@fengagent/core";
 import { createLogger } from "@fengagent/shared";
 import {
+  appendPermissionRule,
   loadPermissionConfig,
   removePermissionRule,
   PERMISSIONS_CONFIG_PATH,
@@ -340,6 +341,47 @@ export function createSessionRoutes(
       rules: result.config.rules,
       grants: grantsView(),
     });
+  });
+
+  // POST /:id/permissions/rules — 添加全局权限规则（面板「添加全局权限」表单）
+  //
+  // body: { tool, action: "allow" | "deny" | "ask", reason? }。
+  // 同 tool+action 幂等（不重复添加）；写入后 reload 立即生效。
+  // 注意：必须注册在 POST /:id/permissions/:reqId 之前，否则 "rules" 会被当作 reqId 吞掉。
+  app.post("/:id/permissions/rules", async (c) => {
+    const id = c.req.param("id");
+    if (!sessionManager.getSession(id)) {
+      return c.json({ error: `Session "${id}" not found` }, 404);
+    }
+    if (!permissionRules) {
+      return c.json(
+        { error: "权限规则面未启用（服务未配置 permissions workdir）" },
+        503,
+      );
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const tool = typeof body?.tool === "string" ? body.tool.trim() : "";
+    if (!tool) {
+      return c.json({ error: "tool is required" }, 400);
+    }
+    const action = parsePermissionAction(body?.action);
+    if (action === undefined) {
+      return c.json({ error: 'action must be "allow" | "deny" | "ask"' }, 400);
+    }
+    const reason =
+      typeof body?.reason === "string" && body.reason.trim() !== ""
+        ? body.reason.trim()
+        : undefined;
+
+    const config = appendPermissionRule(permissionRules.workdir, {
+      tool,
+      action,
+      ...(reason ? { reason } : {}),
+    });
+    permissionRules.reload?.();
+    log.info("appendPermissionRule", `sessionId=${id}, tool=${tool}, action=${action}`);
+    return c.json({ rules: config.rules, grants: grantsView() }, 201);
   });
 
   // POST /:id/permissions/:reqId — 权限响应

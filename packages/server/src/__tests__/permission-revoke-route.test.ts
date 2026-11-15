@@ -4,7 +4,8 @@
  * 覆盖链路：
  * 1. `GET  /api/sessions/:id/permissions/grants` —— 全局权限规则（permissions.json）；
  * 2. `DELETE /api/sessions/:id/permissions/rules` —— 撤销永久规则（落盘 + 触发 reload）；
- * 3. 未配置规则面 → 503（不会误写真实配置文件），会话不存在 → 404。
+ * 3. `POST /api/sessions/:id/permissions/rules` —— 添加全局规则（落盘 + 幂等 + reload）；
+ * 4. 未配置规则面 → 503（不会误写真实配置文件），会话不存在 → 404。
  *
  * 会话级放行（「本会话允许」）已按 owner 决策移除（2026-11-11）。
  */
@@ -255,5 +256,82 @@ describe("权限收回 — HTTP 路由级", () => {
       new Request(`http://localhost/api/sessions/does-not-exist/permissions/grants`),
     );
     expect(missingSession.status).toBe(404);
+  }, 20000);
+
+  test("添加全局规则：落盘 + 幂等 + reload + 非法 action 400", async () => {
+    const llm = new MockLLMClient();
+    llm.setResponses([]);
+    let reloads = 0;
+    const workdir = makeTempDir("feng-perm-add-workdir-");
+    const { app, sessionManager } = createApp({
+      config: createTestConfig(),
+      createAgent: () => createTestAgent(llm),
+      permissionRules: { workdir, reload: () => void (reloads += 1) },
+    });
+    const session = sessionManager.createSession("add rules");
+
+    // 添加一条
+    const added = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}/permissions/rules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: "bash", action: "allow", reason: "自动化放行" }),
+      }),
+    );
+    expect(added.status).toBe(201);
+    const addedBody = (await added.json()) as {
+      rules: Array<{ tool: string; action: string; reason?: string }>;
+      grants: { permanent: Array<{ tool: string; action: string; reason?: string }> };
+    };
+    expect(addedBody.rules).toEqual([{ tool: "bash", action: "allow", reason: "自动化放行" }]);
+    expect(addedBody.grants.permanent).toEqual([{ tool: "bash", action: "allow", reason: "自动化放行" }]);
+    expect(reloads).toBe(1);
+    // 磁盘真实落盘
+    expect(loadPermissionConfig(workdir).rules).toEqual([
+      { tool: "bash", action: "allow", reason: "自动化放行" },
+    ]);
+
+    // 同 tool+action 幂等（不重复，也不触发多余 reload）
+    const again = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}/permissions/rules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: "bash", action: "allow" }),
+      }),
+    );
+    expect(again.status).toBe(201);
+    expect(((await again.json()) as { rules: unknown[] }).rules).toHaveLength(1);
+    expect(reloads).toBe(2);
+
+    // 同 tool 不同 action 追加（bash:ask 与 bash:allow 并存）
+    const askRule = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}/permissions/rules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: "grep", action: "ask" }),
+      }),
+    );
+    expect(((await askRule.json()) as { rules: unknown[] }).rules).toHaveLength(2);
+
+    // 非法 action → 400；缺 tool → 400
+    const bad = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}/permissions/rules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: "x", action: "nope" }),
+      }),
+    );
+    expect(bad.status).toBe(400);
+    const empty = await app.fetch(
+      new Request(`http://localhost/api/sessions/${session.id}/permissions/rules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "allow" }),
+      }),
+    );
+    expect(empty.status).toBe(400);
+
+    // POST /rules 不被 POST /permissions/:reqId 吞掉（路由顺序）
+    expect(loadPermissionConfig(workdir).rules).toHaveLength(2);
   }, 20000);
 });

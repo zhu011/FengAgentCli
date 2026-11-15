@@ -664,6 +664,33 @@ export class ApiClient {
   }
 
   /**
+   * POST /api/sessions/:id/permissions/rules — 添加全局权限规则。
+   *
+   * 同 tool+action 幂等（不重复添加）；写入后立即生效。
+   */
+  async addPermissionRule(
+    sessionId: string,
+    rule: { tool: string; action: "allow" | "deny" | "ask"; reason?: string },
+  ): Promise<{
+    rules: PermanentPermissionRule[];
+    grants: PermissionGrants;
+  }> {
+    const res = await fetch(
+      `${this.baseUrl}/api/sessions/${sessionId}/permissions/rules`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(rule),
+      },
+    );
+    if (!res.ok) throw await this.toApiError(res, "Failed to add permission rule");
+    return (await res.json()) as {
+      rules: PermanentPermissionRule[];
+      grants: PermissionGrants;
+    };
+  }
+
+  /**
    * DELETE /api/sessions/:id/permissions/rules — 撤销 permissions.json 永久规则。
    *
    * @param rule - `tool` 必填；`action` 缺省 = 撤销该工具的全部规则
