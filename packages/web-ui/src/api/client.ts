@@ -49,7 +49,10 @@ import type {
   RuntimeProbeResult,
   Session,
   SessionMeta,
+  AgentSkillMount,
   SkillEntryInput,
+  SkillImportInput,
+  SkillImportResult,
   SkillInfo,
   SkillListView,
   TraceAnalysisResponse,
@@ -444,6 +447,67 @@ export class ApiClient {
     const res = await fetch(`${this.baseUrl}/api/skills/${encodeURIComponent(name)}/reset`, { method: "POST" });
     if (!res.ok) throw await this.toApiError(res, "Failed to reset skill");
     return (await res.json()) as SkillInfo;
+  }
+
+  // ──────────────────────────────────────────────
+  // Skill 导入与挂载（AI 团队平台 P1；后端未落地时导入表单回退 mock）
+  // ──────────────────────────────────────────────
+
+  /**
+   * POST /api/skills/import — 四路导入的后三路（local / url / runtime_copy）。
+   *
+   * URL 导入只允许 https + 域名白名单（github 系），≤1 MiB；同名按 onConflict。
+   */
+  async importSkill(req: SkillImportInput): Promise<SkillImportResult> {
+    const res = await fetch(`${this.baseUrl}/api/skills/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to import skill");
+    return (await res.json()) as SkillImportResult;
+  }
+
+  /** GET /api/agents/:id/skills — 已挂载列表（含 enabled / 来源 / shadow） */
+  async listAgentSkills(agentId: string): Promise<AgentSkillMount[]> {
+    const res = await fetch(`${this.baseUrl}/api/agents/${encodeURIComponent(agentId)}/skills`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list agent skills");
+    return (await res.json()) as AgentSkillMount[];
+  }
+
+  /** POST /api/agents/:id/skills — 增量挂载 {name}（幂等） */
+  async addAgentSkill(agentId: string, name: string): Promise<AgentSkillMount[]> {
+    const res = await fetch(`${this.baseUrl}/api/agents/${encodeURIComponent(agentId)}/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to add agent skill");
+    return (await res.json()) as AgentSkillMount[];
+  }
+
+  /** PATCH /api/agents/:id/skills/:name — 启停挂载（enabled） */
+  async setAgentSkillEnabled(agentId: string, name: string, enabled: boolean): Promise<AgentSkillMount[]> {
+    const res = await fetch(
+      `${this.baseUrl}/api/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    if (!res.ok) throw await this.toApiError(res, "Failed to toggle agent skill");
+    return (await res.json()) as AgentSkillMount[];
+  }
+
+  /** DELETE /api/agents/:id/skills/:name — 卸载（只删挂载关系，不删内容） */
+  async removeAgentSkill(agentId: string, name: string): Promise<AgentSkillMount[]> {
+    const res = await fetch(
+      `${this.baseUrl}/api/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
+    if (!res.ok) throw await this.toApiError(res, "Failed to remove agent skill");
+    return (await res.json()) as AgentSkillMount[];
   }
 
   /** GET /api/agent-tasks — 外派任务列表 */

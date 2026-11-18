@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Loader2, Plus, RotateCcw } from "lucide-react";
+import { BookOpen, Download, Loader2, Plus, RotateCcw } from "lucide-react";
 import type { ApiClient } from "../api/client.ts";
 import { SKILL_SOURCE_LABEL, SkillsMock, type SkillLibrarySource } from "../api/skills-mock.ts";
 import type { SkillInfo } from "../api/types.ts";
@@ -97,6 +97,17 @@ export function SkillLibraryView({
   const [deleteTarget, setDeleteTarget] = useState<SkillInfo | null>(null);
   const [resetTarget, setResetTarget] = useState<SkillInfo | null>(null);
 
+  // ── 导入表单（P1：local / url / runtime_copy；手动创建走原表单） ──
+  const [importOpen, setImportOpen] = useState(false);
+  const [importType, setImportType] = useState<"local" | "url" | "runtime_copy">("url");
+  const [importValue, setImportValue] = useState("");
+  const [importRuntime, setImportRuntime] = useState("");
+  const [importSkillName, setImportSkillName] = useState("");
+  const [onConflict, setOnConflict] = useState<"fail" | "rename" | "overwrite">("rename");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -125,6 +136,42 @@ export function SkillLibraryView({
     setForm(EMPTY_SKILL_FORM);
     setFormError(null);
     setFormOpen(true);
+  }
+
+  /** 导入（local / url / runtime_copy；错误原样展示） */
+  async function doImport() {
+    if (importing) return;
+    const value = importValue.trim();
+    if (importType === "runtime_copy" && (!importRuntime.trim() || !importSkillName.trim())) {
+      setImportError("runtime 与技能名必填");
+      return;
+    }
+    if (importType !== "runtime_copy" && !value) {
+      setImportError(importType === "url" ? "URL 必填" : "文件路径必填");
+      return;
+    }
+    setImporting(true);
+    setImportError(null);
+    setImportNotice(null);
+    try {
+      const result = await source.importSkill(
+        importType === "runtime_copy"
+          ? { type: "runtime_copy", runtime: importRuntime.trim(), name: importSkillName.trim() }
+          : importType === "url"
+            ? { type: "url", url: value, onConflict }
+            : { type: "local", path: value, onConflict },
+      );
+      setImportNotice(
+        `已导入「${result.name}」（来源 ${result.source.type}${result.source.sha256 ? ` · sha256 ${result.source.sha256.slice(0, 8)}…` : ""}）`,
+      );
+      setImportValue("");
+      setImportSkillName("");
+      await reload();
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "导入失败");
+    } finally {
+      setImporting(false);
+    }
   }
 
   function openEdit(skill: SkillInfo) {
@@ -242,6 +289,17 @@ export function SkillLibraryView({
             onChange={(e) => setSearch(e.target.value)}
             aria-label="搜索技能"
           />
+          <button
+            type="button"
+            className="ag-btn"
+            onClick={() => {
+              setImportOpen((v) => !v);
+              setImportError(null);
+              setImportNotice(null);
+            }}
+          >
+            <Download size={14} aria-hidden="true" /> 导入
+          </button>
           <button type="button" className="ag-btn ag-btn--primary" onClick={openCreate}>
             <Plus size={14} aria-hidden="true" /> 添加技能
           </button>
@@ -258,6 +316,125 @@ export function SkillLibraryView({
           {loadErrors.map((e) => ` ${e.path} — ${e.message}`).join("；")}
         </div>
       ) : null}
+
+      {/* 导入表单（P1：本地 / URL / 从运行时复制；手动创建走「添加技能」） */}
+      {importOpen && (
+        <div className="ag-form" data-testid="skill-import-form">
+          <div className="tm-libhead">
+            <h3 className="ag-section__title">导入技能</h3>
+          </div>
+          {importError && <div className="ag-page__hint ag-page__hint--error">{importError}</div>}
+          {importNotice && <div className="ag-page__hint">{importNotice}</div>}
+
+          <div className="ag-form__row">
+            <label className="ag-form__label">导入来源</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }} data-testid="import-type-picker">
+              {(
+                [
+                  ["url", "URL 导入（github raw 等）"],
+                  ["local", "本地文件"],
+                  ["runtime_copy", "从运行时复制"],
+                ] as Array<["url" | "local" | "runtime_copy", string]>
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`ag-btn ag-btn--mini ${importType === key ? "ag-btn--primary" : ""}`}
+                  onClick={() => {
+                    setImportType(key);
+                    setImportError(null);
+                    setImportNotice(null);
+                  }}
+                >
+                  {importType === key ? "✓ " : ""}
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {importType !== "runtime_copy" ? (
+            <div className="ag-form__row">
+              <label className="ag-form__label" htmlFor="sk-import-src">
+                {importType === "url" ? "URL（仅 https，域名白名单 github 系，≤1 MiB）" : "本地 .md 路径（允许根内）"}
+              </label>
+              <input
+                id="sk-import-src"
+                className="ag-form__select"
+                value={importValue}
+                placeholder={
+                  importType === "url"
+                    ? "https://raw.githubusercontent.com/<owner>/<repo>/main/skills/<name>.md"
+                    : "D:/…/skills/my-skill.md"
+                }
+                onChange={(e) => setImportValue(e.target.value)}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="ag-form__row">
+                <label className="ag-form__label" htmlFor="sk-import-rt">运行时（如 claude / codex）</label>
+                <input
+                  id="sk-import-rt"
+                  className="ag-form__select"
+                  value={importRuntime}
+                  placeholder="runtime 注册名"
+                  onChange={(e) => setImportRuntime(e.target.value)}
+                />
+              </div>
+              <div className="ag-form__row">
+                <label className="ag-form__label" htmlFor="sk-import-name">该运行时里的技能名</label>
+                <input
+                  id="sk-import-name"
+                  className="ag-form__select"
+                  value={importSkillName}
+                  placeholder="如 code-review"
+                  onChange={(e) => setImportSkillName(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {importType !== "runtime_copy" && (
+            <div className="ag-form__row">
+              <label className="ag-form__label" htmlFor="sk-import-conflict">同名冲突</label>
+              <select
+                id="sk-import-conflict"
+                className="ag-form__select"
+                value={onConflict}
+                onChange={(e) => setOnConflict(e.target.value as "fail" | "rename" | "overwrite")}
+              >
+                <option value="rename">rename · 自动改名导入</option>
+                <option value="fail">fail · 冲突报错</option>
+                <option value="overwrite">overwrite · 覆盖（旧版进版本历史）</option>
+              </select>
+            </div>
+          )}
+
+          <div className="ag-form__actions">
+            <button
+              type="button"
+              className="ag-btn ag-btn--primary"
+              disabled={importing}
+              onClick={() => void doImport()}
+            >
+              {importing ? <Loader2 className="ag-page__spin" size={14} aria-hidden="true" /> : null}
+              导入
+            </button>
+            <button
+              type="button"
+              className="ag-btn ag-btn--ghost"
+              onClick={() => {
+                setImportOpen(false);
+                setImportError(null);
+                setImportNotice(null);
+              }}
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 添加 / 编辑表单 */}
       {formOpen && (

@@ -14,6 +14,8 @@
 import { ApiError } from "./client.ts";
 import type {
   SkillEntryInput,
+  SkillImportInput,
+  SkillImportResult,
   SkillInfo,
   SkillListView,
   SkillShadowedLayer,
@@ -38,6 +40,7 @@ export interface SkillLibrarySource {
   updateSkill(name: string, patch: Partial<SkillEntryInput>): Promise<SkillInfo>;
   deleteSkill(name: string): Promise<{ ok: boolean; name: string }>;
   resetSkill(name: string): Promise<SkillInfo>;
+  importSkill(req: SkillImportInput): Promise<SkillImportResult>;
 }
 
 function builtin(name: string, description: string, trigger: string, prompt: string): SkillInfo {
@@ -229,5 +232,62 @@ export class SkillsMock implements SkillLibrarySource {
       throw new ApiError(`「${name}」已无任何定义可恢复`, 404, "not_found");
     }
     return restored;
+  }
+
+  /** 导入（演示语义：与创建同落 team 层，记录来源台账） */
+  async importSkill(req: SkillImportInput): Promise<SkillImportResult> {
+    let name = "";
+    if (req.type === "local" || req.type === "url") {
+      const raw = req.type === "local" ? req.path : req.url;
+      if (!raw || raw.trim() === "") {
+        throw new ApiError(req.type === "local" ? "path 必填" : "url 必填", 400, "bad_request");
+      }
+      // url 演示校验：只允许 https
+      if (req.type === "url" && !/^https:\/\//.test(raw)) {
+        throw new ApiError("URL 导入只允许 https://", 400, "bad_request");
+      }
+      name = (raw.split(/[\\/]/).pop() ?? "").replace(/\.md$/i, "").toLowerCase();
+    } else if (req.type === "runtime_copy") {
+      if (!req.runtime || !req.name) {
+        throw new ApiError("runtime 与 name 必填", 400, "bad_request");
+      }
+      name = req.name;
+    }
+    if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+      throw new ApiError("导入源缺少合法的技能名（kebab-case）", 400, "bad_request");
+    }
+    if (req.type === "url" && !["raw.githubusercontent.com", "github.com", "gist.githubusercontent.com", "www.anet.sh"].some((h) => (req.url ?? "").includes(h))) {
+      throw new ApiError("域名不在导入白名单（github 系）", 400, "bad_request");
+    }
+    const exists = this.layers.get(name)?.has("team");
+    if (exists && req.onConflict === "fail") {
+      throw new ApiError(`技能「${name}」已存在`, 409, "conflict");
+    }
+    if (exists && req.onConflict === "rename") {
+      name = `${name}-imported`;
+    }
+    const byLayer = this.layers.get(name) ?? new Map<SkillSourceLayer, SkillInfo>();
+    byLayer.set("team", {
+      name,
+      description: `从 ${req.type === "url" ? req.url : req.type === "local" ? req.path : `${req.runtime} 运行时`} 导入的技能（演示内容）`,
+      trigger: "",
+      prompt: "（导入的技能内容 — 演示占位）",
+      source: "team",
+      enabled: true,
+      editable: true,
+      shadowed: [],
+    });
+    this.layers.set(name, byLayer);
+    return {
+      name,
+      source: {
+        type: req.type,
+        ...(req.url ? { url: req.url } : {}),
+        ...(req.path ? { path: req.path } : {}),
+        ...(req.runtime ? { runtime: req.runtime } : {}),
+        sha256: "demo-sha256",
+        importedAt: new Date().toISOString(),
+      },
+    };
   }
 }

@@ -650,6 +650,49 @@ export interface AgentInput {
   template?: string;
 }
 
+/* ─── Skill 导入与挂载（AI 团队平台 P1，spec §5.3） ─── */
+
+/** 导入来源类型（四路导入的后三路；手动创建走既有 POST /api/skills） */
+export type SkillImportType = "local" | "url" | "runtime_copy";
+
+/** 导入载荷 */
+export interface SkillImportInput {
+  type: SkillImportType;
+  /** local：文件路径；url：https 地址 */
+  path?: string;
+  url?: string;
+  /** runtime_copy：runtime 注册名 + 该 runtime skills 根里的技能名 */
+  runtime?: string;
+  name?: string;
+  /** 同名冲突策略（url/local 导入） */
+  onConflict?: "fail" | "overwrite" | "rename" | "skip";
+}
+
+/** 导入结果 */
+export interface SkillImportResult {
+  /** 落库的技能名（rename 冲突时与请求名不同） */
+  name: string;
+  /** 来源台账（skill-sources.json 里的一条） */
+  source: {
+    type: SkillImportType;
+    url?: string;
+    path?: string;
+    runtime?: string;
+    sha256: string;
+    importedAt: string;
+  };
+}
+
+/** agent 的 skill 挂载条目（GET /api/agents/:id/skills） */
+export interface AgentSkillMount {
+  name: string;
+  enabled: boolean;
+  /** 挂载来源（导入/创建时的来源类型） */
+  source: string;
+  /** 是否被更高优先层 shadow */
+  shadowed: boolean;
+}
+
 /* ─── 团队级技能库（对齐 DSH 后端 4c67aca 契约；后端未落地时页面回退 mock） ─── */
 
 /** 技能来源层（后端把内部 project 层对外统一叫 workdir） */

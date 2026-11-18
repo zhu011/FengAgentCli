@@ -23,6 +23,7 @@ import type {
   AgentCard,
   AgentDetail,
   AgentRun,
+  AgentSkillMount,
   AgentTemplate,
 } from "../api/types.ts";
 
@@ -195,6 +196,7 @@ export function AgentsView({ client }: { client: ApiClient }) {
     return (
       <AgentDetailView
         source={useSource()}
+        client={client}
         id={selectedId}
         onBack={() => {
           setSelectedId(null);
@@ -366,10 +368,12 @@ type DetailTab = "overview" | "runs" | "config" | "settings";
 
 function AgentDetailView({
   source,
+  client,
   id,
   onBack,
 }: {
   source: AgentSource;
+  client: ApiClient;
   id: string;
   onBack: () => void;
 }) {
@@ -461,6 +465,7 @@ function AgentDetailView({
         <AgentConfigPane
           detail={detail}
           source={source}
+          client={client}
           onChanged={() => void reload()}
         />
       ) : null}
@@ -663,10 +668,12 @@ function AgentRunsPane({ source, id }: { source: AgentSource; id: string }) {
 function AgentConfigPane({
   detail,
   source,
+  client,
   onChanged,
 }: {
   detail: AgentDetail;
   source: AgentSource;
+  client: ApiClient;
   onChanged: () => void;
 }) {
   const [instructions, setInstructions] = useState(detail.instructions);
@@ -746,20 +753,138 @@ function AgentConfigPane({
         </button>
       </div>
 
-      {/* 只读资产概览（skill/mcp 挂载在 P1 接） */}
+      {/* skill 挂载管理（P1：添加/启停/卸载；卸载只删关系不删内容） */}
+      <AgentSkillMountsPane agentId={detail.id} client={client} />
+
+      {/* mcp 挂载（只读；MCP 集成在 P3 开放） */}
       <div className="ag-form__row">
-        <label className="ag-form__label">已挂载资产（skill/mcp 挂载管理在 P1 开放）</label>
+        <label className="ag-form__label">MCP（挂载管理在 P3 开放）</label>
         <div className="ag-runtime-card__chips">
-          {detail.skills.map((s) => (
-            <span key={s} className="ag-chip">skill · {s}</span>
-          ))}
           {detail.mcp.map((m) => (
             <span key={m} className="ag-chip">mcp · {m}</span>
           ))}
-          {detail.skills.length + detail.mcp.length === 0 && (
-            <span className="ag-chip ag-chip--muted">（无）</span>
-          )}
+          {detail.mcp.length === 0 && <span className="ag-chip ag-chip--muted">（无）</span>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ────────────── skill 挂载（P1：列表 + 添加 + 启停 + 卸载） ────────────── */
+
+function AgentSkillMountsPane({ agentId, client }: { agentId: string; client: ApiClient }) {
+  const [mounts, setMounts] = useState<AgentSkillMount[]>([]);
+  const [libraryNames, setLibraryNames] = useState<string[]>([]);
+  const [addName, setAddName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  /** 后端 /api/agents/:id/skills 未就绪时（P1 后端在制）回退详情里的 skills 只读展示 */
+  const [fallback, setFallback] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const [m, view] = await Promise.all([
+        client.listAgentSkills(agentId),
+        client.listSkills(true),
+      ]);
+      setMounts(m);
+      // 库里未挂载的技能（候选）——三层合并视图取胜出名
+      setLibraryNames(view.skills.map((s) => s.name).filter((n) => !m.some((x) => x.name === n)));
+      setFallback(false);
+      setErr(null);
+    } catch {
+      setFallback(true);
+    }
+  }, [agentId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function mutate(fn: () => Promise<AgentSkillMount[]>) {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      setMounts(await fn());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (fallback) {
+    return (
+      <div className="ag-form__row">
+        <label className="ag-form__label">Skill 挂载（管理接口未就绪 — 后端 P1 落地后开放）</label>
+        <div className="ag-runtime-card__chips">
+          <span className="ag-chip ag-chip--muted">等待 /api/agents/:id/skills</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ag-form__row" data-testid="agent-skills-mount">
+      <label className="ag-form__label">Skill 挂载（卸载只删关系，不删技能库内容）</label>
+      {err && <div className="ag-page__hint ag-page__hint--error">{err}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {mounts.map((m) => (
+          <div key={m.name} className="permission-grants__item" data-mounted-skill={m.name}>
+            <span className="permission-grants__tool" title={m.shadowed ? "被本目录同名文件覆盖" : undefined}>
+              {m.name}
+            </span>
+            <span className={`permission-grants__badge ${m.enabled ? "permission-grants__badge--allow" : "permission-grants__badge--muted"}`}>
+              {m.enabled ? "启用" : "停用"}
+            </span>
+            <button
+              type="button"
+              className="permission-grants__revoke"
+              disabled={busy}
+              onClick={() => void mutate(() => client.setAgentSkillEnabled(agentId, m.name, !m.enabled))}
+            >
+              {m.enabled ? "停用" : "启用"}
+            </button>
+            <button
+              type="button"
+              className="permission-grants__revoke"
+              disabled={busy}
+              title="卸载挂载（技能库内容保留）"
+              onClick={() => void mutate(() => client.removeAgentSkill(agentId, m.name))}
+            >
+              卸载
+            </button>
+          </div>
+        ))}
+        {mounts.length === 0 && (
+          <span className="ag-runtime-card__meta" style={{ opacity: 0.7 }}>（未挂载任何技能）</span>
+        )}
+      </div>
+      {/* 添加挂载：下拉选库中未挂载的技能 */}
+      <div className="permission-add" style={{ marginTop: 8 }}>
+        <select
+          className="permission-add__select"
+          aria-label="选择技能"
+          value={addName}
+          onChange={(e) => setAddName(e.target.value)}
+        >
+          <option value="">选择技能库中的技能…</option>
+          {libraryNames.map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="permission-add__btn"
+          disabled={busy || addName === ""}
+          onClick={() => {
+            void mutate(() => client.addAgentSkill(agentId, addName));
+            setAddName("");
+          }}
+        >
+          <Plus size={12} aria-hidden="true" /> 挂载
+        </button>
       </div>
     </div>
   );
