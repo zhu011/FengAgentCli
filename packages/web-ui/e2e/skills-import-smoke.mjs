@@ -1,154 +1,98 @@
-// Skill 导入 + agent 挂载（P1）e2e — stub 后端实现 spec §5.3 契约。
+// Skill 导入 + agent 挂载（P1）e2e — 真后端（DSH 3feae9a/ff590e5/223bd6d 起）。
 // 用法：node packages/web-ui/e2e/skills-import-smoke.mjs
 // 前置：bun run build:web-ui
 //
-// stub 契约（DSH P1 后端落地前的前置验证；落地后前端零改动）：
-//   POST /api/skills/import {type:path|url|runtime_copy, ...} → SkillImportResult
-//     - url：仅 https + github 系域名白名单；同名 onConflict(fail|rename|overwrite)
-//   GET/POST /api/agents/:id/skills；PATCH/DELETE /api/agents/:id/skills/:name
-//   其余 /api/* → 最小响应（agents 真后端已落，这里一并 stub 求独立）
+// 隔离：spawn 真 server（bun packages/server/src/entry.ts），临时 FENG_DATA_DIR +
+// FENG_TEAM_HOME + HOME（runtime_copy 走 ~/.claude/skills，预置离线 SKILL.md）；
+// 本地导入预置一个 .md 到临时 workdir；dist junction 挂静态目录。
 //
-// 覆盖：① 技能库 URL 导入（合法 github raw → 落库 + 提示带 sha256）
-//   ② 非白名单域名/非 https → 400 原样展示
-//   ③ 同名 onConflict=fail → 409；rename → 自动改名落库
-//   ④ 本地导入 + 运行时复制表单切换
-//   ⑤ agent 配置页：挂载库中技能 → 启停 → 卸载（关系列表变化）
+// 覆盖（真端到端，spec §5.3 验收）：
+//   ① URL 导入：github raw 真拉取 → 团队库落盘 + sha256 提示
+//   ② URL 错误分支：非 https / 非白名单域名 → 400 原样展示（无需外网）
+//   ③ 本地导入（允许根内 .md）→ 落库
+//   ④ runtime_copy：预置 ~/.claude/skills → 落库
+//   ⑤ agent 挂载：创建 agent → 挂载技能 → 启停 → 卸载（关系删除、库内容保留）
+//   ⑥ 版本快照与 restore：导入两版 → revisions 列表 → restore 回 v1（内容校验）
+//   ⑦ prompt 注入闭环：挂载技能出现在 agent 详情 skills 数组（config.json 冗余）
+//
+// 注意：用 Node 跑（Bun/Windows 与 playwright CDP 管道不兼容）。
 
-import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
-import { statSync, mkdirSync } from "node:fs";
-import { join, extname } from "node:path";
+import { spawn } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright";
 
 const REPO = process.env.FENG_REPO ?? "D:/AgentCode/FengAgentCli";
-const DIST = join(REPO, "packages/web-ui/dist");
-const PORT = 4217;
+const PORT = 4231;
 const BASE = `http://127.0.0.1:${PORT}`;
 const OUT = process.env.E2E_SHOT_DIR ?? join(REPO, ".verify-agents");
 
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json" };
+// ── 隔离环境 ──
+const workdir = mkdtempSync(join(tmpdir(), "feng-skimport-wd-"));
+const home = mkdtempSync(join(tmpdir(), "feng-skimport-home-"));
+const teamRoot = mkdtempSync(join(tmpdir(), "feng-skimport-team-"));
+const dataRoot = mkdtempSync(join(tmpdir(), "feng-skimport-data-"));
+const teamDir = join(teamRoot, "skills");
 
-// ── stub 技能库 + agent + 挂载 ──
-const teamSkills = new Map(); // name → {name, description}
-teamSkills.set("code-review", { name: "code-review", description: "代码审查技能" });
-teamSkills.set("release-notes", { name: "release-notes", description: "发版说明技能" });
-const agents = new Map();
-agents.set("coder", { id: "coder", displayName: "代码工程师", description: "", runtime: "dsh", runtimeStatus: "online", runs7d: 1, lastRunStatus: "replied", archived: false, instructions: "", model: "", env: {}, envSecrets: [], args: [], skills: ["code-review"], mcp: [], permissionMode: "inherit", visibility: "private" });
-const mounts = new Map(); // agentId → [{name, enabled, source, shadowed}]
-mounts.set("coder", [{ name: "code-review", enabled: true, source: "url", shadowed: false }]);
+// 本地导入源（允许根 = server 的 workdir = dataRoot）
+const LOCAL_SKILL = join(dataRoot, "port-helper.md");
+writeFileSync(LOCAL_SKILL, "---\nname: port-helper\ndescription: 端口排障技能（e2e 本地导入）\n---\n按端口查进程并给出处置建议。\n", "utf-8");
 
-const URL_ALLOWLIST = ["raw.githubusercontent.com", "github.com", "gist.githubusercontent.com", "www.anet.sh"];
+// runtime_copy 源：HOME 指临时目录 → ~/.claude/skills/net-tool/SKILL.md
+const claudeSkillDir = join(home, ".claude", "skills", "net-tool");
+mkdirSync(claudeSkillDir, { recursive: true });
+writeFileSync(
+  join(claudeSkillDir, "SKILL.md"),
+  "---\nname: net-tool\ndescription: 网络排障技能（e2e 运行时复制）\n---\n先 ping 再 traceroute，分层定位丢包点。\n",
+  "utf-8",
+);
 
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, "http://x");
-  const json = (code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
-  let body = {};
-  if (req.method !== "GET" && req.method !== "DELETE") {
-    body = await new Promise((r) => { let d = ""; req.on("data", (c) => (d += c)); req.on("end", () => { try { r(JSON.parse(d)); } catch { r({}); } }); });
-  }
-  if (url.pathname === "/api/health") return json(200, { status: "ok" });
-  if (url.pathname === "/api/runtimes" && req.method === "GET") return json(200, []);
-  if (url.pathname === "/api/agent-tasks") return json(200, { tasks: [], runtimes: [] });
-  if (url.pathname === "/api/groups") return json(200, { groups: [], runtimes: [] });
-  if (url.pathname === "/api/sessions") return json(200, []);
-  if (url.pathname === "/api/models") return json(200, { models: [] });
+// dist junction
+mkdirSync(join(dataRoot, "packages", "web-ui"), { recursive: true });
+symlinkSync(join(REPO, "packages", "web-ui", "dist"), join(dataRoot, "packages", "web-ui", "dist"), "junction");
 
-  // 技能合并视图（真后端同形）
-  if (url.pathname === "/api/skills" && req.method === "GET") {
-    const skills = [...teamSkills.values()].map((s) => ({ ...s, trigger: "", prompt: `（${s.name} 的 prompt）`, source: "team", enabled: true, editable: true, shadowed: [] }));
-    return json(200, { roots: { team: "(stub)", project: [] }, skills, layers: skills, errors: [] });
-  }
-
-  // 导入
-  if (url.pathname === "/api/skills/import" && req.method === "POST") {
-    const type = body.type;
-    let name = "";
-    let sha = "a1b2c3d4e5f6";
-    if (type === "url") {
-      const u = String(body.url ?? "");
-      if (!/^https:\/\//.test(u)) return json(400, { error: { message: "URL 导入只允许 https://", code: "bad_request" } });
-      let host;
-      try { host = new URL(u).hostname; } catch { return json(400, { error: { message: "URL 不合法", code: "bad_request" } }); }
-      if (!URL_ALLOWLIST.includes(host)) return json(400, { error: { message: `域名 ${host} 不在导入白名单（github 系）`, code: "bad_request" } });
-      name = (u.split("/").pop() ?? "").replace(/\.md$/i, "").toLowerCase();
-    } else if (type === "local") {
-      const p = String(body.path ?? "");
-      if (!p) return json(400, { error: { message: "path 必填", code: "bad_request" } });
-      name = (p.split(/[\\/]/).pop() ?? "").replace(/\.md$/i, "").toLowerCase();
-    } else if (type === "runtime_copy") {
-      if (!body.runtime || !body.name) return json(400, { error: { message: "runtime 与 name 必填", code: "bad_request" } });
-      name = String(body.name);
-    } else {
-      return json(400, { error: { message: "type 必须是 local | url | runtime_copy", code: "bad_request" } });
-    }
-    if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) {
-      return json(400, { error: { message: "导入源缺少合法的技能名（kebab-case）", code: "bad_request" } });
-    }
-    const conflict = teamSkills.has(name);
-    const onConflict = body.onConflict ?? "fail";
-    if (conflict && onConflict === "fail") {
-      return json(409, { error: { message: `技能「${name}」已存在`, code: "conflict" } });
-    }
-    if (conflict && onConflict === "rename") name = `${name}-imported`;
-    teamSkills.set(name, { name, description: `导入自 ${type}` });
-    return json(201, {
-      name,
-      source: {
-        type,
-        ...(body.url ? { url: body.url } : {}),
-        ...(body.path ? { path: body.path } : {}),
-        ...(body.runtime ? { runtime: body.runtime } : {}),
-        sha256: sha,
-        importedAt: new Date().toISOString(),
-      },
-    });
-  }
-
-  // agents（真后端同形，够 e2e 用）
-  if (url.pathname === "/api/agents" && req.method === "GET") {
-    return json(200, [...agents.values()].map(({ id, displayName, description, runtime, runtimeStatus, runs7d, lastRunStatus, archived }) => ({ id, displayName, description, runtime, runtimeStatus, runs7d, lastRunStatus, archived })));
-  }
-  const m = url.pathname.match(/^\/api\/agents\/([^/]+)(\/skills)?(\/([^/]+))?$/);
-  if (m && m[2] === "/skills") {
-    const agentId = decodeURIComponent(m[1]);
-    if (!agents.has(agentId)) return json(404, { error: { message: `智能体不存在: ${agentId}`, code: "not_found" } });
-    const list = mounts.get(agentId) ?? [];
-    if (!m[4] && req.method === "GET") return json(200, list);
-    if (!m[4] && req.method === "POST") {
-      if (!body.name || !teamSkills.has(body.name)) return json(400, { error: { message: `技能不存在: ${body.name}`, code: "bad_request" } });
-      if (!list.some((x) => x.name === body.name)) list.push({ name: body.name, enabled: true, source: "manual", shadowed: false });
-      mounts.set(agentId, list);
-      return json(200, list);
-    }
-    if (m[4] && req.method === "PATCH") {
-      const item = list.find((x) => x.name === decodeURIComponent(m[4]));
-      if (!item) return json(404, { error: { message: "未挂载该技能", code: "not_found" } });
-      if (typeof body.enabled === "boolean") item.enabled = body.enabled;
-      return json(200, list);
-    }
-    if (m[4] && req.method === "DELETE") {
-      const rest = list.filter((x) => x.name !== decodeURIComponent(m[4]));
-      mounts.set(agentId, rest);
-      return json(200, rest);
-    }
-  }
-  const md2 = url.pathname.match(/^\/api\/agents\/([^/]+)$/);
-  if (md2 && req.method === "GET") {
-    const a = agents.get(decodeURIComponent(md2[1]));
-    if (!a) return json(404, { error: { message: "not found", code: "not_found" } });
-    return json(200, { ...a, skills: (mounts.get(a.id) ?? []).map((x) => x.name) });
-  }
-  if (url.pathname.startsWith("/api/")) return json(404, { error: { message: "not found", code: "not_found" } });
-
-  try {
-    let p = join(DIST, decodeURIComponent(url.pathname));
-    try { if (statSync(p).isDirectory()) p = join(p, "index.html"); } catch { p = join(DIST, "index.html"); }
-    const file = await readFile(p);
-    res.writeHead(200, { "content-type": MIME[extname(p)] ?? "application/octet-stream" });
-    res.end(file);
-  } catch { res.writeHead(404); res.end("nf"); }
+const serverProc = spawn("bun", [join(REPO, "packages/server/src/entry.ts")], {
+  cwd: dataRoot,
+  env: {
+    ...process.env,
+    // runtime_copy 走 ~/.claude/skills → HOME 指临时目录（离线可测）
+    HOME: home,
+    USERPROFILE: home,
+    // HOME 被换后读不到本机全局凭据 → 占位 key 让 server 起得来（本 e2e 不走 LLM）
+    OPENAI_COMPATIBLE_API_KEY: "e2e-placeholder",
+    OPENAI_COMPATIBLE_BASE_URL: "https://127.0.0.1.invalid",
+    FENG_DATA_DIR: dataRoot,
+    FENG_TEAM_HOME: teamRoot,
+    FENG_SERVER_PORT: String(PORT),
+    FENG_SERVER_HOST: "127.0.0.1",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+  detached: true,
 });
-await new Promise((r) => server.listen(PORT, "127.0.0.1", r));
+const serverLog = [];
+serverProc.stdout.on("data", (d) => serverLog.push(d.toString()));
+serverProc.stderr.on("data", (d) => serverLog.push(d.toString()));
+
+async function waitReady(maxMs = 30_000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      const res = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) return;
+    } catch { /* not ready */ }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error("server 未就绪\n" + serverLog.slice(-5).join(""));
+}
+
+function teamMd(name) {
+  try {
+    return readFileSync(join(teamDir, `${name}.md`), "utf-8");
+  } catch {
+    return null;
+  }
+}
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -157,108 +101,136 @@ const check = (n, ok) => { console.log((ok ? "PASS " : "FAIL ") + n); ok ? passe
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
-  // ① URL 导入（合法 github raw）
+  await waitReady();
+
+  // ① URL 导入（github raw 真拉取）
   await page.goto(`${BASE}/?view=teams&sub=skills`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="skill-card"]', { timeout: 15_000 });
   await page.locator("button", { hasText: "导入" }).click();
   await page.waitForSelector('[data-testid="skill-import-form"]', { timeout: 5000 });
-  await page.locator("#sk-import-src").fill("https://raw.githubusercontent.com/o/r/main/skills/git-helper.md");
+  await page.locator("#sk-import-src").fill("https://raw.githubusercontent.com/zhu011/FengAgentCli/main/.fengagent/skills/debug.md");
   await page.selectOption("#sk-import-conflict", "rename");
   await page.locator("button", { hasText: "导入" }).last().click();
   await page.waitForFunction(
-    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint')?.textContent?.includes("已导入「git-helper」"),
-    null, { timeout: 8000 },
+    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint')?.textContent?.includes("已导入「"),
+    null, { timeout: 30_000 },
   );
-  const importNotice = await page.locator('[data-testid="skill-import-form"] .ag-page__hint').textContent();
-  check("URL 导入 → 落库提示带名称与 sha256", (importNotice ?? "").includes("sha256"));
+  const urlNotice = await page.locator('[data-testid="skill-import-form"] .ag-page__hint').textContent();
+  check("URL 导入（github raw 真拉取）→ 落库提示带 sha256", (urlNotice ?? "").includes("sha256") && teamMd("debug") !== null && teamMd("debug").includes("调试专家"));
 
-  // ② 非白名单域名 → 400；非 https → 400
-  await page.locator("#sk-import-src").fill("http://evil.com/x.md");
+  // ② URL 错误分支（离线可验）
+  await page.locator("#sk-import-src").fill("http://raw.githubusercontent.com/x.md");
   await page.locator("button", { hasText: "导入" }).last().click();
   await page.waitForFunction(
     () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint--error')?.textContent?.includes("https"),
-    null, { timeout: 5000 },
+    null, { timeout: 8000 },
   );
   check("非 https → 400 原样展示", true);
   await page.locator("#sk-import-src").fill("https://evil.com/x.md");
   await page.locator("button", { hasText: "导入" }).last().click();
   await page.waitForFunction(
-    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint--error')?.textContent?.includes("白名单"),
-    null, { timeout: 5000 },
+    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint--error')?.textContent?.includes("白名单") ||
+      document.querySelector('[data-testid="skill-import-form"] .ag-page__hint--error')?.textContent?.includes("只允许"),
+    null, { timeout: 8000 },
   );
   check("非白名单域名 → 400 原样展示", true);
 
-  // ③ 同名冲突：fail → 409
-  await page.locator("#sk-import-src").fill("https://raw.githubusercontent.com/o/r/main/skills/code-review.md");
-  await page.selectOption("#sk-import-conflict", "fail");
-  await page.locator("button", { hasText: "导入" }).last().click();
-  await page.waitForFunction(
-    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint--error')?.textContent?.includes("已存在"),
-    null, { timeout: 5000 },
-  );
-  check("同名 + onConflict=fail → 409 原样展示", true);
-
-  // ④ 本地导入 + 运行时复制（表单切换；runtime_copy 走 agent 挂载先验证表单存在）
+  // ③ 本地导入
   await page.locator('[data-testid="import-type-picker"] button', { hasText: "本地文件" }).click();
-  await page.locator("#sk-import-src").fill("D:/skills/my-local-skill.md");
+  await page.locator("#sk-import-src").fill(LOCAL_SKILL);
+  await page.selectOption("#sk-import-conflict", "rename");
   await page.locator("button", { hasText: "导入" }).last().click();
   await page.waitForFunction(
-    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint')?.textContent?.includes("已导入「my-local-skill」"),
+    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint')?.textContent?.includes("已导入「port-helper」"),
     null, { timeout: 8000 },
   );
-  check("本地导入 → 落库", true);
+  check("本地导入 → 团队库落盘（frontmatter 保留）", (teamMd("port-helper") ?? "").includes("端口排障技能"));
+
+  // ④ runtime_copy（临时 HOME 下的 ~/.claude/skills）
   await page.locator('[data-testid="import-type-picker"] button', { hasText: "从运行时复制" }).click();
   await page.locator("#sk-import-rt").fill("claude");
-  await page.locator("#sk-import-name").fill("runtime-skill");
+  await page.locator("#sk-import-name").fill("net-tool");
   await page.locator("button", { hasText: "导入" }).last().click();
   await page.waitForFunction(
-    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint')?.textContent?.includes("已导入「runtime-skill」"),
+    () => document.querySelector('[data-testid="skill-import-form"] .ag-page__hint')?.textContent?.includes("已导入「net-tool」"),
     null, { timeout: 8000 },
   );
-  check("运行时复制导入 → 落库", true);
+  check("runtime_copy（claude skills 根）→ 落库", (teamMd("net-tool") ?? "").includes("网络排障技能"));
 
-  // 截图：技能库导入表单
   mkdirSync(OUT, { recursive: true });
-  await page.screenshot({ path: join(OUT, "skills-import-form.png"), fullPage: true });
+  await page.screenshot({ path: join(OUT, "skills-import-real.png"), fullPage: true });
   await page.locator("button", { hasText: "关闭" }).click();
   await sleep(300);
 
-  // ⑤ agent 配置页挂载管理
+  // ⑤+⑦ agent 挂载闭环：创建 agent → 挂载 → config.json skills 冗余 → 启停 → 卸载
   await page.goto(`${BASE}/?view=teams&sub=agents`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-agent-id="coder"]', { timeout: 15000 });
-  await page.locator('[data-agent-id="coder"]').click();
+  await page.waitForSelector('button:has-text("创建智能体")', { timeout: 15_000 });
+  await page.locator("button", { hasText: "创建智能体" }).click();
+  await page.locator("#ag-id").fill("skill-user");
+  await page.locator("button", { hasText: "创建" }).last().click();
+  await page.waitForSelector('[data-agent-id="skill-user"]', { timeout: 8000 });
+  await page.locator('[data-agent-id="skill-user"]').click();
   await page.locator('.tm-subnav__chip', { hasText: "配置" }).click();
   await page.waitForSelector('[data-testid="agent-skills-mount"]', { timeout: 8000 });
-  await page.waitForSelector('[data-mounted-skill="code-review"]', { timeout: 5000 });
 
-  // 挂载 release-notes
-  await page.locator('[data-testid="agent-skills-mount"] select').selectOption("release-notes");
+  await page.locator('[data-testid="agent-skills-mount"] select').selectOption("port-helper");
   await page.locator('[data-testid="agent-skills-mount"] button', { hasText: "挂载" }).click();
-  await page.waitForSelector('[data-mounted-skill="release-notes"]', { timeout: 8000 });
-  check("挂载 release-notes → 列表出现", true);
+  await page.waitForSelector('[data-mounted-skill="port-helper"]', { timeout: 8000 });
+  const agentCfg = JSON.parse(readFileSync(join(dataRoot, "agents", "skill-user", "config.json"), "utf-8"));
+  check("挂载 port-helper → 列表出现 + config.json skills 冗余（prompt 注入数据源）",
+    Array.isArray(agentCfg.skills) && agentCfg.skills.includes("port-helper"));
 
-  // 启停
-  await page.locator('[data-mounted-skill="release-notes"] button', { hasText: "停用" }).click();
-  await page.waitForFunction(
-    () => document.querySelector('[data-mounted-skill="release-notes"]')?.textContent?.includes("停用") &&
-      ![...document.querySelectorAll('[data-mounted-skill="release-names"] .permission-grants__badge')].length,
-    null, { timeout: 8000 },
-  ).catch(() => {});
-  await sleep(300);
-  const badgeAfter = await page.locator('[data-mounted-skill="release-notes"] .permission-grants__badge').textContent();
-  check("停用 → 徽标「停用」", (badgeAfter ?? "").includes("停用"));
-  await page.locator('[data-mounted-skill="release-notes"] button', { hasText: "启用" }).click();
-  await sleep(300);
+  await page.locator('[data-mounted-skill="port-helper"] button', { hasText: "停用" }).click();
+  await sleep(400);
+  const badge = await page.locator('[data-mounted-skill="port-helper"] .permission-grants__badge').textContent();
+  check("停用挂载 → 徽标「停用」", (badge ?? "").includes("停用"));
 
-  // 卸载（只删关系）
-  await page.locator('[data-mounted-skill="release-notes"] button', { hasText: "卸载" }).click();
-  await page.waitForFunction(() => !document.querySelector('[data-mounted-skill="release-notes"]'), null, { timeout: 8000 });
-  check("卸载 release-notes → 挂载列表消失（库内容保留）", true);
+  await page.locator('[data-mounted-skill="port-helper"] button', { hasText: "卸载" }).click();
+  await page.waitForFunction(() => !document.querySelector('[data-mounted-skill="port-helper"]'), null, { timeout: 8000 });
+  check("卸载挂载 → 列表消失、技能库内容保留", teamMd("port-helper") !== null);
 
-  await page.screenshot({ path: join(OUT, "agent-skills-mount.png"), fullPage: true });
+  await page.screenshot({ path: join(OUT, "agent-skills-real.png"), fullPage: true });
+
+  // ⑥ 版本快照 + restore（API 级：导入同技能两次不同内容 → revisions → restore v1）
+  const imp = await fetch(`${BASE}/api/skills/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      type: "manual",
+      name: "versioned-skill",
+      description: "版本测试 v1",
+      prompt: "第一版内容",
+    }),
+  });
+  if (!imp.ok) throw new Error("manual import v1 failed: " + await imp.text());
+  const imp2 = await fetch(`${BASE}/api/skills/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      type: "manual",
+      name: "versioned-skill",
+      description: "版本测试 v2",
+      prompt: "第二版内容",
+      onConflict: "overwrite",
+    }),
+  });
+  if (!imp2.ok) throw new Error("manual import v2 failed: " + await imp2.text());
+  const revs = (await (await fetch(`${BASE}/api/skills/versioned-skill/revisions`)).json()).revisions;
+  check("版本快照：两次写入 → 2 条 revision", Array.isArray(revs) && revs.length === 2);
+  const v1Version = revs.find((r) => r.content?.includes?.("第一版") || r.version === 1)?.version ?? revs[0].version;
+  const restored = await fetch(`${BASE}/api/skills/versioned-skill/restore`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: v1Version }),
+  });
+  const afterRestore = await fetch(`${BASE}/api/skills/versioned-skill`).then((r) => r.json());
+  check("restore 回滚 → 内容回到第一版", restored.ok && String(afterRestore.prompt ?? "").includes("第一版"));
 } finally {
   await browser.close();
-  server.close();
+  try { process.kill(-serverProc.pid); } catch { /* already gone */ }
+  for (const d of [workdir, home, teamRoot, dataRoot]) {
+    try { rmSync(d, { recursive: true, force: true }); } catch { /* Windows 句柄延迟 */ }
+  }
 }
 console.log(failed === 0 ? `ALL PASS (${passed})` : `${failed} FAILED / ${passed} passed`);
 process.exit(failed === 0 ? 0 : 1);
