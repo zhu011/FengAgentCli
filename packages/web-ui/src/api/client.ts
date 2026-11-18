@@ -9,7 +9,13 @@
 
 import type {
   AgentEvent,
+  AgentCard,
+  AgentDetail,
+  AgentInput,
+  AgentOverview,
+  AgentRun,
   AgentTask,
+  AgentTemplate,
   AgentTaskCreateRequest,
   AgentTaskDetailResponse,
   AgentTaskListResponse,
@@ -308,6 +314,82 @@ export class ApiClient {
     });
     if (!res.ok) throw await this.toApiError(res, "Failed to toggle runtime");
     return (await res.json()) as RuntimeInfo[];
+  }
+
+  // ──────────────────────────────────────────────
+  // 智能体（AI 团队平台 P0；后端未落地时智能体子视图回退 mock）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/agents — 智能体列表（含 runtime 状态、7 天 run 计数） */
+  async listAgents(): Promise<AgentCard[]> {
+    const res = await fetch(`${this.baseUrl}/api/agents`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list agents");
+    return (await res.json()) as AgentCard[];
+  }
+
+  /** GET /api/agents/:id — 详情（配置聚合） */
+  async getAgent(id: string): Promise<AgentDetail> {
+    const res = await fetch(`${this.baseUrl}/api/agents/${encodeURIComponent(id)}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get agent");
+    return (await res.json()) as AgentDetail;
+  }
+
+  /** POST /api/agents — 创建（`template` 传入时后端用内置模板预填指令） */
+  async createAgent(req: AgentInput): Promise<AgentDetail> {
+    const res = await fetch(`${this.baseUrl}/api/agents`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to create agent");
+    return (await res.json()) as AgentDetail;
+  }
+
+  /** PATCH /api/agents/:id — 改指令 / runtime 绑定（null 解绑）/ 模型 / 权限 */
+  async updateAgent(id: string, patch: AgentInput): Promise<AgentDetail> {
+    const res = await fetch(`${this.baseUrl}/api/agents/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to update agent");
+    return (await res.json()) as AgentDetail;
+  }
+
+  /** DELETE /api/agents/:id — 归档（软删，历史保留） */
+  async archiveAgent(id: string): Promise<{ ok: boolean }> {
+    const res = await fetch(`${this.baseUrl}/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) throw await this.toApiError(res, "Failed to archive agent");
+    return (await res.json()) as { ok: boolean };
+  }
+
+  /** GET /api/agents/:id/overview — 概览（指标卡 + 最近运行） */
+  async getAgentOverview(id: string): Promise<AgentOverview> {
+    const res = await fetch(`${this.baseUrl}/api/agents/${encodeURIComponent(id)}/overview`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get agent overview");
+    return (await res.json()) as AgentOverview;
+  }
+
+  /** GET /api/agents/:id/runs — 运行历史（kind/status 过滤，keyset 分页） */
+  async listAgentRuns(
+    id: string,
+    query: { kind?: string; cursor?: string; limit?: number } = {},
+  ): Promise<{ runs: AgentRun[]; nextCursor?: string }> {
+    const params = new URLSearchParams();
+    if (query.kind) params.set("kind", query.kind);
+    if (query.cursor) params.set("cursor", query.cursor);
+    if (query.limit) params.set("limit", String(query.limit));
+    const qs = params.toString();
+    const res = await fetch(`${this.baseUrl}/api/agents/${encodeURIComponent(id)}/runs${qs ? `?${qs}` : ""}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list agent runs");
+    return (await res.json()) as { runs: AgentRun[]; nextCursor?: string };
+  }
+
+  /** GET /api/agents/templates — 内置模板（P0 一键创建用） */
+  async listAgentTemplates(): Promise<AgentTemplate[]> {
+    const res = await fetch(`${this.baseUrl}/api/agents/templates`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list agent templates");
+    return (await res.json()) as AgentTemplate[];
   }
 
   // ──────────────────────────────────────────────

@@ -560,6 +560,96 @@ export interface RuntimeProbeResult {
   };
 }
 
+/* ─── 智能体（AI 团队平台 P0：agent 实体化，spec §5.1） ─── */
+
+/** 智能体卡片（GET /api/agents 列表项） */
+export interface AgentCard {
+  /** 稳定 id（= agents/<id> 目录名，kebab-case） */
+  id: string;
+  /** 展示名 */
+  displayName: string;
+  description: string;
+  /** 绑定的 runtime 注册名（未绑定 = null，可编辑但不能执行） */
+  runtime: string | null;
+  /** runtime 探测状态（未绑定时 unbound） */
+  runtimeStatus: "online" | "offline" | "unprobed" | "unbound";
+  /** 近 7 天 run 计数（列表快速口径） */
+  runs7d: number;
+  /** 近一次运行的状态摘要 */
+  lastRunStatus: string | null;
+  archived: boolean;
+}
+
+/** 概览指标（GET /api/agents/:id/overview） */
+export interface AgentOverview {
+  agent: {
+    id: string;
+    displayName: string;
+    runtime: string | null;
+    runtimeStatus: "online" | "offline" | "unprobed" | "unbound";
+    probeStatus: string | null;
+    probedAt: string | null;
+  };
+  counters: {
+    runs7d: number;
+    success7d: number;
+    failed7d: number;
+    avgDurationMs: number;
+    tokens7d: number;
+  };
+  assets: { skills: number; mcps: number; integrations: number; envKeys: number };
+  recentRuns: AgentRun[];
+  lastError: { at: number; message: string } | null;
+}
+
+/** 运行历史条目（三路统一读模型：session / dispatch / group） */
+export interface AgentRun {
+  id: string;
+  kind: "session" | "dispatch" | "group" | "squad";
+  status: string;
+  title: string;
+  startedAt: string;
+  durationMs: number | null;
+}
+
+/** 智能体详情（GET /api/agents/:id：配置聚合） */
+export interface AgentDetail extends AgentCard {
+  /** agent.md 正文（= instructions / system prompt） */
+  instructions: string;
+  model: string;
+  env: Record<string, string>;
+  envSecrets: Array<{ key: string; masked: string }>;
+  args: string[];
+  skills: string[];
+  mcp: string[];
+  permissionMode: "inherit" | "ask" | "allow" | "deny";
+  visibility: "private" | "workspace";
+}
+
+/** 内置模板（P0：一键创建 agent） */
+export interface AgentTemplate {
+  id: string;
+  displayName: string;
+  description: string;
+  instructions: string;
+}
+
+/** 创建/编辑载荷（POST/PATCH /api/agents） */
+export interface AgentInput {
+  id?: string;
+  displayName?: string;
+  description?: string;
+  /** runtime 注册名；null = 解绑（历史保留） */
+  runtime?: string | null;
+  instructions?: string;
+  model?: string;
+  env?: Record<string, string>;
+  args?: string[];
+  permissionMode?: "inherit" | "ask" | "allow" | "deny";
+  /** 从内置模板一键创建时后端用模板预填 instructions */
+  template?: string;
+}
+
 /* ─── 团队级技能库（对齐 DSH 后端 4c67aca 契约；后端未落地时页面回退 mock） ─── */
 
 /** 技能来源层（后端把内部 project 层对外统一叫 workdir） */

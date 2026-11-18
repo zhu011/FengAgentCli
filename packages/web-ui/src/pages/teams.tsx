@@ -40,9 +40,10 @@ import {
   useAgentTaskSource,
 } from "./agent-views.tsx";
 import { SkillLibraryView } from "./skill-views.tsx";
+import { AgentsView } from "./agents-view.tsx";
 
 /** 团队页子视图 */
-type TeamsSubView = "teams" | "tasks" | "members" | "skills";
+type TeamsSubView = "teams" | "tasks" | "members" | "skills" | "agents";
 
 interface TeamsPageProps {
   client: ApiClient;
@@ -193,7 +194,7 @@ export function TeamsPage({ client, deepLink, onNavigate }: TeamsPageProps) {
   // 子视图 + 选中态（URL 参数初始化；页内切换用 replaceState 同步，避免历史堆叠）
   const [subView, setSubView] = useState<TeamsSubView>(() => {
     const s = new URLSearchParams(window.location.search).get("sub");
-    return s === "tasks" || s === "members" || s === "skills" ? s : "teams";
+    return s === "tasks" || s === "members" || s === "skills" || s === "agents" ? s : "teams";
   });
   const [libTaskId, setLibTaskId] = useState<string | null>(null);
 
@@ -639,6 +640,7 @@ export function TeamsPage({ client, deepLink, onNavigate }: TeamsPageProps) {
             ["tasks", `任务库 ${library.tasks.length || ""}`],
             ["members", "成员库"],
             ["skills", "技能库"],
+            ["agents", "智能体"],
           ] as Array<[TeamsSubView, string]>
         ).map(([key, label]) => (
           <button
@@ -679,6 +681,8 @@ export function TeamsPage({ client, deepLink, onNavigate }: TeamsPageProps) {
           client={client}
           onPrefill={(name) => onNavigate?.("chat", { prefillSkill: name })}
         />
+      ) : subView === "agents" ? (
+        <AgentsView client={client} />
       ) : subView === "members" ? (
         <RuntimeLibraryView
           runtimes={library.runtimes}
