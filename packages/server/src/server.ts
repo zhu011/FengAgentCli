@@ -33,6 +33,10 @@ import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
 import { createPluginRoutes, type PluginRouteSource, type MarketRouteSource } from "./routes/plugins.ts";
 import { createSettingsRoutes, type SettingsRouteSource } from "./routes/settings.ts";
 import { createSkillRoutes } from "./routes/skills.ts";
+import { createAgentRoutes, createRunRoutes } from "./routes/agents.ts";
+import { RunIndex } from "@fengagent/agent";
+import type { AgentRegistry } from "@fengagent/agent";
+import type { RuntimeInfo } from "./agent-runtimes.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
 import type { GroupOrchestrator } from "@fengagent/groups";
@@ -118,6 +122,17 @@ export interface ServerOptions {
    * 会话级放行的撤销（`/permissions/grants`）不依赖它。
    */
   permissionRules?: PermissionRuleSource;
+  /**
+   * 智能体管理面（P0：`/api/agents` + `/api/runs`）。
+   *
+   * 提供时挂载；`runIndex` 缺省按 `registry.dataRoot` 建一个只读聚合索引。
+   * `listRuntimes` 缺省复用 `agentTaskService.listRuntimes()`（绑定状态/概览用它）。
+   */
+  agents?: {
+    registry: AgentRegistry;
+    runIndex?: RunIndex;
+    listRuntimes?: () => RuntimeInfo[];
+  };
 }
 
 /**
@@ -157,7 +172,14 @@ export function createApp(options: ServerOptions): {
 
   // API 路由
   app.route("/api/health", createHealthRoutes());
-  app.route("/api/sessions", createSessionRoutes(sessionManager, options.permissionRules));
+  app.route(
+    "/api/sessions",
+    createSessionRoutes(
+      sessionManager,
+      options.permissionRules,
+      options.agents ? (id) => options.agents!.registry.get(id) !== null : undefined,
+    ),
+  );
   app.route("/api/models", createModelRoutes(config));
 
   // Agents 外派能力（P2 契约：runtime 卡片 + 任务列表/详情/取消/重试/SSE）
@@ -230,6 +252,26 @@ export function createApp(options: ServerOptions): {
       ...(options.skills?.env ? { env: options.skills.env } : {}),
     }),
   );
+
+  // 智能体管理面（P0）：实体化 CRUD + 绑定 + 概览 + 运行历史（会话/派单/群聊三路聚合）
+  if (options.agents) {
+    const runIndex =
+      options.agents.runIndex ?? new RunIndex({ dataRoot: options.agents.registry.dataRoot });
+    const listRuntimes =
+      options.agents.listRuntimes ??
+      (options.agentTaskService
+        ? () => options.agentTaskService!.listRuntimes()
+        : undefined);
+    app.route(
+      "/api/agents",
+      createAgentRoutes({
+        registry: options.agents.registry,
+        runIndex,
+        ...(listRuntimes ? { listRuntimes } : {}),
+      }),
+    );
+    app.route("/api/runs", createRunRoutes({ runIndex }));
+  }
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）
   if (staticDir) {

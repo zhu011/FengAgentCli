@@ -40,6 +40,16 @@ export interface AgentInfo {
   systemPrompt: string;
   /** 小模型 */
   smallModel?: string;
+  /** 展示名（P0：目录形态的 display_name；缺省同 name） */
+  displayName?: string;
+  /** 绑定的运行时注册名（P0；未绑定则不能执行） */
+  runtime?: string | null;
+  /** 降级运行时顺序（P0） */
+  runtimeFallbacks?: string[];
+  /** 可见性（P0） */
+  visibility?: "private" | "workspace";
+  /** 工具调用权限策略（P0） */
+  permissionMode?: "inherit" | "ask" | "allow" | "deny";
 }
 
 // ──────────────────────────────────────────────

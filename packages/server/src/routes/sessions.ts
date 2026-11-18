@@ -129,6 +129,8 @@ async function writeAgentEventSSE(
 export function createSessionRoutes(
   sessionManager: SessionManager,
   permissionRules?: PermissionRuleSource,
+  /** 智能体存在性查询（P0：会话归属校验；缺省不做归属） */
+  agentExists?: (id: string) => boolean,
 ): Hono {
   const app = new Hono();
   const log = createLogger("server");
@@ -150,8 +152,18 @@ export function createSessionRoutes(
   app.post("/", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const title = typeof body.title === "string" ? body.title : undefined;
+    const agentId =
+      typeof body.agent === "string" && body.agent.trim() !== ""
+        ? body.agent.trim()
+        : undefined;
+    if (agentId !== undefined && agentExists !== undefined && !agentExists(agentId)) {
+      return c.json(
+        { error: { message: `智能体不存在: ${agentId}`, code: "agent_not_found" } },
+        404,
+      );
+    }
 
-    const session = sessionManager.createSession(title);
+    const session = sessionManager.createSession(title, agentId);
     log.info("createSession", `session created id=${session.id}, title=${title ?? "(none)"}`);
     return c.json(session, 201);
   });

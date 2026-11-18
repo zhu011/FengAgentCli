@@ -38,6 +38,7 @@ import {
   SUPPORTED_PROTOCOLS,
 } from "../agent-runtimes.ts";
 import type { RuntimeEntryInput } from "../agent-runtimes.ts";
+import { AgentRuntimeBindingError } from "../agent-runtime-binding.ts";
 
 const log = createLogger("agent-task-routes");
 
@@ -232,12 +233,14 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
     const rawLimit = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
     const runtime = c.req.query("runtime");
+    const agentId = c.req.query("agentId");
     const groupId = c.req.query("groupId");
     const cursor = c.req.query("cursor");
 
     const page = service.listTasks({
       ...(statuses === undefined || statuses.length === 0 ? {} : { status: statuses }),
       ...(runtime === undefined || runtime === "" ? {} : { runtime }),
+      ...(agentId === undefined || agentId === "" ? {} : { agentId }),
       ...(groupId === undefined || groupId === "" ? {} : { groupId }),
       ...(limit === undefined ? {} : { limit }),
       ...(cursor === undefined || cursor === "" ? {} : { cursor }),
@@ -249,12 +252,13 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
     });
   });
 
-  // POST / — 建任务并派发
+  // POST / — 建任务并派发（`agent` 优先按绑定解析 runtime；`runtime` 保留兼容）
   app.post("/", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const agent = typeof body.agent === "string" ? body.agent.trim() : "";
     const runtime = typeof body.runtime === "string" ? body.runtime.trim() : "";
     const content = typeof body.content === "string" ? body.content : "";
-    if (runtime === "") return c.json({ error: "runtime 必填" }, 400);
+    if (agent === "" && runtime === "") return c.json({ error: "agent 或 runtime 必填" }, 400);
     if (content.trim() === "") return c.json({ error: "content 必填" }, 400);
 
     const fromSession =
@@ -271,7 +275,8 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
 
     try {
       const task = await service.submit({
-        runtime,
+        ...(agent === "" ? {} : { agent }),
+        ...(runtime === "" ? {} : { runtime }),
         content,
         ...(fromSession === undefined ? {} : { fromSession }),
         ...(cwd === undefined ? {} : { cwd }),
@@ -280,6 +285,9 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
       });
       return c.json(task, 201);
     } catch (err) {
+      if (err instanceof AgentRuntimeBindingError) {
+        return c.json(err.toPayload(), err.status);
+      }
       const message = err instanceof Error ? err.message : String(err);
       log.warn("create", `建任务失败: ${message}`);
       return c.json({ error: message }, 400);

@@ -37,6 +37,7 @@ import {
   isTerminalTaskStatus,
 } from "@fengagent/agent";
 import type {
+  AgentRegistry,
   AgentTaskEventRow,
   AgentTaskRecord,
   AgentTaskStatus,
@@ -51,6 +52,10 @@ import { digestResult } from "@fengagent/core";
 import { createLogger, generateId } from "@fengagent/shared";
 import { AgentRuntimeRegistry } from "./agent-runtimes.ts";
 import type { RuntimeEntryInput, RuntimeInfo } from "./agent-runtimes.ts";
+import {
+  AgentRuntimeBindingError,
+  resolveRuntimeForAgent,
+} from "./agent-runtime-binding.ts";
 
 const log = createLogger("agent-tasks");
 
@@ -71,6 +76,8 @@ export interface AgentTaskDto {
   id: string;
   fromSession: string;
   runtime: string;
+  /** 派单方智能体 id（P0；直接按 runtime 派发时缺省） */
+  agentId?: string;
   status: AgentTaskStatus;
   content: string;
   result?: string;
@@ -101,7 +108,10 @@ export type AgentTaskStreamEvent =
 
 /** 建任务请求（与 WebUI `AgentTaskCreateRequest` 契约一致） */
 export interface CreateAgentTaskRequest {
-  runtime: string;
+  /** 目标 runtime 注册名（与 `agent` 二选一；`agent` 优先） */
+  runtime?: string;
+  /** 目标智能体 id（P0：由绑定关系解析 runtime；保留 `runtime` 兼容旧调用方） */
+  agent?: string;
   content: string;
   /** 界面发起的任务不传；会话内派发传会话 id */
   fromSession?: string;
@@ -140,6 +150,11 @@ export interface AgentTaskServiceOptions {
   store?: AgentTaskStore;
   /** 运行时注册表（默认 `<dataRoot>/runtimes.json`） */
   registry?: AgentRuntimeRegistry;
+  /**
+   * 智能体仓（P0）：提供时 `submit({agent})` 按绑定关系解析 runtime，
+   * 并在真正 spawn 前二次校验绑定未变（改绑立即生效）。
+   */
+  agentRegistry?: AgentRegistry;
   /** 副作用台账（传 `taskStore.ledger` 即复用 AGE-29 的防重复执行） */
   ledger?: OperationLedger;
   /**
@@ -186,6 +201,8 @@ interface ActiveRun {
 export class AgentTaskService {
   readonly store: AgentTaskStore;
   readonly registry: AgentRuntimeRegistry;
+  /** 智能体仓（P0；未装配时 `{agent}` 派单不可用） */
+  readonly agentRegistry: AgentRegistry | undefined;
   private readonly ledger: OperationLedger | undefined;
   private readonly defaultCwd: string;
   private readonly requestTimeoutMs: number;
@@ -205,6 +222,7 @@ export class AgentTaskService {
     this.promptTimeoutMs = options.promptTimeoutMs ?? 600_000;
     this.defaultCwd = options.defaultCwd ?? neutralDispatchCwd(options.dataRoot);
     this.ledger = options.ledger;
+    this.agentRegistry = options.agentRegistry;
     this.permissionPolicy = options.permissionPolicy ?? (() => "deny");
     this.groupSink = options.groupSink;
     mkdirSync(this.defaultCwd, { recursive: true });
@@ -286,6 +304,8 @@ export class AgentTaskService {
     filter: {
       status?: AgentTaskStatus | AgentTaskStatus[];
       runtime?: string;
+      /** 只看某个智能体的任务（P0） */
+      agentId?: string;
       /** 只看某个群派出的任务（G2） */
       groupId?: string;
       limit?: number;
@@ -325,8 +345,10 @@ export class AgentTaskService {
     ) {
       throw new Error(`群不存在: ${request.groupId}`);
     }
+    const target = this.resolveDispatchTarget(request);
     const { task, reused } = this.store.create({
-      runtime: request.runtime,
+      runtime: target.runtime,
+      ...(target.agentId === undefined ? {} : { agentId: target.agentId }),
       content: request.content,
       cwd: request.cwd ?? this.defaultCwd,
       ...(request.fromSession === undefined ? {} : { fromSession: request.fromSession }),
@@ -342,6 +364,39 @@ export class AgentTaskService {
     // 不阻塞 HTTP：派发在后台跑，进度经事件流 / SSE 推给调用方
     this.startDispatch(task.id);
     return toTaskDto(this.store.get(task.id) ?? task);
+  }
+
+  /**
+   * 解析派单目标：`agent` 优先（按绑定关系），否则退回 `runtime`（旧契约）。
+   *
+   * @throws {AgentRuntimeBindingError} agent 不存在/已归档/未绑 runtime/无可用 runtime
+   */
+  private resolveDispatchTarget(request: CreateAgentTaskRequest): {
+    runtime: string;
+    agentId?: string;
+  } {
+    const agentId = request.agent?.trim() ?? "";
+    if (agentId !== "") {
+      if (!this.agentRegistry) {
+        throw new AgentRuntimeBindingError(
+          "agent_not_found",
+          "智能体能力未装配（缺少 agentRegistry）",
+          404,
+        );
+      }
+      const agent = this.agentRegistry.get(agentId);
+      if (!agent) {
+        throw new AgentRuntimeBindingError("agent_not_found", `智能体不存在: ${agentId}`);
+      }
+      const resolution = resolveRuntimeForAgent(agent, this.listRuntimes());
+      if (!resolution.ok) {
+        throw new AgentRuntimeBindingError(resolution.code, resolution.message);
+      }
+      return { runtime: resolution.runtime.name, agentId: agent.id };
+    }
+    const runtime = request.runtime?.trim() ?? "";
+    if (runtime === "") throw new Error("runtime 或 agent 必填");
+    return { runtime };
   }
 
   /**
@@ -531,7 +586,33 @@ export class AgentTaskService {
       return;
     }
 
-    // ① 幂等闸：同一 attempt 只允许真正执行一次
+    // ① 绑定围栏（P0）：派单时把 runtime 写死进任务；执行前再校验一次。
+    //    改绑后旧任务不会跑到新配置上 —— 直接 failed(runtime_rebound)，提示重派。
+    if (task.agentId !== undefined) {
+      const agent = this.agentRegistry?.get(task.agentId);
+      if (!agent) {
+        this.fail(id, `智能体不存在: ${task.agentId}`);
+        return;
+      }
+      if (agent.archivedAt !== undefined) {
+        this.fail(id, `智能体已归档，不能派单: ${task.agentId}`);
+        return;
+      }
+      const allowed = new Set(
+        [agent.runtime, ...agent.runtimeFallbacks].filter(
+          (name): name is string => typeof name === "string" && name !== "",
+        ),
+      );
+      if (!allowed.has(task.runtime)) {
+        this.fail(
+          id,
+          `runtime 已改绑（任务 ${task.runtime} → 智能体 ${agent.id} 现绑 ${agent.runtime ?? "未绑定"}），请重新派单`,
+        );
+        return;
+      }
+    }
+
+    // ② 幂等闸：同一 attempt 只允许真正执行一次
     const operationKey = `agent-task:${task.id}:attempt-${task.attempt}`;
     const operationId = generateId();
     if (this.ledger) {
@@ -569,7 +650,7 @@ export class AgentTaskService {
       }
     }
 
-    // ② 派发（可用性由这一次真 spawn 验证，不额外探测 —— dsh 冷启 13s，翻倍不划算）
+    // ③ 派发（可用性由这一次真 spawn 验证，不额外探测 —— dsh 冷启 13s，翻倍不划算）
     this.transit(id, "dispatched", {
       detail: `command=${entry.command} ${(entry.args ?? []).join(" ")} protocol=${entry.protocol ?? "acp"}`,
     });
@@ -777,6 +858,7 @@ export function toTaskDto(task: AgentTaskRecord): AgentTaskDto {
     id: task.id,
     fromSession: task.fromSession,
     runtime: task.runtime,
+    ...(task.agentId === undefined ? {} : { agentId: task.agentId }),
     status: task.status,
     content: task.content,
     ...(task.result === undefined ? {} : { result: task.result }),

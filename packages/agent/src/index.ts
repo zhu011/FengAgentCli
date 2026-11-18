@@ -141,6 +141,32 @@ export type {
   AgentDefinitionLoaderOptions,
 } from "./agent-definition.ts";
 
+// 智能体仓（P0：目录即真相 + 模板一键创建）
+export { AgentRegistry, AgentRegistryError, AGENT_TEMPLATES, serializeAgentMarkdown } from "./agent-registry.ts";
+export type {
+  AgentRecord,
+  AgentConfigFile,
+  AgentRegistryOptions,
+  AgentRegistryErrorCode,
+  AgentTemplate,
+  AgentVisibility,
+  AgentPermissionMode,
+  AgentKind,
+  CreateAgentInput,
+  UpdateAgentInput,
+} from "./agent-registry.ts";
+
+// 统一运行索引（P0：会话/派单/群聊三路只读聚合）
+export { RunIndex } from "./run-index.ts";
+export type {
+  RunIndexOptions,
+  RunKind,
+  RunStatus,
+  RunSummary,
+  RunMessage,
+  ListRunsOptions,
+} from "./run-index.ts";
+
 // 子 Agent 派遣
 export { createSubagentRunner } from "./subagent-runner.ts";
 export type { SubagentRunnerOptions } from "./subagent-runner.ts";

@@ -16,6 +16,7 @@
 import type { Agent } from "@fengagent/agent";
 import {
   Agent as AgentClass,
+  AgentRegistry,
   ReflectionStore,
   SessionStore,
   TaskStore,
@@ -246,6 +247,11 @@ export interface CreateRuntimeAgentResult {
    */
   agentTaskService: AgentTaskService | null;
   /**
+   * 智能体仓（P0：`/api/agents` + 派单 `{agent}` 绑定解析）。
+   * 纯文件存储，初始化不依赖会话库。
+   */
+  agentRegistry: AgentRegistry;
+  /**
    * 群聊服务（G1：`/api/groups` + 群工具）。
    * `enableSessionStore=false` 或初始化失败时为 null。
    */
@@ -366,6 +372,21 @@ export async function createRuntimeAgent(
     env: options.env,
     configDataDir: config.dataDir,
   });
+  // 智能体仓（P0）：<dataDir>/agents/<id>/{agent.md,config.json}。
+  // 首次启动把旧平铺 .fengagent/agents/*.md 幂等迁移成目录形态（原文件保留）。
+  const agentRegistry = new AgentRegistry({ dataRoot: dataDir, workdir });
+  try {
+    const migrated = agentRegistry.migrateLegacy();
+    if (migrated.length > 0) {
+      process.stderr.write(
+        `AgentRegistry: 已迁移 ${migrated.length} 个旧 agent 到目录形态（${migrated.join(", ")}）\n`,
+      );
+    }
+  } catch (err) {
+    process.stderr.write(
+      `Warn: 旧 agent 迁移失败（不影响启动）：${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
   // A：插件市场目录（服务端抓取 + 缓存 + 分页 + 兼容分类）。抓取失败不阻断
   // 宿主启动：市场页拿到 stale/空列表比拿不到页面好。
   // D：已装插件的档位以本地 package.json 为准（离线也准），registry 只给未装
@@ -460,6 +481,8 @@ export async function createRuntimeAgent(
     try {
       agentTaskService = new AgentTaskService({
         dataRoot: dataDir,
+        // P0：`{agent}` 派单按绑定关系解析 runtime，并在 spawn 前二次校验改绑
+        agentRegistry,
         ...(taskStore ? { ledger: taskStore.ledger } : {}),
         // 群服务稍后才建：用惰性下沉口，任务终态时把结果以 task_card 写回群（G2）
         groupSink: {
@@ -474,8 +497,14 @@ export async function createRuntimeAgent(
       toolRegistry.register(
         createDispatchTaskTool(
           async (input, ctx) => {
+            // P0：工具入参名仍是 agent，但语义升级为「智能体 id 优先，运行时名兼容」——
+            // 命中智能体仓就按绑定关系解析 runtime，否则按旧的 runtime 直派（零回归）。
+            const target =
+              agentRegistry.get(input.runtime) === null
+                ? { runtime: input.runtime }
+                : { agent: input.runtime };
             const task = await agentTaskService!.dispatchAndWait({
-              runtime: input.runtime,
+              ...target,
               content: input.content,
               fromSession: ctx.sessionId,
               ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
@@ -489,7 +518,15 @@ export async function createRuntimeAgent(
               ...(task.error === undefined ? {} : { error: task.error }),
             };
           },
-          { runtimes: () => agentTaskService?.registry.entries().filter((e) => e.enabled).map((e) => e.name) ?? [] },
+          {
+            runtimes: () => [
+              ...agentRegistry.list().map((item) => item.id),
+              ...(agentTaskService?.registry
+                .entries()
+                .filter((entry) => entry.enabled)
+                .map((entry) => entry.name) ?? []),
+            ],
+          },
         ),
       );
     } catch (err) {
@@ -736,6 +773,7 @@ export async function createRuntimeAgent(
     taskStore,
     reflectionStore,
     agentTaskService,
+    agentRegistry,
     agentGroupService,
     agentGroupOrchestrator,
     agentDefinitionLoader,

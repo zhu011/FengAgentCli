@@ -219,8 +219,8 @@ export class Agent {
   }
 
   /** 创建新会话（不发送消息） */
-  createSession(title?: string): Session {
-    return createSession(this.config.model, title);
+  createSession(title?: string, agentId?: string): Session {
+    return createSession(this.config.model, title, agentId);
   }
 
   /** 加载已有会话 */

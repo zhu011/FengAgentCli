@@ -277,8 +277,12 @@ export function createAgentDefinitionLoader(
     // 加载自定义定义
     const dir = getAgentsDir();
     try {
-      const glob = new Bun.Glob("*.md");
-      const files = [...glob.scanSync({ cwd: dir, absolute: true })];
+      // 兼容两种布局：目录形态 `<id>/agent.md`（P0 起为规范形态）与旧平铺 `<id>.md`。
+      // 先读平铺、再读目录 —— 同名时目录形态胜出（迁移后以目录为准）。
+      const files = [
+        ...new Bun.Glob("*.md").scanSync({ cwd: dir, absolute: true }),
+        ...new Bun.Glob("*/agent.md").scanSync({ cwd: dir, absolute: true }),
+      ];
 
       for (const filePath of files) {
         try {

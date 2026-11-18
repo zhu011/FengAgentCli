@@ -19,6 +19,8 @@ export interface Session {
   updatedAt: number;
   status: SessionState;
   tokenCount: number;
+  /** 归属的智能体 id（P0；缺省 = 不属于任何智能体，运行历史里不出现） */
+  agentId?: string;
 }
 
 /** 会话元信息（列表展示用，不含消息体） */
@@ -30,12 +32,15 @@ export interface SessionMeta {
   tokenCount: number;
   createdAt: number;
   updatedAt: number;
+  /** 归属的智能体 id（P0） */
+  agentId?: string;
 }
 
 /** 创建新会话的工厂 */
 export function createSession(
   model: string,
   title = "New Session",
+  agentId?: string,
 ): Session {
   const now = Date.now();
   return {
@@ -47,6 +52,7 @@ export function createSession(
     updatedAt: now,
     status: "idle",
     tokenCount: 0,
+    ...(agentId === undefined || agentId === "" ? {} : { agentId }),
   };
 }
 
@@ -60,5 +66,6 @@ export function toSessionMeta(session: Session): SessionMeta {
     tokenCount: session.tokenCount,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
+    ...(session.agentId === undefined ? {} : { agentId: session.agentId }),
   };
 }

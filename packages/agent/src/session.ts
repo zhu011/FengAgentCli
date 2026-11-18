@@ -25,6 +25,7 @@ interface SessionRow {
   token_count: number;
   created_at: number;
   updated_at: number;
+  agent_id?: string | null;
 }
 
 /** 数据库行类型（messages 表） */
@@ -60,7 +61,8 @@ export class SessionStore {
         status TEXT,
         token_count INTEGER,
         created_at INTEGER,
-        updated_at INTEGER
+        updated_at INTEGER,
+        agent_id TEXT
       );
 
       CREATE TABLE IF NOT EXISTS messages (
@@ -75,6 +77,27 @@ export class SessionStore {
       CREATE INDEX IF NOT EXISTS idx_messages_session
         ON messages(session_id, created_at);
     `);
+    // 老库补列（P0）：`agent_id` 是「会话归属哪个智能体」的读模型依据；
+    // CREATE TABLE IF NOT EXISTS 不会给已存在的表加列。
+    const columns = this.db.query("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "agent_id")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN agent_id TEXT");
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id, created_at DESC)",
+    );
+  }
+
+  /**
+   * 把会话归属到某个智能体（P0）。
+   *
+   * 只影响运行历史读模型：不存在的会话静默忽略（创建后立刻调用，竞态下也不会 500）。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 智能体 id；null = 取消归属
+   */
+  setSessionAgent(sessionId: string, agentId: string | null): void {
+    this.db.query("UPDATE sessions SET agent_id = ? WHERE id = ?").run(agentId, sessionId);
   }
 
   /** 保存（或更新）会话元信息 */
@@ -82,8 +105,8 @@ export class SessionStore {
     this.db
       .query(
         `INSERT OR REPLACE INTO sessions
-         (id, title, model, status, token_count, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (id, title, model, status, token_count, created_at, updated_at, agent_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -93,6 +116,7 @@ export class SessionStore {
         session.tokenCount,
         session.createdAt,
         session.updatedAt,
+        session.agentId ?? null,
       );
   }
 
@@ -166,6 +190,7 @@ export class SessionStore {
       tokenCount: row.token_count,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      ...(row.agent_id ? { agentId: row.agent_id } : {}),
       messages: messageRows.map((m) => ({
         id: m.id,
         role: m.role as Message["role"],
@@ -179,7 +204,7 @@ export class SessionStore {
   listSessions(): SessionMeta[] {
     const rows = this.db
       .query(
-        "SELECT id, title, model, status, token_count, created_at, updated_at FROM sessions ORDER BY updated_at DESC",
+        "SELECT id, title, model, status, token_count, created_at, updated_at, agent_id FROM sessions ORDER BY updated_at DESC",
       )
       .all() as SessionRow[];
 
@@ -191,6 +216,7 @@ export class SessionStore {
       tokenCount: row.token_count,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      ...(row.agent_id ? { agentId: row.agent_id } : {}),
     }));
   }
 

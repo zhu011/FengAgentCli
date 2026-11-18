@@ -86,6 +86,8 @@ async function main() {
         runtimeResult.permissionChecker.reload();
       },
     },
+    // P0：智能体管理面（/api/agents + /api/runs）；绑定状态复用 agentTaskService
+    agents: { registry: runtimeResult.agentRegistry },
   });
 }
 

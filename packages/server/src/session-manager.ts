@@ -170,11 +170,12 @@ export class SessionManager {
    * 创建 Agent 实例并绑定 sessionId，同时持久化初始会话到 SessionStore。
    *
    * @param title - 可选会话标题
+   * @param agentId - 可选：归属的智能体 id（P0，运行历史按它归属）
    * @returns 会话信息（含 id）
    */
-  createSession(title?: string): Session {
+  createSession(title?: string, agentId?: string): Session {
     const agent = this.createAgent();
-    const session = agent.createSession(title);
+    const session = agent.createSession(title, agentId);
     this.agents.set(session.id, agent);
     this.sessions.set(session.id, session);
     log.info("createSession", `sessionId=${session.id}, title=${title ?? "(none)"}`);
