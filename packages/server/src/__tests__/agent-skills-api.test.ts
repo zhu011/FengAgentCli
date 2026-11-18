@@ -68,21 +68,22 @@ describe("/api/agents/:id/skills", () => {
   test("增量添加 → 列表 → config.skills 双写", async () => {
     const added = await app.request("/coder/skills", json({ name: "code-review" }));
     expect(added.status).toBe(201);
-    const body = (await added.json()) as {
-      created: boolean;
-      mount: { name: string; enabled: boolean; source: string };
-      skills: Array<{ name: string }>;
-    };
-    expect(body.created).toBe(true);
-    expect(body.mount.enabled).toBe(true);
-    expect(body.mount.source).toBe("team");
-    expect(body.skills.map((skill) => skill.name)).toEqual(["code-review"]);
+    // 前端契约（KG）：返回裸数组，shadowed 是布尔
+    const body = (await added.json()) as Array<{
+      name: string;
+      enabled: boolean;
+      source: string;
+      shadowed: boolean;
+    }>;
+    expect(body.map((item) => item.name)).toEqual(["code-review"]);
+    expect(body[0]?.enabled).toBe(true);
+    expect(body[0]?.source).toBe("team");
+    expect(body[0]?.shadowed).toBe(false);
 
     // 再点一次「添加」：不重复、不改启停
     mounts.patch("coder", "code-review", { enabled: false });
     const again = await app.request("/coder/skills", json({ name: "code-review" }));
     expect(again.status).toBe(200);
-    expect(((await again.json()) as { created: boolean }).created).toBe(false);
     expect(mounts.get("coder", "code-review")?.enabled).toBe(false);
 
     // P0 详情页仍读 config.skills
@@ -111,11 +112,13 @@ describe("/api/agents/:id/skills", () => {
       json({ enabled: false, trigger: "只在 PR 时" }, "PATCH"),
     );
     expect(patched.status).toBe(200);
-    const body = (await patched.json()) as {
-      mount: { enabled: boolean; trigger?: string };
-    };
-    expect(body.mount.enabled).toBe(false);
-    expect(body.mount.trigger).toBe("只在 PR 时");
+    const body = (await patched.json()) as Array<{
+      name: string;
+      enabled: boolean;
+      trigger?: string;
+    }>;
+    expect(body[0]?.enabled).toBe(false);
+    expect(body[0]?.trigger).toBe("只在 PR 时");
 
     const cleared = await app.request(
       "/coder/skills/code-review",
@@ -123,7 +126,9 @@ describe("/api/agents/:id/skills", () => {
     );
     expect(cleared.status).toBe(200);
     // 清掉覆盖后回落到 skill 自身的 trigger
-    expect(((await cleared.json()) as { mount: { trigger?: string } }).mount.trigger).toBe("需要审查时");
+    expect(((await cleared.json()) as Array<{ trigger?: string }>)[0]?.trigger).toBe(
+      "需要审查时",
+    );
   });
 
   test("卸载只删关系：skill 内容仍在技能库，另一个 agent 还能用", async () => {

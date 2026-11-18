@@ -73,6 +73,7 @@ export interface AgentSkillCatalog {
     prompt: string;
     source: string;
     enabled: boolean;
+    overriddenBy?: string;
     shadowed: Array<{ source: string }>;
   };
   /** 「被谁使用」 */
@@ -705,14 +706,15 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
     return mounts.listForAgent(agentId).map((mount) => {
       let description = "";
       let trigger = mount.triggerOverride ?? "";
-      let shadowed: Array<{ source: string }> = [];
+      let shadowed = false;
       let missing = false;
       if (catalog) {
         try {
           const detail = catalog.detail(mount.skillName);
           description = detail.description;
           if (mount.triggerOverride === undefined) trigger = detail.trigger;
-          shadowed = detail.shadowed;
+          // 前端契约：shadowed 是布尔（是否被更高优先层覆盖），不是层次数组
+          shadowed = detail.overriddenBy !== undefined;
         } catch {
           missing = true;
         }
@@ -721,9 +723,9 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
         name: mount.skillName,
         source: mount.source,
         enabled: mount.enabled,
+        shadowed,
         ...(trigger === "" ? {} : { trigger }),
         ...(description === "" ? {} : { description }),
-        shadowed,
         missing,
         mountedAt: new Date(mount.createdAt).toISOString(),
         updatedAt: new Date(mount.updatedAt).toISOString(),
@@ -776,7 +778,7 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
       if (blocked) return blocked;
       const skills = skillEntries(agentId);
       c.header("Cache-Control", "no-cache");
-      return c.json({ agentId, skills, total: skills.length });
+      return c.json(skills);
     });
 
     // POST /:id/skills — 增量添加（已挂载则原样返回，不改启停）
@@ -799,14 +801,7 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
       }
       const { created } = mounts.add({ agentId, skillName: name, source });
       syncConfigSkills(agentId);
-      return c.json(
-        {
-          mount: skillEntries(agentId).find((entry) => entry.name === name) ?? null,
-          created,
-          skills: skillEntries(agentId),
-        },
-        created ? 201 : 200,
-      );
+      return c.json(skillEntries(agentId), created ? 201 : 200);
     });
 
     // PUT /:id/skills — 全量替换（对齐 Multica SetAgentSkills）
@@ -841,8 +836,7 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
       }
       mounts.replace(agentId, names);
       syncConfigSkills(agentId);
-      const skills = skillEntries(agentId);
-      return c.json({ agentId, skills, total: skills.length });
+      return c.json(skillEntries(agentId));
     });
 
     // PATCH /:id/skills/:name — 启停 / 覆盖 trigger
@@ -870,9 +864,7 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
           404,
         );
       }
-      return c.json({
-        mount: skillEntries(agentId).find((entry) => entry.name === name) ?? null,
-      });
+      return c.json(skillEntries(agentId));
     });
 
     // DELETE /:id/skills/:name — 卸载（只删关系，内容留在技能库）
@@ -889,7 +881,7 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
         );
       }
       syncConfigSkills(agentId);
-      return c.json({ ok: true, name, skills: skillEntries(agentId) });
+      return c.json(skillEntries(agentId));
     });
   }
 

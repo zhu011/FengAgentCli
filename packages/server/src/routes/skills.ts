@@ -123,7 +123,8 @@ export function createSkillRoutes(options: SkillServiceOptions | SkillService): 
     };
     try {
       const result = await service.importSkill(input);
-      return c.json(result, result.skipped ? 200 : 201);
+      // 前端契约（KG P1，e2e stub 同形）：顶层 name + source；skill/revision 为超集
+      return c.json({ name: result.skill.name, ...result }, result.skipped ? 200 : 201);
     } catch (err) {
       return fail(c, err);
     }

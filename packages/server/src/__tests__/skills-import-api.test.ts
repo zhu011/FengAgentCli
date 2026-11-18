@@ -93,9 +93,12 @@ describe("POST /api/skills/import — manual", () => {
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as {
+      name: string;
       skill: { name: string; source: string };
       revision: { version: number; contentHash: string };
     };
+    // 前端契约（KG e2e stub）：顶层 name + source，skill/revision 为超集
+    expect(body.name).toBe("manual-skill");
     expect(body.skill.name).toBe("manual-skill");
     expect(body.revision.version).toBe(1);
     expect(agentVisible("manual-skill")).toBe(true);
