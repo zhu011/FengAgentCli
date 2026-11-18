@@ -33,9 +33,10 @@ import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
 import { createPluginRoutes, type PluginRouteSource, type MarketRouteSource } from "./routes/plugins.ts";
 import { createSettingsRoutes, type SettingsRouteSource } from "./routes/settings.ts";
 import { createSkillRoutes } from "./routes/skills.ts";
+import { SkillService } from "./skill-service.ts";
 import { createAgentRoutes, createRunRoutes } from "./routes/agents.ts";
 import { RunIndex } from "@fengagent/agent";
-import type { AgentRegistry } from "@fengagent/agent";
+import type { AgentRegistry, SkillMountStore } from "@fengagent/agent";
 import type { RuntimeInfo } from "./agent-runtimes.ts";
 import type { AgentTaskService } from "./agent-task-service.ts";
 import type { AgentGroupService } from "@fengagent/groups";
@@ -114,6 +115,12 @@ export interface ServerOptions {
     workdir?: string;
     teamDir?: string;
     env?: Record<string, string | undefined>;
+    /** 挂载层仓（P1：`/api/agents/:id/skills` 与版本快照共用） */
+    mounts?: SkillMountStore;
+    /** 本地导入允许根（缺省 workdir + 团队目录 + 用户 skills 根） */
+    importRoots?: string[];
+    /** 运行时 skills 根覆盖（runtime_copy 导入） */
+    runtimeSkillRoots?: Record<string, string | string[]>;
   };
   /**
    * 永久权限规则面（`/api/sessions/:id/permissions/rules`，撤销 permissions.json 规则）。
@@ -132,6 +139,8 @@ export interface ServerOptions {
     registry: AgentRegistry;
     runIndex?: RunIndex;
     listRuntimes?: () => RuntimeInfo[];
+    /** 技能挂载层（P1）；缺省沿用 `skills.mounts` */
+    skillMounts?: SkillMountStore;
   };
 }
 
@@ -242,18 +251,22 @@ export function createApp(options: ServerOptions): {
     app.route("/api/settings", createSettingsRoutes(options.settings));
   }
 
-  // 团队级技能库（P0）：三层合并视图 + CRUD + 启用停用 + 恢复默认
-  // 常驻挂载：技能就是本地 .md，无外部服务依赖
-  app.route(
-    "/api/skills",
-    createSkillRoutes({
-      workdir: options.skills?.workdir ?? process.cwd(),
-      ...(options.skills?.teamDir ? { teamDir: options.skills.teamDir } : {}),
-      ...(options.skills?.env ? { env: options.skills.env } : {}),
-    }),
-  );
+  // 团队级技能库（P0 + P1）：三层合并视图 + CRUD + 四路导入 + 版本/使用关系。
+  // 常驻挂载：技能就是本地 .md，无外部服务依赖。
+  const skillService = new SkillService({
+    workdir: options.skills?.workdir ?? process.cwd(),
+    ...(options.skills?.teamDir ? { teamDir: options.skills.teamDir } : {}),
+    ...(options.skills?.env ? { env: options.skills.env } : {}),
+    ...(options.skills?.mounts ? { mounts: options.skills.mounts } : {}),
+    ...(options.skills?.importRoots ? { importRoots: options.skills.importRoots } : {}),
+    ...(options.skills?.runtimeSkillRoots
+      ? { runtimeSkillRoots: options.skills.runtimeSkillRoots }
+      : {}),
+  });
+  app.route("/api/skills", createSkillRoutes(skillService));
 
   // 智能体管理面（P0）：实体化 CRUD + 绑定 + 概览 + 运行历史（会话/派单/群聊三路聚合）
+  // P1：技能挂载（agent_skill 为挂载事实源，config.skills 双写兼容）
   if (options.agents) {
     const runIndex =
       options.agents.runIndex ?? new RunIndex({ dataRoot: options.agents.registry.dataRoot });
@@ -262,12 +275,15 @@ export function createApp(options: ServerOptions): {
       (options.agentTaskService
         ? () => options.agentTaskService!.listRuntimes()
         : undefined);
+    const skillMounts = options.agents.skillMounts ?? options.skills?.mounts;
     app.route(
       "/api/agents",
       createAgentRoutes({
         registry: options.agents.registry,
         runIndex,
         ...(listRuntimes ? { listRuntimes } : {}),
+        ...(skillMounts ? { skillMounts } : {}),
+        skillCatalog: skillService,
       }),
     );
     app.route("/api/runs", createRunRoutes({ runIndex }));

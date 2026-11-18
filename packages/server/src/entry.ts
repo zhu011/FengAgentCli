@@ -86,8 +86,15 @@ async function main() {
         runtimeResult.permissionChecker.reload();
       },
     },
-    // P0：智能体管理面（/api/agents + /api/runs）；绑定状态复用 agentTaskService
-    agents: { registry: runtimeResult.agentRegistry },
+    // P0/P1：智能体管理面（/api/agents + /api/runs）；绑定状态复用 agentTaskService，
+    // 技能挂载层与 /api/skills 共用同一个 SkillMountStore（agent_skill 为事实源）
+    skills: {
+      ...(runtimeResult.skillMounts ? { mounts: runtimeResult.skillMounts } : {}),
+    },
+    agents: {
+      registry: runtimeResult.agentRegistry,
+      ...(runtimeResult.skillMounts ? { skillMounts: runtimeResult.skillMounts } : {}),
+    },
   });
 }
 

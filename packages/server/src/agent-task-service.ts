@@ -162,6 +162,13 @@ export interface AgentTaskServiceOptions {
    * 由 server 装配注入 `agentGroupService`；不传则只在任务侧收尾。
    */
   groupSink?: TaskGroupSink;
+  /**
+   * P1：按智能体装配执行上下文（instructions + 已挂载技能）。
+   *
+   * 只在 `{agent}` 派单时调用；返回空串 / 不传则原样发送任务正文（零回归）。
+   * 装配失败由注入方降级（记录并返回正文），不能因为技能读不到而拒单。
+   */
+  composePrompt?: (agentId: string, content: string) => string;
   /** 未指定 cwd 时的默认工作目录（默认 `<dataRoot>/dispatch-workspace`） */
   defaultCwd?: string;
   /** 握手/建会话超时（默认 120000） */
@@ -209,6 +216,7 @@ export class AgentTaskService {
   private readonly promptTimeoutMs: number;
   private readonly permissionPolicy: NonNullable<AgentTaskServiceOptions["permissionPolicy"]>;
   private readonly groupSink: TaskGroupSink | undefined;
+  private readonly composePrompt: ((agentId: string, content: string) => string) | undefined;
   private readonly now: () => number;
   private readonly active = new Map<string, ActiveRun>();
   private readonly subscribers = new Map<string, Set<(event: AgentTaskStreamEvent) => void>>();
@@ -225,6 +233,7 @@ export class AgentTaskService {
     this.agentRegistry = options.agentRegistry;
     this.permissionPolicy = options.permissionPolicy ?? (() => "deny");
     this.groupSink = options.groupSink;
+    this.composePrompt = options.composePrompt;
     mkdirSync(this.defaultCwd, { recursive: true });
 
     this.store =
@@ -687,7 +696,12 @@ export class AgentTaskService {
       // 的审批（同一 onPermission 通道）—— 两条路的决策口径因此完全一致。
       const entryPolicy = entry.permissionPolicy;
 
-      const result = await driver.prompt(task.content, {
+      const result = await driver.prompt(
+        // P1：智能体派单先注入 instructions + 挂载技能；按 runtime 直派保持原样
+        task.agentId === undefined
+          ? task.content
+          : (this.composePrompt?.(task.agentId, task.content) ?? task.content),
+        {
         onChunk: (chunk) => {
           text += chunk;
           this.emit(id, { type: "chunk", text: chunk });

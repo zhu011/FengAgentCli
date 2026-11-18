@@ -32,6 +32,7 @@ import type {
   RunMessage,
   RunStatus,
   RunSummary,
+  SkillMountStore,
 } from "@fengagent/agent";
 import { AgentRegistryError } from "@fengagent/agent";
 import type { RuntimeInfo } from "../agent-runtimes.ts";
@@ -51,7 +52,31 @@ export interface AgentRouteOptions {
   runIndex: RunIndex;
   /** 运行时卡片（来自 `AgentTaskService.listRuntimes()`；缺省视为无运行时） */
   listRuntimes?: () => RuntimeInfo[];
+  /** 技能挂载层仓（P1：`/api/agents/:id/skills`） */
+  skillMounts?: SkillMountStore;
+  /**
+   * 技能内容层查询（P1：`SkillService`）。
+   *
+   * 只依赖这两个方法，避免 agent 路由反向依赖 server 的完整服务类型。
+   */
+  skillCatalog?: AgentSkillCatalog;
   now?: () => number;
+}
+
+/** 技能内容层的最小接口（`SkillService` 结构兼容） */
+export interface AgentSkillCatalog {
+  /** 详情；不存在时抛错 */
+  detail(name: string): {
+    name: string;
+    description: string;
+    trigger: string;
+    prompt: string;
+    source: string;
+    enabled: boolean;
+    shadowed: Array<{ source: string }>;
+  };
+  /** 「被谁使用」 */
+  usage(name: string): { count: number; agents: Array<{ agentId: string; enabled: boolean }> };
 }
 
 /** 列表/卡片视图 */
@@ -669,6 +694,204 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
       args: agent.config.args,
     });
   });
+
+  // ── P1：技能挂载（内容留在共享库，卸载只删关系）────────────
+  const mounts = options.skillMounts;
+  const catalog = options.skillCatalog;
+
+  /** 挂载 + 内容层合并视图（内容缺失只标记 missing，不让列表 500） */
+  const skillEntries = (agentId: string) => {
+    if (!mounts) return [];
+    return mounts.listForAgent(agentId).map((mount) => {
+      let description = "";
+      let trigger = mount.triggerOverride ?? "";
+      let shadowed: Array<{ source: string }> = [];
+      let missing = false;
+      if (catalog) {
+        try {
+          const detail = catalog.detail(mount.skillName);
+          description = detail.description;
+          if (mount.triggerOverride === undefined) trigger = detail.trigger;
+          shadowed = detail.shadowed;
+        } catch {
+          missing = true;
+        }
+      }
+      return {
+        name: mount.skillName,
+        source: mount.source,
+        enabled: mount.enabled,
+        ...(trigger === "" ? {} : { trigger }),
+        ...(description === "" ? {} : { description }),
+        shadowed,
+        missing,
+        mountedAt: new Date(mount.createdAt).toISOString(),
+        updatedAt: new Date(mount.updatedAt).toISOString(),
+      };
+    });
+  };
+
+  /** 双写 `config.skills`（P0 详情页/旧消费方仍读它，spec §5.3.1） */
+  const syncConfigSkills = (agentId: string): void => {
+    if (!mounts) return;
+    const agent = registry.get(agentId);
+    if (!agent) return;
+    const names = mounts.listForAgent(agentId).map((mount) => mount.skillName);
+    registry.update(agentId, { config: { ...agent.config, skills: names } });
+  };
+
+  /** 挂载前置校验：装配/agent 存在/skill 在内容层存在 */
+  const requireMountContext = (
+    c: Context,
+    agentId: string,
+    skillName?: string,
+  ): Response | null => {
+    if (!mounts) {
+      return c.json(
+        { error: { message: "技能挂载未装配（缺少 skillMounts）", code: "not_configured" } },
+        501,
+      );
+    }
+    if (!registry.get(agentId)) {
+      return c.json({ error: { message: "智能体不存在", code: "agent_not_found" } }, 404);
+    }
+    if (skillName !== undefined && catalog) {
+      try {
+        catalog.detail(skillName);
+      } catch {
+        return c.json(
+          { error: { message: `技能不存在: ${skillName}`, code: "skill_not_found" } },
+          404,
+        );
+      }
+    }
+    return null;
+  };
+
+  if (mounts) {
+    // GET /:id/skills — 已挂载列表（含 enabled / 来源 / 是否被 shadow）
+    app.get("/:id/skills", (c) => {
+      const agentId = c.req.param("id");
+      const blocked = requireMountContext(c, agentId);
+      if (blocked) return blocked;
+      const skills = skillEntries(agentId);
+      c.header("Cache-Control", "no-cache");
+      return c.json({ agentId, skills, total: skills.length });
+    });
+
+    // POST /:id/skills — 增量添加（已挂载则原样返回，不改启停）
+    app.post("/:id/skills", async (c) => {
+      const agentId = c.req.param("id");
+      const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (name === "") {
+        return c.json({ error: { message: "name 必填", code: "bad_request" } }, 400);
+      }
+      const blocked = requireMountContext(c, agentId, name);
+      if (blocked) return blocked;
+      let source = "team";
+      if (catalog) {
+        try {
+          source = catalog.detail(name).source;
+        } catch {
+          // 上面已经校验过；竞态下退化为 team
+        }
+      }
+      const { created } = mounts.add({ agentId, skillName: name, source });
+      syncConfigSkills(agentId);
+      return c.json(
+        {
+          mount: skillEntries(agentId).find((entry) => entry.name === name) ?? null,
+          created,
+          skills: skillEntries(agentId),
+        },
+        created ? 201 : 200,
+      );
+    });
+
+    // PUT /:id/skills — 全量替换（对齐 Multica SetAgentSkills）
+    app.put("/:id/skills", async (c) => {
+      const agentId = c.req.param("id");
+      const blocked = requireMountContext(c, agentId);
+      if (blocked) return blocked;
+      const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+      const raw = body.names ?? body.skills;
+      if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string")) {
+        return c.json(
+          { error: { message: "names 必须是字符串数组", code: "bad_request" } },
+          400,
+        );
+      }
+      const names = (raw as string[]).map((name) => name.trim()).filter((name) => name !== "");
+      const unknown: string[] = [];
+      if (catalog) {
+        for (const name of names) {
+          try {
+            catalog.detail(name);
+          } catch {
+            unknown.push(name);
+          }
+        }
+      }
+      if (unknown.length > 0) {
+        return c.json(
+          { error: { message: `技能不存在: ${unknown.join("、")}`, code: "skill_not_found" } },
+          404,
+        );
+      }
+      mounts.replace(agentId, names);
+      syncConfigSkills(agentId);
+      const skills = skillEntries(agentId);
+      return c.json({ agentId, skills, total: skills.length });
+    });
+
+    // PATCH /:id/skills/:name — 启停 / 覆盖 trigger
+    app.patch("/:id/skills/:name", async (c) => {
+      const agentId = c.req.param("id");
+      const name = c.req.param("name");
+      const blocked = requireMountContext(c, agentId, name);
+      if (blocked) return blocked;
+      const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+      const enabled =
+        typeof body.enabled === "boolean" ? (body.enabled as boolean) : undefined;
+      const trigger =
+        body.trigger === null
+          ? null
+          : typeof body.trigger === "string"
+            ? body.trigger
+            : undefined;
+      const updated = mounts.patch(agentId, name, {
+        ...(enabled === undefined ? {} : { enabled }),
+        ...(trigger === undefined ? {} : { triggerOverride: trigger }),
+      });
+      if (!updated) {
+        return c.json(
+          { error: { message: `未挂载该技能: ${name}`, code: "not_found" } },
+          404,
+        );
+      }
+      return c.json({
+        mount: skillEntries(agentId).find((entry) => entry.name === name) ?? null,
+      });
+    });
+
+    // DELETE /:id/skills/:name — 卸载（只删关系，内容留在技能库）
+    app.delete("/:id/skills/:name", (c) => {
+      const agentId = c.req.param("id");
+      const name = c.req.param("name");
+      const blocked = requireMountContext(c, agentId);
+      if (blocked) return blocked;
+      const removed = mounts.remove(agentId, name);
+      if (!removed) {
+        return c.json(
+          { error: { message: `未挂载该技能: ${name}`, code: "not_found" } },
+          404,
+        );
+      }
+      syncConfigSkills(agentId);
+      return c.json({ ok: true, name, skills: skillEntries(agentId) });
+    });
+  }
 
   return app;
 }

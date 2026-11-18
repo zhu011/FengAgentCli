@@ -22,6 +22,7 @@ import {
   SkillService,
   SkillServiceError,
   type SkillCreateInput,
+  type SkillImportInput,
   type SkillServiceOptions,
   type SkillUpdateInput,
 } from "../skill-service.ts";
@@ -78,6 +79,90 @@ export function createSkillRoutes(options: SkillServiceOptions | SkillService): 
     c.header("Cache-Control", "no-cache");
     try {
       return c.json(service.detail(c.req.param("name")));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  // POST /import — 四路导入（manual / local / url / runtime_copy）
+  // 必须显式分辨 type：前端「导入」入口一个，按来源带不同字段。
+  app.post("/import", async (c) => {
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: { message: "请求体不是合法 JSON", code: "bad_request" } }, 400);
+    }
+    const type = body["type"];
+    if (type !== "manual" && type !== "local" && type !== "url" && type !== "runtime_copy") {
+      return c.json(
+        {
+          error: {
+            message: "type 必须是 manual / local / url / runtime_copy",
+            code: "bad_request",
+          },
+        },
+        400,
+      );
+    }
+    const pick = (key: string): string | undefined =>
+      typeof body[key] === "string" ? (body[key] as string) : undefined;
+    const input: SkillImportInput = {
+      type,
+      ...(pick("name") === undefined ? {} : { name: pick("name") }),
+      ...(pick("description") === undefined ? {} : { description: pick("description") }),
+      ...(pick("trigger") === undefined ? {} : { trigger: pick("trigger") }),
+      ...(pick("prompt") === undefined ? {} : { prompt: pick("prompt") }),
+      ...(pick("path") === undefined ? {} : { path: pick("path") }),
+      ...(pick("url") === undefined ? {} : { url: pick("url") }),
+      ...(pick("runtime") === undefined ? {} : { runtime: pick("runtime") }),
+      ...(pick("skillName") === undefined ? {} : { skillName: pick("skillName") }),
+      ...(pick("onConflict") === undefined
+        ? {}
+        : { onConflict: pick("onConflict") as SkillImportInput["onConflict"] }),
+    };
+    try {
+      const result = await service.importSkill(input);
+      return c.json(result, result.skipped ? 200 : 201);
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  // GET /:name/revisions — 版本快照列表（append-only）
+  app.get("/:name/revisions", (c) => {
+    c.header("Cache-Control", "no-cache");
+    try {
+      return c.json({ name: c.req.param("name"), revisions: service.revisions(c.req.param("name")) });
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  // POST /:name/restore — 回滚到指定版本
+  app.post("/:name/restore", async (c) => {
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: { message: "请求体不是合法 JSON", code: "bad_request" } }, 400);
+    }
+    const version = typeof body["version"] === "number" ? body["version"] : Number(body["version"]);
+    if (!Number.isInteger(version)) {
+      return c.json({ error: { message: "version 必须是整数", code: "bad_request" } }, 400);
+    }
+    try {
+      return c.json(service.restore(c.req.param("name"), version));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  // GET /:name/usage — 被哪些智能体使用
+  app.get("/:name/usage", (c) => {
+    c.header("Cache-Control", "no-cache");
+    try {
+      return c.json(service.usage(c.req.param("name")));
     } catch (err) {
       return fail(c, err);
     }

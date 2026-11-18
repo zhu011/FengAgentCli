@@ -156,6 +156,20 @@ export type {
   UpdateAgentInput,
 } from "./agent-registry.ts";
 
+// Skill 挂载层 + 版本快照（P1：agent_skill / skill_revision）
+export { SkillMountStore } from "./skill-mount-store.ts";
+export type {
+  AgentSkillMount,
+  SkillMountSource,
+  SkillMountStoreOptions,
+  SkillRevision,
+  UpsertSkillMountInput,
+} from "./skill-mount-store.ts";
+
+// 智能体执行上下文装配（P1：instructions + 挂载技能 → prompt）
+export { buildAgentContext, renderDispatchPrompt } from "./agent-context.ts";
+export type { AgentContext, BuildAgentContextInput, ResolvedSkill } from "./agent-context.ts";
+
 // 统一运行索引（P0：会话/派单/群聊三路只读聚合）
 export { RunIndex } from "./run-index.ts";
 export type {

@@ -19,9 +19,12 @@ import {
   AgentRegistry,
   ReflectionStore,
   SessionStore,
+  SkillMountStore,
   TaskStore,
+  buildAgentContext,
   createAgentDefinitionLoader,
   createSubagentRunner,
+  renderDispatchPrompt,
 } from "@fengagent/agent";
 import type {
   Config,
@@ -53,6 +56,7 @@ import type {
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
+import { SkillService } from "./skill-service.ts";
 import { createModelSettingsService, type ModelSettingsService } from "./model-settings.ts";
 import type { AgentGroupService, GroupOrchestrator } from "@fengagent/groups";
 import { AgentGroupStore } from "@fengagent/agent";
@@ -251,6 +255,16 @@ export interface CreateRuntimeAgentResult {
    * 纯文件存储，初始化不依赖会话库。
    */
   agentRegistry: AgentRegistry;
+  /**
+   * Skill 挂载层仓（P1：`agent_skill` + `skill_revision`）。
+   * `enableSessionStore=false` 或初始化失败时为 null（上下文装配退化为只注入 instructions）。
+   */
+  skillMounts: SkillMountStore | null;
+  /**
+   * 团队技能库服务（P1：四路导入 + 挂载 + 版本）。
+   * 与 `/api/skills` 路由共用同一实例的判定口径。
+   */
+  skillService: SkillService;
   /**
    * 群聊服务（G1：`/api/groups` + 群工具）。
    * `enableSessionStore=false` 或初始化失败时为 null。
@@ -471,6 +485,63 @@ export async function createRuntimeAgent(
     taskStore = new TaskStore(`${dataDir}/tasks.db`);
   }
 
+  // 6.4 技能挂载层 + 内容层服务（P1）：`agent_skill` / `skill_revision` 与 SessionStore
+  //     同库（sessions.db，独立连接 + WAL，不跨库事务）。挂载仓打不开不阻断启动：
+  //     降级为「只注入 instructions，不注入技能」，并留一行 stderr 方便排查。
+  let skillMounts: SkillMountStore | null = null;
+  if (enableStore) {
+    try {
+      skillMounts = new SkillMountStore(`${dataDir}/sessions.db`);
+    } catch (err) {
+      process.stderr.write(
+        `Warn: 技能挂载仓不可用（${dataDir}/sessions.db）：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      skillMounts = null;
+    }
+  }
+  const skillService = new SkillService({
+    workdir,
+    ...(options.env ? { env: options.env } : {}),
+    ...(skillMounts ? { mounts: skillMounts } : {}),
+  });
+
+  /**
+   * 派单上下文装配（P1，spec §5.3.4）：instructions + 已挂载且 enabled 的技能。
+   *
+   * 任何一环失败都回落到任务正文 —— 技能是增强，不能成为派单失败的新原因。
+   */
+  const composeAgentPrompt = (agentId: string, content: string): string => {
+    try {
+      const agent = agentRegistry.get(agentId);
+      if (!agent) return content;
+      const mounts = skillMounts?.listForAgent(agentId) ?? [];
+      const context = buildAgentContext({
+        agent,
+        mounts,
+        resolveSkill: (name) => {
+          try {
+            const detail = skillService.detail(name);
+            return {
+              name: detail.name,
+              description: detail.description,
+              trigger: detail.trigger,
+              prompt: detail.prompt,
+              source: detail.source,
+            };
+          } catch {
+            return null;
+          }
+        },
+      });
+      return renderDispatchPrompt(context, content);
+    } catch (err) {
+      process.stderr.write(
+        `Warn: 智能体 ${agentId} 上下文装配失败（按原文派单）：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return content;
+    }
+  };
+
   // 6.5 外派任务服务（P1/P2）：注册表 + ACP 客户端 + 7 态任务仓，幂等台账复用 AGE-29 的
   //     operation_ledger（同一 attempt 只执行一次；未决的派发不静默重放）。
   //     群服务在下一步才创建，这里用惰性下沉口（G2 结果回群）先接上。
@@ -483,6 +554,7 @@ export async function createRuntimeAgent(
         dataRoot: dataDir,
         // P0：`{agent}` 派单按绑定关系解析 runtime，并在 spawn 前二次校验改绑
         agentRegistry,
+        composePrompt: composeAgentPrompt,
         ...(taskStore ? { ledger: taskStore.ledger } : {}),
         // 群服务稍后才建：用惰性下沉口，任务终态时把结果以 task_card 写回群（G2）
         groupSink: {
@@ -774,6 +846,8 @@ export async function createRuntimeAgent(
     reflectionStore,
     agentTaskService,
     agentRegistry,
+    skillMounts,
+    skillService,
     agentGroupService,
     agentGroupOrchestrator,
     agentDefinitionLoader,
