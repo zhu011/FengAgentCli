@@ -193,6 +193,8 @@ const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_DESCRIPTION = 200;
 const MAX_TRIGGER = 200;
 const MAX_PROMPT_BYTES = 64 * 1024;
+/** 导入内容的 description 上限（表单是 200 字，真实 skill 的 description 常更长） */
+const MAX_IMPORTED_DESCRIPTION = 4_000;
 /** 导入文件大小上限（spec：local / url 均 1 MiB） */
 const MAX_IMPORT_BYTES = 1024 * 1024;
 /** URL 导入超时（spec：15s） */
@@ -530,7 +532,7 @@ export class SkillService {
         "conflict",
       );
     }
-    this.assertDescription(frontmatter["description"] ?? "");
+    this.assertImportedDescription(frontmatter["description"] ?? "");
     this.assertPrompt(body);
     this.writeRaw(name, revision.content);
     this.setDisabled(name, false);
@@ -784,7 +786,10 @@ export class SkillService {
     }
     this.assertName(name);
     const description = String(frontmatter["description"] ?? "").trim();
-    this.assertDescription(description);
+    // 导入是「原样收编」：真实 skill（如 anthropics/skills）description 常远超
+    // 200 字的表单上限，按手工创建的口径拒绝会让 URL 导入在真实仓库上全军覆没。
+    // 这里只做非空与防滥用上限，正文原样保留（不截断来源内容）。
+    this.assertImportedDescription(description);
     const trigger = String(frontmatter["trigger"] ?? "").trim();
     this.assertTrigger(trigger);
     this.assertPrompt(body);
@@ -974,6 +979,17 @@ export class SkillService {
     if (description === "") throw new SkillServiceError("description 必填", "bad_request");
     if (description.length > MAX_DESCRIPTION) {
       throw new SkillServiceError(`description 超长（>${MAX_DESCRIPTION} 字）`, "bad_request");
+    }
+  }
+
+  /** 导入/回滚的 description 口径：非空 + 防滥用上限（真实 skill 常超表单上限） */
+  private assertImportedDescription(description: string): void {
+    if (description === "") throw new SkillServiceError("description 必填", "bad_request");
+    if (description.length > MAX_IMPORTED_DESCRIPTION) {
+      throw new SkillServiceError(
+        `description 超长（>${MAX_IMPORTED_DESCRIPTION} 字）`,
+        "bad_request",
+      );
     }
   }
 

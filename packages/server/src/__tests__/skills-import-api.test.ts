@@ -167,6 +167,17 @@ describe("POST /api/skills/import — local", () => {
     expect(res.status).toBe(400);
   });
 
+  test("真实 skill 的长 description（>200 字）不被导入拒绝", async () => {
+    // anthropics/skills 等真实仓库的 description 常见 300+ 字；表单上限不该卡导入
+    const longDescription = "场景说明".repeat(100);
+    const source = join(workdir, "long-desc.md");
+    writeFileSync(source, skillMarkdown("long-desc", longDescription), "utf-8");
+    const res = await app.request("/import", json({ type: "local", path: source }));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { skill: { description: string } };
+    expect(body.skill.description.length).toBeGreaterThan(200);
+  });
+
   test("rename 策略：重名时落 name-2，正文与来源保留", async () => {
     const source = join(workdir, "rename-me.md");
     writeFileSync(source, skillMarkdown("rename-me", "第一版"), "utf-8");
