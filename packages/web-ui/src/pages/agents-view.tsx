@@ -54,6 +54,23 @@ const KIND_LABEL: Record<AgentRun["kind"], string> = {
   squad: "小队",
 };
 
+/** 运行状态 → 中文（后端归一状态：created/dispatched/running/replied/completed/failed/cancelled/expired…） */
+const RUN_STATUS_LABEL: Record<string, string> = {
+  created: "已创建",
+  dispatched: "已派发",
+  running: "运行中",
+  replied: "已完成",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  expired: "已过期",
+  queued: "排队中",
+};
+
+function runStatusLabel(status: string): string {
+  return RUN_STATUS_LABEL[status] ?? status;
+}
+
 function formatDuration(ms: number | null): string {
   if (ms === null) return "—";
   if (ms < 1000) return `${ms}ms`;
@@ -331,7 +348,7 @@ export function AgentsView({ client }: { client: ApiClient }) {
                 <span className="ag-chip ag-chip--muted">7d 运行 {a.runs7d}</span>
                 {a.lastRunStatus && (
                   <span className={`ag-chip ${a.lastRunStatus === "replied" ? "" : "ag-chip--muted"}`}>
-                    最近 {KIND_LABEL[a.lastRunStatus as AgentRun["kind"]] ?? a.lastRunStatus}
+                    最近 {a.lastRunStatus ? runStatusLabel(a.lastRunStatus) : ""}
                   </span>
                 )}
               </div>
@@ -543,7 +560,7 @@ function AgentOverviewPane({ source, id }: { source: AgentSource; id: string }) 
                 <tr key={r.id}>
                   <td>{KIND_LABEL[r.kind] ?? r.kind}</td>
                   <td>{r.title}</td>
-                  <td>{r.status}</td>
+                  <td>{runStatusLabel(r.status)}</td>
                   <td>{formatTime(r.startedAt)}</td>
                   <td>{formatDuration(r.durationMs)}</td>
                 </tr>
@@ -628,7 +645,7 @@ function AgentRunsPane({ source, id }: { source: AgentSource; id: string }) {
                 <tr key={r.id}>
                   <td>{KIND_LABEL[r.kind] ?? r.kind}</td>
                   <td>{r.title}</td>
-                  <td>{r.status}</td>
+                  <td>{runStatusLabel(r.status)}</td>
                   <td>{formatTime(r.startedAt)}</td>
                   <td>{formatDuration(r.durationMs)}</td>
                 </tr>
