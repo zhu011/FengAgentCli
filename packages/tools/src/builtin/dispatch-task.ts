@@ -9,6 +9,10 @@
  * 注入（`createDispatchTaskTool(handler)`）—— 这样 tools 包不反向依赖 server，
  * 也方便测试注入假 handler。
  *
+ * P2 小队（队长模式）：带上 `squad` + `leaderTask` 时走**非阻塞**派活 —— 服务端只建
+ * 子任务并返回 task id，不等待成员跑完（成员终态会回头唤醒队长）。这两个参数由
+ * briefing 直接写进队长的 roster 里，模型照抄即可，不需要猜。
+ *
  * 副作用声明为 `non-idempotent`：派发是「对 agent 之外的可见效果」，崩溃恢复时
  * 未决的派发必须人工核对，绝不静默重放（与 AGE-29 台账语义一致）。
  */
@@ -18,7 +22,7 @@ import type { ToolDefinition, ToolResult } from "@fengagent/core/tool";
 
 /** 派发请求（工具入参 → 服务层） */
 export interface DispatchTaskRequest {
-  /** 目标 runtime 注册名（kimi / dsh / fengagent …） */
+  /** 目标 runtime 注册名（kimi / dsh / fengagent …）或智能体 id */
   runtime: string;
   /** 要交给它的任务文本 */
   content: string;
@@ -26,6 +30,10 @@ export interface DispatchTaskRequest {
   cwd?: string;
   /** 群内派发（G2）：结果会自动以 `task_card` 写回该群 */
   groupId?: string;
+  /** 小队 id（P2 队长模式：带上它就是「派给成员」而不是「派给 runtime」） */
+  squadId?: string;
+  /** 队长任务 id（P2 队长模式：子任务的 parent） */
+  leaderTaskId?: string;
 }
 
 /** 派发结果（服务层 → 工具结果） */
@@ -48,7 +56,7 @@ const dispatchTaskSchema = z.object({
   agent: z
     .string()
     .min(1)
-    .describe("目标 agent runtime 的注册名，例如 kimi / dsh / fengagent"),
+    .describe("目标：智能体 id 或 runtime 注册名（例如 kimi / dsh / fengagent）"),
   task: z
     .string()
     .min(1)
@@ -65,6 +73,16 @@ const dispatchTaskSchema = z.object({
     .describe(
       "可选：群 id。带上它时，任务结果会自动以 task_card 写回该群（G2 群内派发）",
     ),
+  squad: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("可选：小队 id。作为队长派活时带上它（配合 leader_task），走非阻塞模式"),
+  leader_task: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("可选：你的队长任务 id（briefing 里给了），子任务会挂在它下面"),
 });
 
 /** 工具入参类型 */
@@ -77,10 +95,13 @@ export interface DispatchTaskMetadata {
   status: string;
 }
 
+/** 这些状态视为「派发成功」（replied = 已跑完；assigned/running = 非阻塞派活已建单） */
+const SUCCESS_STATUSES = new Set(["replied", "assigned", "running", "dispatched"]);
+
 /**
  * 创建 `dispatch_task` 工具。
  *
- * @param handler - 派发实现（生产 = `AgentTaskService.dispatchAndWait`）
+ * @param handler - 派发实现（生产 = `AgentTaskService.dispatchAndWait`，小队模式 = 非阻塞建单）
  * @param options - `runtimes`：把可用 runtime 名单写进工具描述（模型据此选目标）
  */
 export function createDispatchTaskTool(
@@ -90,7 +111,7 @@ export function createDispatchTaskTool(
   const listRuntimes = (): string => {
     try {
       const names = options.runtimes?.() ?? [];
-      return names.length > 0 ? `可用 runtime：${names.join(" / ")}。` : "";
+      return names.length > 0 ? `可用 agent/runtime：${names.join(" / ")}。` : "";
     } catch {
       return "";
     }
@@ -99,10 +120,10 @@ export function createDispatchTaskTool(
   return {
     name: "dispatch_task",
     description:
-      "把一个自包含的任务派给本机另一个 agent（kimi / dsh / fengagent 等 ACP 运行时）执行，" +
-      "等待它跑完并把最终回复返回给你。目标 agent 看不到当前会话的上下文，任务文本必须自包含" +
-      "（背景、目标、交付物、边界都写清楚）。适合「换一个模型/运行时做交叉验证」「让专门的 agent " +
-      "跑长任务」这类场景。" +
+      "把一个自包含的任务派给本机另一个 agent（kimi / dsh / fengagent 等 ACP 运行时）执行。" +
+      "默认等待它跑完并把最终回复返回给你；作为小队队长派活时带上 `squad` + `leader_task`，" +
+      "则**建完即返回 task id**（成员终态会回头唤醒你），不要自己轮询。" +
+      "目标 agent 看不到当前会话的上下文，任务文本必须自包含（背景、目标、交付物、边界都写清楚）。" +
       listRuntimes(),
 
     inputSchema: dispatchTaskSchema,
@@ -115,15 +136,19 @@ export function createDispatchTaskTool(
             content: input.task,
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
             ...(input.groupId === undefined ? {} : { groupId: input.groupId }),
+            ...(input.squad === undefined ? {} : { squadId: input.squad }),
+            ...(input.leader_task === undefined ? {} : { leaderTaskId: input.leader_task }),
           },
           { sessionId: context.sessionId, workdir: context.workdir },
         );
-        const ok = outcome.status === "replied";
+        const ok = SUCCESS_STATUSES.has(outcome.status);
         const body = outcome.result ?? outcome.error ?? "";
+        const head =
+          outcome.status === "assigned"
+            ? `已派单 ${outcome.id} → ${outcome.runtime}（非阻塞，成员终态会唤醒你）`
+            : `派发任务 ${outcome.id} → ${outcome.runtime}：${outcome.status}`;
         return {
-          content:
-            `派发任务 ${outcome.id} → ${outcome.runtime}：${outcome.status}` +
-            (body === "" ? "" : `\n\n${body}`),
+          content: head + (body === "" ? "" : `\n\n${body}`),
           isError: !ok,
           metadata: {
             taskId: outcome.id,
@@ -144,7 +169,8 @@ export function createDispatchTaskTool(
     // 派发是「对 agent 之外的可见效果」：进副作用台账，未决时不静默重放
     sideEffect: () => "non-idempotent",
     isConcurrencySafe: () => true,
-    renderUse: (input) => `dispatch_task(${input.agent}) → ${input.task.slice(0, 60)}`,
+    renderUse: (input) =>
+      `dispatch_task(${input.agent}${input.squad === undefined ? "" : ` @${input.squad}`}) → ${input.task.slice(0, 60)}`,
     renderResult: (result) => (result.isError ? "派发失败" : "派发完成"),
   };
 }

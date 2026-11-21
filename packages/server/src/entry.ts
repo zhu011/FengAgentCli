@@ -58,6 +58,10 @@ async function main() {
     ...(runtimeResult.agentTaskService
       ? { agentTaskService: runtimeResult.agentTaskService }
       : {}),
+    // P2 小队与负责人确认（/api/squads + /api/approvals）；初始化失败时为 undefined
+    ...(runtimeResult.squadService
+      ? { squads: { service: runtimeResult.squadService } }
+      : {}),
     // 群聊页 + 群工具（G1）；初始化失败时为 undefined → `/api/groups` 不挂载
     ...(runtimeResult.agentGroupService
       ? { agentGroupService: runtimeResult.agentGroupService }

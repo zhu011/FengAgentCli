@@ -170,6 +170,48 @@ export type {
 export { buildAgentContext, renderDispatchPrompt } from "./agent-context.ts";
 export type { AgentContext, BuildAgentContextInput, ResolvedSkill } from "./agent-context.ts";
 
+// 小队与队长（P2：实体仓 / briefing / 负责人确认）
+export { SquadStore, SquadStoreError } from "./squad-store.ts";
+export type {
+  CreateSquadInput,
+  SquadDetail,
+  SquadErrorCode,
+  SquadMember,
+  SquadMemberType,
+  SquadMode,
+  SquadRecord,
+  SquadRunRecord,
+  SquadStoreOptions,
+  SquadTaskRecord,
+  SquadTaskStatus,
+  UpdateSquadInput,
+} from "./squad-store.ts";
+export {
+  assignableMembers,
+  buildSquadBriefing,
+  composeSquadLeaderPrompt,
+  composeSquadWakePrompt,
+  DEFAULT_SQUAD_PROTOCOL,
+} from "./briefing.ts";
+export type {
+  BuildSquadBriefingInput,
+  SquadBriefing,
+  SquadRosterEntry,
+} from "./briefing.ts";
+export { ApprovalStore, ApprovalStoreError } from "./approval-store.ts";
+export type {
+  ApprovalActor,
+  ApprovalAuditAction,
+  ApprovalAuditEntry,
+  ApprovalGrant,
+  ApprovalRequest,
+  ApprovalScope,
+  ApprovalStatus,
+  ApprovalStoreOptions,
+  CreateApprovalInput,
+  ResolveApprovalInput,
+} from "./approval-store.ts";
+
 // 统一运行索引（P0：会话/派单/群聊三路只读聚合）
 export { RunIndex } from "./run-index.ts";
 export type {

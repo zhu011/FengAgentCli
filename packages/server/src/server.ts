@@ -33,6 +33,9 @@ import { createWebuiRoutes, type WebuiRouteSource } from "./routes/webui.ts";
 import { createPluginRoutes, type PluginRouteSource, type MarketRouteSource } from "./routes/plugins.ts";
 import { createSettingsRoutes, type SettingsRouteSource } from "./routes/settings.ts";
 import { createSkillRoutes } from "./routes/skills.ts";
+import { createSquadRoutes } from "./routes/squads.ts";
+import { createApprovalRoutes } from "./routes/approvals.ts";
+import type { SquadService } from "./squad-service.ts";
 import { SkillService } from "./skill-service.ts";
 import { createAgentRoutes, createRunRoutes } from "./routes/agents.ts";
 import { RunIndex } from "@fengagent/agent";
@@ -141,6 +144,16 @@ export interface ServerOptions {
     listRuntimes?: () => RuntimeInfo[];
     /** 技能挂载层（P1）；缺省沿用 `skills.mounts` */
     skillMounts?: SkillMountStore;
+  };
+  /**
+   * 小队与负责人确认（P2：`/api/squads` + `/api/approvals`）。
+   *
+   * 提供时挂载；`humanOwner` 是写进人类裁决审计的 actor id（缺省 `owner`）。
+   * 缺省不挂 —— 前端小队子视图据此回退演示数据。
+   */
+  squads?: {
+    service: SquadService;
+    humanOwner?: string;
   };
 }
 
@@ -287,6 +300,18 @@ export function createApp(options: ServerOptions): {
       }),
     );
     app.route("/api/runs", createRunRoutes({ runIndex }));
+  }
+
+  // 小队与负责人确认（P2）：服务缺失时不挂路由 —— 前端小队子视图自动回退演示数据。
+  if (options.squads) {
+    app.route("/api/squads", createSquadRoutes(options.squads.service));
+    app.route(
+      "/api/approvals",
+      createApprovalRoutes(
+        options.squads.service,
+        options.squads.humanOwner === undefined ? "owner" : options.squads.humanOwner,
+      ),
+    );
   }
 
   // 静态文件服务（生产模式托管 WebUI 构建产物）

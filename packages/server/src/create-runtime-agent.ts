@@ -17,15 +17,19 @@ import type { Agent } from "@fengagent/agent";
 import {
   Agent as AgentClass,
   AgentRegistry,
+  ApprovalStore,
   ReflectionStore,
   SessionStore,
   SkillMountStore,
+  SquadStore,
   TaskStore,
   buildAgentContext,
   createAgentDefinitionLoader,
   createSubagentRunner,
   renderDispatchPrompt,
 } from "@fengagent/agent";
+import type { AgentContext, ApprovalRequest as ApprovalRequestType } from "@fengagent/agent";
+type ApprovalRequestStatus = ApprovalRequestType["status"];
 import type {
   Config,
   PartialConfig,
@@ -44,6 +48,9 @@ import {
   createToolExecutor,
   createPermissionChecker,
   createHookRegistry,
+  createListApprovalsTool,
+  createResolveApprovalTool,
+  createEscalateApprovalTool,
   registerMcpTools,
   createDispatchTaskTool,
 } from "@fengagent/tools";
@@ -56,6 +63,7 @@ import type {
 import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
+import { SquadService } from "./squad-service.ts";
 import { SkillService } from "./skill-service.ts";
 import { createModelSettingsService, type ModelSettingsService } from "./model-settings.ts";
 import type { AgentGroupService, GroupOrchestrator } from "@fengagent/groups";
@@ -250,6 +258,13 @@ export interface CreateRuntimeAgentResult {
    * `enableSessionStore=false` 或初始化失败时为 null。
    */
   agentTaskService: AgentTaskService | null;
+  /**
+   * 小队编排服务（P2：`/api/squads` + `/api/approvals`）。
+   * `enableSessionStore=false` 或初始化失败时为 null（路由不挂载）。
+   */
+  squadService: SquadService | null;
+  /** 审批仓（P2 负责人确认；与 squadService 同库） */
+  approvalStore: ApprovalStore | null;
   /**
    * 智能体仓（P0：`/api/agents` + 派单 `{agent}` 绑定解析）。
    * 纯文件存储，初始化不依赖会话库。
@@ -506,16 +521,18 @@ export async function createRuntimeAgent(
   });
 
   /**
-   * 派单上下文装配（P1，spec §5.3.4）：instructions + 已挂载且 enabled 的技能。
+   * 智能体上下文装配（P1，spec §5.3.4）：instructions + 已挂载且 enabled 的技能。
    *
+   * P2 起拆成两段：`buildAgentContextFor` 供小队 briefing 取「基础 prompt」，
+   * `composeAgentPrompt` 仍是「基础 prompt + 本次任务」的派单入口。
    * 任何一环失败都回落到任务正文 —— 技能是增强，不能成为派单失败的新原因。
    */
-  const composeAgentPrompt = (agentId: string, content: string): string => {
+  const buildAgentContextFor = (agentId: string): AgentContext | null => {
     try {
       const agent = agentRegistry.get(agentId);
-      if (!agent) return content;
+      if (!agent) return null;
       const mounts = skillMounts?.listForAgent(agentId) ?? [];
-      const context = buildAgentContext({
+      return buildAgentContext({
         agent,
         mounts,
         resolveSkill: (name) => {
@@ -533,13 +550,20 @@ export async function createRuntimeAgent(
           }
         },
       });
-      return renderDispatchPrompt(context, content);
     } catch (err) {
       process.stderr.write(
-        `Warn: 智能体 ${agentId} 上下文装配失败（按原文派单）：${err instanceof Error ? err.message : String(err)}\n`,
+        `Warn: 智能体 ${agentId} 上下文装配失败：${err instanceof Error ? err.message : String(err)}\n`,
       );
-      return content;
+      return null;
     }
+  };
+
+  /** 基础 prompt（instructions + 技能，不含「本次任务」）：小队 briefing 用 */
+  const composeAgentBase = (agentId: string): string => buildAgentContextFor(agentId)?.prompt ?? "";
+
+  const composeAgentPrompt = (agentId: string, content: string): string => {
+    const context = buildAgentContextFor(agentId);
+    return context === null ? content : renderDispatchPrompt(context, content);
   };
 
   // 6.5 外派任务服务（P1/P2）：注册表 + ACP 客户端 + 7 态任务仓，幂等台账复用 AGE-29 的
@@ -548,6 +572,10 @@ export async function createRuntimeAgent(
   let agentGroupService: AgentGroupService | null = null;
   let agentGroupOrchestrator: GroupOrchestrator | null = null;
   let agentTaskService: AgentTaskService | null = null;
+  // P2：小队服务在派单服务之后装配（它依赖 agentTaskService），但权限策略闭包要先声明
+  let squadService: SquadService | null = null;
+  let approvalStore: ApprovalStore | null = null;
+  const humanOwner = options.env?.FENG_OWNER ?? "owner";
   if (enableStore) {
     try {
       agentTaskService = new AgentTaskService({
@@ -555,6 +583,31 @@ export async function createRuntimeAgent(
         // P0：`{agent}` 派单按绑定关系解析 runtime，并在 spawn 前二次校验改绑
         agentRegistry,
         composePrompt: composeAgentPrompt,
+        // P2 负责人确认：成员的工具审批先查授权（once / session / permanent），
+        // 查不到就落一条待裁决请求（目标 = 队长）并返回 deny —— 绝不静默挂起，
+        // 也不因为「没人审批」把整轮任务判死（拒绝只作用于那一次工具调用）。
+        permissionPolicy: ({ taskId, request }) => {
+          const squad = squadService;
+          if (!squad) return "deny";
+          const agentId = agentTaskService?.store.get(taskId)?.agentId;
+          if (agentId === undefined) return "deny";
+          try {
+            const decision = squad.checkToolPermission({
+              agentId,
+              toolName: request.title ?? "tool",
+              ...(request.rawInput === undefined
+                ? {}
+                : { toolInput: JSON.stringify(request.rawInput).slice(0, 400) }),
+              agentTaskId: taskId,
+            });
+            return decision.allowed ? "allow" : "deny";
+          } catch (err) {
+            process.stderr.write(
+              `Warn: 审批闸门判定失败（按拒绝处理）：${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            return "deny";
+          }
+        },
         ...(taskStore ? { ledger: taskStore.ledger } : {}),
         // 群服务稍后才建：用惰性下沉口，任务终态时把结果以 task_card 写回群（G2）
         groupSink: {
@@ -569,6 +622,19 @@ export async function createRuntimeAgent(
       toolRegistry.register(
         createDispatchTaskTool(
           async (input, ctx) => {
+            // P2 小队队长派活：briefing 里给了 squad + leader_task → 建子任务即返回（非阻塞），
+            // 成员终态会回头唤醒队长；这是「派完就停」语义的关键，不能 await 成员跑完。
+            if (input.squadId !== undefined && input.leaderTaskId !== undefined) {
+              const squad = squadService;
+              if (!squad) throw new Error("小队能力未装配（squadService 为空）");
+              const sent = await squad.dispatchToMember({
+                squadId: input.squadId,
+                leaderTaskId: input.leaderTaskId,
+                memberId: input.runtime,
+                content: input.content,
+              });
+              return { id: sent.taskId, runtime: input.runtime, status: "assigned" };
+            }
             // P0：工具入参名仍是 agent，但语义升级为「智能体 id 优先，运行时名兼容」——
             // 命中智能体仓就按绑定关系解析 runtime，否则按旧的 runtime 直派（零回归）。
             const target =
@@ -605,6 +671,81 @@ export async function createRuntimeAgent(
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Warn: 外派任务服务不可用（${dataDir}）：${message}\n`);
       agentTaskService = null;
+    }
+  }
+
+  // 6.5b 小队与负责人确认（P2）：小队/成员/任务/运行树 + 审批仓，与 sessions.db 同库。
+  //      打不开只降级（`/api/squads` 不挂载），不影响既有派单与会话。
+  if (enableStore && agentTaskService !== null) {
+    const tasks = agentTaskService;
+    try {
+      const squadStore = new SquadStore(`${dataDir}/sessions.db`);
+      approvalStore = new ApprovalStore(`${dataDir}/sessions.db`);
+      const svc = new SquadService({
+        store: squadStore,
+        approvals: approvalStore,
+        agentRegistry,
+        tasks,
+        // briefing roster：成员启用中的技能名（P1 agent_skill）
+        skillsFor: (agentId) =>
+          (skillMounts?.listForAgent(agentId) ?? [])
+            .filter((mount) => mount.enabled)
+            .map((mount) => mount.skillName),
+        basePromptFor: composeAgentBase,
+        humanOwner,
+      });
+      squadService = svc;
+
+      // 队长的「日常确认」三件套：列出待裁决 / 裁决 / 上抛人类发起人。
+      // 审计由 SquadService → ApprovalStore 落库（谁、批哪次、once/session/permanent）。
+      const actorOf = (approvalId: string): { type: "agent"; id: string } => {
+        const detail = svc.approvalDetail(approvalId);
+        return { type: "agent", id: detail.request.targetId ?? "leader" };
+      };
+      toolRegistry.register(
+        createListApprovalsTool({
+          list: (status) =>
+            svc
+              .listApprovals(status === undefined ? {} : { status: status as ApprovalRequestStatus })
+              .map((approval) => ({
+                id: approval.id,
+                agentId: approval.agentId,
+                toolName: approval.toolName,
+                reason: approval.reason,
+                status: approval.status,
+              })),
+        }),
+      );
+      toolRegistry.register(
+        createResolveApprovalTool({
+          resolve: (input) => {
+            const resolved = svc.resolveApproval(input.approvalId, {
+              decision: input.decision,
+              ...(input.scope === undefined ? {} : { scope: input.scope }),
+              actor: actorOf(input.approvalId),
+              ...(input.note === undefined ? {} : { note: input.note }),
+            });
+            return { id: resolved.id, status: resolved.status };
+          },
+        }),
+      );
+      toolRegistry.register(
+        createEscalateApprovalTool({
+          escalate: (input) => {
+            const escalated = svc.escalateApproval(input.approvalId, {
+              actor: actorOf(input.approvalId),
+              ...(input.reason === undefined ? {} : { note: input.reason }),
+            });
+            return { id: escalated.id, status: escalated.status };
+          },
+        }),
+      );
+    } catch (err) {
+      process.stderr.write(
+        `Warn: 小队服务不可用（${dataDir}/sessions.db）：${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      squadService = null;
+      approvalStore = null;
     }
   }
 
@@ -845,6 +986,8 @@ export async function createRuntimeAgent(
     taskStore,
     reflectionStore,
     agentTaskService,
+    squadService,
+    approvalStore,
     agentRegistry,
     skillMounts,
     skillService,

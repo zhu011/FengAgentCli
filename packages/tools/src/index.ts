@@ -76,6 +76,17 @@ export type {
 } from "./builtin/dispatch-task.ts";
 export { createGroupTools } from "./builtin/group-tools.ts";
 export type { GroupToolHandler, GroupToolsOptions } from "./builtin/group-tools.ts";
+export {
+  createEscalateApprovalTool,
+  createListApprovalsTool,
+  createResolveApprovalTool,
+} from "./builtin/approval-tools.ts";
+export type {
+  ApprovalResolveOutcome,
+  ApprovalScopeInput,
+  ApprovalSummary,
+  ApprovalToolHandlers,
+} from "./builtin/approval-tools.ts";
 export { memorySave } from "./builtin/memory.ts";
 export { memorySearch } from "./builtin/memory.ts";
 export { memoryList } from "./builtin/memory.ts";
