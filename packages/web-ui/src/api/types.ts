@@ -650,6 +650,54 @@ export interface AgentInput {
   template?: string;
 }
 
+/* ─── 小队（AI 团队平台 P2，spec §5.2） ─── */
+
+/** 小队成员（agent 或人占位；role 自由文本） */
+export interface SquadMember {
+  /** agent | member（"member" 留给"人"占位） */
+  memberType: "agent" | "member";
+  memberId: string;
+  role: string;
+}
+
+/** 小队（GET /api/squads/:id；列表为同形摘要） */
+export interface SquadInfo {
+  /** 稳定 id（kebab-case） */
+  id: string;
+  name: string;
+  description: string;
+  /** 队长（必须是成员之一；移除队长需先换） */
+  leaderId: string;
+  /** leader = 队长软编排（默认）；auto = 算法分配 */
+  mode: "leader" | "auto";
+  /** 小队级指令（briefing 追加在各成员指令后，不覆盖） */
+  instructions: string;
+  members: SquadMember[];
+  archived: boolean;
+}
+
+/** 小队运行树节点（GET /api/squads/:id/runs；leader 父 + worker 子） */
+export interface SquadRunNode {
+  id: string;
+  /** 执行成员（agent id） */
+  assignee: string;
+  status: string;
+  title: string;
+  /** 父 run（worker → leader）；根为 null */
+  parentRunId: string | null;
+  startedAt: string;
+}
+
+/** 创建/编辑小队载荷 */
+export interface SquadInput {
+  id?: string;
+  name?: string;
+  description?: string;
+  leaderId?: string;
+  mode?: "leader" | "auto";
+  instructions?: string;
+}
+
 /* ─── Skill 导入与挂载（AI 团队平台 P1，spec §5.3） ─── */
 
 /** 导入来源类型（四路导入的后三路；手动创建走既有 POST /api/skills） */

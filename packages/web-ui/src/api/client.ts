@@ -50,6 +50,10 @@ import type {
   Session,
   SessionMeta,
   AgentSkillMount,
+  SquadInfo,
+  SquadInput,
+  SquadMember,
+  SquadRunNode,
   SkillEntryInput,
   SkillImportInput,
   SkillImportResult,
@@ -393,6 +397,103 @@ export class ApiClient {
     const res = await fetch(`${this.baseUrl}/api/agents/templates`);
     if (!res.ok) throw await this.toApiError(res, "Failed to list agent templates");
     return (await res.json()) as AgentTemplate[];
+  }
+
+  // ──────────────────────────────────────────────
+  // 小队（AI 团队平台 P2；后端未落地时小队子视图回退 mock）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/squads — 小队列表 */
+  async listSquads(): Promise<SquadInfo[]> {
+    const res = await fetch(`${this.baseUrl}/api/squads`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list squads");
+    return (await res.json()) as SquadInfo[];
+  }
+
+  /** GET /api/squads/:id — 小队详情（含成员） */
+  async getSquad(id: string): Promise<SquadInfo> {
+    const res = await fetch(`${this.baseUrl}/api/squads/${encodeURIComponent(id)}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get squad");
+    return (await res.json()) as SquadInfo;
+  }
+
+  /** POST /api/squads — 建队（name + leaderId 必填；leader 自动入成员） */
+  async createSquad(req: SquadInput): Promise<SquadInfo> {
+    const res = await fetch(`${this.baseUrl}/api/squads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to create squad");
+    return (await res.json()) as SquadInfo;
+  }
+
+  /** PATCH /api/squads/:id — 改名/描述/指令/模式 */
+  async updateSquad(id: string, patch: SquadInput): Promise<SquadInfo> {
+    const res = await fetch(`${this.baseUrl}/api/squads/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to update squad");
+    return (await res.json()) as SquadInfo;
+  }
+
+  /** DELETE /api/squads/:id — 归档（软删，历史保留） */
+  async archiveSquad(id: string): Promise<{ ok: boolean }> {
+    const res = await fetch(`${this.baseUrl}/api/squads/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) throw await this.toApiError(res, "Failed to archive squad");
+    return (await res.json()) as { ok: boolean };
+  }
+
+  /** POST /api/squads/:id/members — 添加成员（agent id + 自由 role） */
+  async addSquadMember(id: string, member: SquadMember): Promise<SquadInfo> {
+    const res = await fetch(`${this.baseUrl}/api/squads/${encodeURIComponent(id)}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(member),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to add squad member");
+    return (await res.json()) as SquadInfo;
+  }
+
+  /** DELETE /api/squads/:id/members/:memberType/:memberId — 移除成员（现任队长 → 409） */
+  async removeSquadMember(id: string, member: Pick<SquadMember, "memberType" | "memberId">): Promise<SquadInfo> {
+    const res = await fetch(
+      `${this.baseUrl}/api/squads/${encodeURIComponent(id)}/members/${encodeURIComponent(member.memberType)}/${encodeURIComponent(member.memberId)}`,
+      { method: "DELETE" },
+    );
+    if (!res.ok) throw await this.toApiError(res, "Failed to remove squad member");
+    return (await res.json()) as SquadInfo;
+  }
+
+  /** POST /api/squads/:id/leader — 换队长（新队长必须是成员） */
+  async setSquadLeader(id: string, memberId: string): Promise<SquadInfo> {
+    const res = await fetch(`${this.baseUrl}/api/squads/${encodeURIComponent(id)}/leader`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ leaderId: memberId }),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to set squad leader");
+    return (await res.json()) as SquadInfo;
+  }
+
+  /** POST /api/squads/:id/tasks — 派任务（mode 缺省用小队配置） */
+  async dispatchSquadTask(id: string, req: { content: string; mode?: "leader" | "auto" }): Promise<{ taskId: string }> {
+    const res = await fetch(`${this.baseUrl}/api/squads/${encodeURIComponent(id)}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to dispatch squad task");
+    return (await res.json()) as { taskId: string };
+  }
+
+  /** GET /api/squads/:id/runs — 运行树（leader 父 + worker 子） */
+  async listSquadRuns(id: string): Promise<SquadRunNode[]> {
+    const res = await fetch(`${this.baseUrl}/api/squads/${encodeURIComponent(id)}/runs`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list squad runs");
+    return (await res.json()) as SquadRunNode[];
   }
 
   // ──────────────────────────────────────────────

@@ -40,7 +40,7 @@ import "./index.css";
 export type AppView = "chat" | "observability" | "eval" | "teams" | "settings";
 
 /** 团队页子视图（?sub= 参数） */
-export type TeamsSubViewParam = "tasks" | "members" | "skills" | "agents";
+export type TeamsSubViewParam = "tasks" | "members" | "skills" | "agents" | "squads";
 
 /** deep-link 目标（会话 + 可选消息；团队深链可带群/子视图/任务） */
 export interface DeepLinkTarget {
@@ -116,7 +116,7 @@ function App() {
       groupId: params.get("group") ?? undefined,
       subView: ((): TeamsSubViewParam | undefined => {
         const sub = params.get("sub");
-        if (sub === "tasks" || sub === "members" || sub === "skills" || sub === "agents") return sub;
+        if (sub === "tasks" || sub === "members" || sub === "skills" || sub === "agents" || sub === "squads") return sub;
         // 旧 Agents 页语义 ≈ 任务库（无任务深链时）
         if (v === "agents" && !params.get("task")) return "tasks";
         return undefined;
