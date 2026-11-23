@@ -54,6 +54,11 @@ import type {
   SquadInput,
   SquadMember,
   SquadRunNode,
+  ApprovalStatus,
+  ApprovalScope,
+  ApprovalRequest,
+  ApprovalDetail,
+  ApprovalAuditEntry,
   SkillEntryInput,
   SkillImportInput,
   SkillImportResult,
@@ -496,6 +501,75 @@ export class ApiClient {
     return (await res.json()) as SquadRunNode[];
   }
 
+  // ──────────────────────────────────────────────
+  // 负责人确认审批（P2 第二阶段：裁决面板 + 审计）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/approvals — 审批列表（新 → 旧；可按 status/squadId/agentId 过滤） */
+  async listApprovals(query: { status?: ApprovalStatus; squadId?: string; agentId?: string } = {}): Promise<ApprovalRequest[]> {
+    const params = new URLSearchParams();
+    if (query.status) params.set("status", query.status);
+    if (query.squadId) params.set("squadId", query.squadId);
+    if (query.agentId) params.set("agentId", query.agentId);
+    const qs = params.toString();
+    const res = await fetch(`${this.baseUrl}/api/approvals${qs ? `?${qs}` : ""}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list approvals");
+    return (await res.json()) as ApprovalRequest[];
+  }
+
+  /** GET /api/approvals/:id — 详情 + 审计时间线 */
+  async getApprovalDetail(id: string): Promise<ApprovalDetail> {
+    const res = await fetch(`${this.baseUrl}/api/approvals/${encodeURIComponent(id)}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to get approval detail");
+    return (await res.json()) as ApprovalDetail;
+  }
+
+  /**
+   * POST /api/approvals/:id/resolve — 人类裁决（approve / deny + 三档 scope）。
+   *
+   * pending 之外的请求裁决 → 409；队长侧裁决走 resolve_approval 工具，同写审计。
+   */
+  async resolveApproval(
+    id: string,
+    req: { decision: "approve" | "deny"; scope?: ApprovalScope; note?: string },
+  ): Promise<ApprovalRequest> {
+    const res = await fetch(`${this.baseUrl}/api/approvals/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to resolve approval");
+    return (await res.json()) as ApprovalRequest;
+  }
+
+  /** POST /api/approvals/:id/escalate — 上抛（队长拿不准 → 人类发起人） */
+  async escalateApproval(id: string, req: { note?: string } = {}): Promise<ApprovalRequest> {
+    const res = await fetch(`${this.baseUrl}/api/approvals/${encodeURIComponent(id)}/escalate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to escalate approval");
+    return (await res.json()) as ApprovalRequest;
+  }
+
+  /** GET /api/approvals/audit/recent — 最近审计（治理视图） */
+  async listRecentApprovalAudit(limit = 100): Promise<ApprovalAuditEntry[]> {
+    const res = await fetch(`${this.baseUrl}/api/approvals/audit/recent?limit=${limit}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list approval audit");
+    return (await res.json()) as ApprovalAuditEntry[];
+  }
+
+  /** POST /api/approvals/revoke — 收回某成员的授权（permanent 收回） */
+  async revokeApprovals(agentId: string, toolName?: string): Promise<{ revoked: number }> {
+    const res = await fetch(`${this.baseUrl}/api/approvals/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentId, ...(toolName ? { toolName } : {}) }),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to revoke approvals");
+    return (await res.json()) as { revoked: number };
+  }
   // ──────────────────────────────────────────────
   // 团队级技能库（对齐后端 4c67aca 契约；后端未落地时技能库页回退 mock）
   // ──────────────────────────────────────────────

@@ -66,6 +66,8 @@ const RUN_STATUS_LABEL: Record<string, string> = {
   cancelled: "已取消",
   expired: "已过期",
   queued: "排队中",
+  /** P2-2 等待态：等负责人/队长审批时非终态停留，裁决后续跑 */
+  waiting_approval: "等待审批",
 };
 
 function runStatusLabel(status: string): string {

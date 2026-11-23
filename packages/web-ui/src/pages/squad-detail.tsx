@@ -9,9 +9,22 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Archive, ChevronLeft, Loader2, Plus, RefreshCw, Users } from "lucide-react";
+import { ApprovalsPane } from "./approvals-pane.tsx";
 import type { ApiClient } from "../api/client.ts";
 import type { SquadSource } from "../api/squads-mock.ts";
 import type { AgentCard, SquadInfo, SquadMember, SquadRunNode } from "../api/types.ts";
+
+/** 运行状态文案（waiting_approval 等待审批 = DSH P2-2 等待态；blocked 留给 issue 语义） */
+const RUN_STATUS: Record<string, string> = {
+  running: "运行中",
+  queued: "排队中",
+  replied: "已完成",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  expired: "已过期",
+  waiting_approval: "等待审批",
+};
 
 export function SquadDetailView({
   source,
@@ -324,7 +337,7 @@ export function SquadDetailView({
                 <div key={root.id}>
                   <div className="permission-grants__item" data-run-id={root.id}>
                     <span className="permission-grants__tool">{root.assignee}</span>
-                    <span className="permission-grants__badge permission-grants__badge--allow">leader</span>
+                    <span className="permission-grants__badge permission-grants__badge--allow">leader · {RUN_STATUS[root.status] ?? root.status}</span>
                     <span className="ag-runtime-card__meta" style={{ marginLeft: "auto", opacity: 0.8 }}>
                       {root.title}
                     </span>
@@ -339,7 +352,9 @@ export function SquadDetailView({
                         style={{ marginLeft: 24 }}
                       >
                         <span className="permission-grants__tool">{child.assignee}</span>
-                        <span className="permission-grants__badge permission-grants__badge--muted">{child.status}</span>
+                        <span className={`permission-grants__badge ${child.status === "waiting_approval" ? "permission-grants__badge--ask" : "permission-grants__badge--muted"}`}>
+                          {RUN_STATUS[child.status] ?? child.status}
+                        </span>
                         <span className="ag-runtime-card__meta" style={{ marginLeft: "auto", opacity: 0.8 }}>
                           {child.title}
                         </span>
@@ -350,6 +365,9 @@ export function SquadDetailView({
           </div>
         )}
       </div>
+
+      {/* 审批（负责人确认 + 上抛 + 审计） */}
+      <ApprovalsPane client={client} squadId={id} />
 
       {/* 危险区：归档 */}
       <div className="ag-form__row" style={{ borderTop: "1px solid var(--border-color)", paddingTop: 12 }}>

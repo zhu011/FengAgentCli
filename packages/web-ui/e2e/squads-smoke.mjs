@@ -132,6 +132,10 @@ try {
     check("负责人确认面可访问（" + appr.status + "）", appr.status === 200);
   }
 
+  // ⑥b 审批面板接线（真后端 /api/approvals：API 可达 + 空态过滤）
+  const apprPending = await api.call("/api/approvals?status=pending&squadId=fe-team");
+  check("审批 API 可达（pending 过滤）", apprPending.status === 200 && Array.isArray(apprPending.body));
+
   // ⑦ 浏览器渲染（真数据截图）
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -140,6 +144,17 @@ try {
   await page.locator('[data-testid="squad-card"]').first().click();
   await page.waitForSelector('[data-testid="squad-members"]', { timeout: 8000 });
   await page.waitForSelector('[data-testid="squad-runs"]', { timeout: 8000 });
+  await page.waitForSelector('[data-testid="squad-approvals"]', { timeout: 8000 });
+  const approvalsText = await page.locator('[data-testid="squad-approvals"]').textContent();
+  // 派单后 leader 执行触发 checkToolPermission → 真实 pending 审批（DSH 负责人确认闭环）
+  check(
+    "审批面板：真实 pending 渲染（leader-a · bash · 队长裁决态）",
+    (approvalsText ?? "").includes("待裁决") &&
+      (approvalsText ?? "").includes("leader-a · bash") &&
+      (approvalsText ?? "").includes("等待队长裁决中"),
+  );
+  // 审计流已含 request 发起行
+  check("审批面板：审计流含 request 发起行", (approvalsText ?? "").includes("发起"));
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: join(OUT, "squad-real-detail.png"), fullPage: true });
   await browser.close();

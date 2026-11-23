@@ -650,6 +650,57 @@ export interface AgentInput {
   template?: string;
 }
 
+/* ─── 负责人确认（P2：审批裁决面板，spec §5.2 负责人确认 + 上抛 + 审计） ─── */
+
+/** 审批状态 */
+export type ApprovalStatus = "pending" | "approved" | "denied" | "escalated" | "expired";
+
+/** 授权范围（三档） */
+export type ApprovalScope = "once" | "session" | "permanent";
+
+/** 审批请求（GET /api/approvals 列表项） */
+export interface ApprovalRequest {
+  id: string;
+  squadId?: string;
+  squadTaskId?: string;
+  /** 发起请求的成员（agent id） */
+  agentId: string;
+  toolName: string;
+  /** 工具调用入参摘要（截断） */
+  toolInput: string;
+  reason: string;
+  status: ApprovalStatus;
+  /** 该找谁裁决：leader（队长）| human（人类发起人） */
+  targetType: "leader" | "human";
+  targetId?: string;
+  createdAt: number;
+  resolvedAt?: number;
+  resolvedByType?: "agent" | "member" | "system";
+  resolvedById?: string;
+  note?: string;
+}
+
+/** 审计动作 */
+export type ApprovalAuditAction = "request" | "approve" | "deny" | "escalate" | "consume" | "expire";
+
+/** 审计行（谁、批哪次、scope） */
+export interface ApprovalAuditEntry {
+  id: string;
+  approvalId: string;
+  action: ApprovalAuditAction;
+  actorType: "agent" | "member" | "system";
+  actorId: string;
+  scope?: ApprovalScope;
+  note?: string;
+  at: number;
+}
+
+/** 审批详情（GET /api/approvals/:id：请求 + 审计时间线；键为 request，对齐后端 squad-service.approvalDetail） */
+export interface ApprovalDetail {
+  request: ApprovalRequest;
+  audit: ApprovalAuditEntry[];
+}
+
 /* ─── 小队（AI 团队平台 P2，spec §5.2） ─── */
 
 /** 小队成员（agent 或人占位；role 自由文本） */
