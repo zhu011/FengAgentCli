@@ -51,6 +51,8 @@ export function SquadDetailView({
   const [instructions, setInstructions] = useState("");
   // 派单
   const [taskContent, setTaskContent] = useState("");
+  /** auto 模式优先级（low/normal/high/urgent；SquadCoordinator 分配用） */
+  const [priority, setPriority] = useState<"low" | "normal" | "high" | "urgent">("normal");
   const [dispatching, setDispatching] = useState(false);
   // 运行树
   const [runs, setRuns] = useState<SquadRunNode[]>([]);
@@ -303,6 +305,21 @@ export function SquadDetailView({
           placeholder="任务内容…"
           onChange={(e) => setTaskContent(e.target.value)}
         />
+        {squad.mode === "auto" && (
+          <select
+            className="ag-form__select"
+            style={{ width: 160, marginTop: 8 }}
+            aria-label="优先级"
+            value={priority}
+            onChange={(e) => setPriority(e.target.value as "low" | "normal" | "high" | "urgent")}
+            title="auto 模式：协调器按优先级分配给空闲成员"
+          >
+            <option value="low">low · 低</option>
+            <option value="normal">normal · 普通</option>
+            <option value="high">high · 高</option>
+            <option value="urgent">urgent · 紧急</option>
+          </select>
+        )}
         <div className="ag-form__actions">
           <button
             type="button"
@@ -310,7 +327,10 @@ export function SquadDetailView({
             disabled={dispatching || busy || taskContent.trim() === ""}
             onClick={() => {
               setDispatching(true);
-              void run("任务已派发（运行树见下方）", () => source.dispatchSquadTask(id, { content: taskContent.trim() })).finally(
+              void run("任务已派发（运行树见下方）", () => source.dispatchSquadTask(id, {
+              content: taskContent.trim(),
+              ...(squad.mode === "auto" ? { priority: priority } : {}),
+            })).finally(
                 () => setDispatching(false),
               );
               setTaskContent("");
@@ -337,7 +357,10 @@ export function SquadDetailView({
                 <div key={root.id}>
                   <div className="permission-grants__item" data-run-id={root.id}>
                     <span className="permission-grants__tool">{root.assignee}</span>
-                    <span className="permission-grants__badge permission-grants__badge--allow">leader · {RUN_STATUS[root.status] ?? root.status}</span>
+                    <span className="permission-grants__badge permission-grants__badge--allow" title={root.blockedReason ?? undefined}>
+                      leader · {RUN_STATUS[root.status] ?? root.status}
+                      {root.status === "waiting_approval" && root.blockedReason ? ` · ${root.blockedReason.slice(0, 24)}` : ""}
+                    </span>
                     <span className="ag-runtime-card__meta" style={{ marginLeft: "auto", opacity: 0.8 }}>
                       {root.title}
                     </span>
@@ -352,8 +375,12 @@ export function SquadDetailView({
                         style={{ marginLeft: 24 }}
                       >
                         <span className="permission-grants__tool">{child.assignee}</span>
-                        <span className={`permission-grants__badge ${child.status === "waiting_approval" ? "permission-grants__badge--ask" : "permission-grants__badge--muted"}`}>
+                        <span
+                          className={`permission-grants__badge ${child.status === "waiting_approval" ? "permission-grants__badge--ask" : "permission-grants__badge--muted"}`}
+                          title={child.blockedReason ?? undefined}
+                        >
                           {RUN_STATUS[child.status] ?? child.status}
+                          {child.status === "waiting_approval" && child.blockedReason ? ` · ${child.blockedReason.slice(0, 24)}` : ""}
                         </span>
                         <span className="ag-runtime-card__meta" style={{ marginLeft: "auto", opacity: 0.8 }}>
                           {child.title}

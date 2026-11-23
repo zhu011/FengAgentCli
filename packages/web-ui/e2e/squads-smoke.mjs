@@ -136,12 +136,53 @@ try {
   const apprPending = await api.call("/api/approvals?status=pending&squadId=fe-team");
   check("审批 API 可达（pending 过滤）", apprPending.status === 200 && Array.isArray(apprPending.body));
 
-  // ⑦ 浏览器渲染（真数据截图）
+  // ⑦ auto 模式复验（真后端 SquadCoordinator 接线）
+  const autoSq = await api.call("/api/squads", "POST", { id: "auto-team", name: "自动小队", leaderId: "leader-a", mode: "auto" });
+  check("建 auto 小队（mode=auto 不再 400）", autoSq.status === 201 && autoSq.body?.mode === "auto");
+  await api.call("/api/squads/auto-team/members", "POST", { memberType: "agent", memberId: "worker-b", role: "执行" });
+  const autoDispatch = await api.call("/api/squads/auto-team/tasks", "POST", { content: "输出 hello", priority: "urgent" });
+  check("auto 派单（urgent 优先级，201/taskId）", autoDispatch.status === 201 && Boolean(autoDispatch.body?.taskId));
+  const coord = await api.call("/api/squads/auto-team/coordinator");
+  check("coordinator 状态可读", coord.status === 200);
+  const tick = await api.call("/api/squads/auto-team/coordinator/tick", "POST");
+  check("coordinator tick 推进（冷却恢复 + 补派）", tick.status === 200);
+
+  // ⑧ 等待态：成员请求审批 → waiting_approval（不判死）→ 裁决 → 续跑
+  let waitingSeen = false;
+  for (let i = 0; i < 30 && !waitingSeen; i++) {
+    const runs = await api.call("/api/squads/auto-team/runs");
+    waitingSeen = (runs.body ?? []).some((r) => r.status === "waiting_approval" && r.blockedReason);
+    if (!waitingSeen) await new Promise((r) => setTimeout(r, 1000));
+  }
+  check("waiting_approval 出现在运行树（blockedReason 带原因，非终态）", waitingSeen);
+
+  // 人类裁决 → 续跑
+  let apprToResolve = null;
+  for (let i = 0; i < 10 && !apprToResolve; i++) {
+    const list = await api.call("/api/approvals?status=pending");
+    apprToResolve = (list.body ?? []).find((a) => a.squadId === "auto-team") ?? null;
+    if (!apprToResolve) await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (apprToResolve) {
+    const resolved = await api.call(`/api/approvals/${apprToResolve.id}/resolve`, "POST", { decision: "approve", scope: "once" });
+    check("裁决批准（once）→ 任务续跑", resolved.status === 200);
+    let resumed = false;
+    for (let i = 0; i < 30 && !resumed; i++) {
+      const runs = await api.call("/api/squads/auto-team/runs");
+      resumed = (runs.body ?? []).some((r) => r.status === "running" || r.status === "replied");
+      if (!resumed) await new Promise((r) => setTimeout(r, 1000));
+    }
+    check("裁决后任务续跑（waiting → running/replied）", resumed);
+  } else {
+    check("（fake ACP 无真实审批触发时跳过续跑段）", waitingSeen ? false : true);
+  }
+
+  // ⑨ 浏览器渲染（真数据截图）
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.goto(`${BASE}/?view=teams&sub=squads`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="squad-card"]', { timeout: 15_000 });
-  await page.locator('[data-testid="squad-card"]').first().click();
+  await page.locator('[data-squad-id="fe-team"]').click();
   await page.waitForSelector('[data-testid="squad-members"]', { timeout: 8000 });
   await page.waitForSelector('[data-testid="squad-runs"]', { timeout: 8000 });
   await page.waitForSelector('[data-testid="squad-approvals"]', { timeout: 8000 });

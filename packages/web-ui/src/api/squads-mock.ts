@@ -158,8 +158,8 @@ export class SquadsMock implements SquadSource {
     const list = this.runs.get(id) ?? [];
     // leader 模式：leader 父 run + 第一个非队长成员子 run（演示树形）
     list.push(
-      { id: `${taskId}-leader`, assignee: squad.leaderId, status: "running", title: req.content.slice(0, 40), parentRunId: null, startedAt: now },
-      { id: `${taskId}-w1`, assignee: squad.members.find((m) => m.memberId !== squad.leaderId)?.memberId ?? squad.leaderId, status: "queued", title: `子任务：${req.content.slice(0, 24)}`, parentRunId: `${taskId}-leader`, startedAt: now },
+      { id: `${taskId}-leader`, assignee: squad.leaderId, status: "running", title: req.content.slice(0, 40), parentRunId: null, startedAt: now, blockedReason: null, agentTaskId: null },
+      { id: `${taskId}-w1`, assignee: squad.members.find((m) => m.memberId !== squad.leaderId)?.memberId ?? squad.leaderId, status: "queued", title: `子任务：${req.content.slice(0, 24)}`, parentRunId: `${taskId}-leader`, startedAt: now, blockedReason: null, agentTaskId: null },
     );
     this.runs.set(id, list);
     return { taskId };

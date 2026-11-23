@@ -737,6 +737,10 @@ export interface SquadRunNode {
   /** 父 run（worker → leader）；根为 null */
   parentRunId: string | null;
   startedAt: string;
+  /** 等待原因（status = waiting_approval 时有值，徽标旁说明） */
+  blockedReason: string | null;
+  /** 该 run 对应的执行任务 id（深链 /api/agent-tasks/:id） */
+  agentTaskId: string | null;
 }
 
 /** 创建/编辑小队载荷 */
