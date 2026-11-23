@@ -38,6 +38,7 @@ import {
 } from "@fengagent/agent";
 import type {
   AgentRegistry,
+  AgentTaskClaimPolicy,
   AgentTaskEventRow,
   AgentTaskRecord,
   AgentTaskStatus,
@@ -58,6 +59,43 @@ import {
 } from "./agent-runtime-binding.ts";
 
 const log = createLogger("agent-tasks");
+
+/** 认领失败（携带 HTTP 状态与机器可读 code，路由层直接转成 `{error:{...}}`） */
+export class TaskClaimError extends Error {
+  readonly code: string;
+  readonly status: 400 | 404 | 409;
+
+  constructor(code: string, message: string, status: 400 | 404 | 409 = 409) {
+    super(message);
+    this.name = "TaskClaimError";
+    this.code = code;
+    this.status = status;
+  }
+
+  toPayload(): { error: { message: string; code: string } } {
+    return { error: { message: this.message, code: this.code } };
+  }
+}
+
+/** 池任务认领上下文（P3-1）：只做「小队成员 + roster skill 标签」两道过滤，不做能力评分 */
+export interface TaskPoolScope {
+  /** 小队是否存在（建池任务时校验；可选，不实现则跳过） */
+  hasSquad?(squadId: string): boolean;
+  /** 该 agent 是否是小队成员（池范围过滤；可选） */
+  hasAgentMember?(squadId: string, agentId: string): boolean;
+  /** 该 agent 启用中的技能名（roster skill 标签过滤；可选） */
+  skillsFor?(agentId: string): string[];
+}
+
+/** 认领相关的服务选项 */
+export interface TaskPoolOptions {
+  /** 过滤上下文（由 server 装配 SquadStore / SkillMountStore） */
+  scope?: TaskPoolScope;
+  /** 认领租约时长（毫秒；默认 10 分钟） */
+  leaseMs?: number;
+  /** 租约回收间隔（毫秒；0 = 不启后台回收，只在读列表/认领时惰性回收） */
+  sweepIntervalMs?: number;
+}
 
 /**
  * 中立工作目录（**仓库外**）：`~/.fengagent/dispatch-workspace/<数据根指纹>`。
@@ -90,6 +128,48 @@ export interface AgentTaskDto {
   acpSessionId?: string;
   /** 群内派发（G2）：任务所属群 */
   groupId?: string;
+  /** 认领策略（P3-1）：默认 assigned；pool=任务池 */
+  claimPolicy?: AgentTaskClaimPolicy;
+  /** 池范围（小队 id；空 = 全局池） */
+  poolScope?: string;
+  /** 池内技能标签（roster skill 过滤提示） */
+  skillTags?: string[];
+  /** 认领时间（ISO；`claimed` 才有） */
+  claimedAt?: string;
+  /** 租约到期（ISO；过期退回池子） */
+  leaseExpiresAt?: string;
+}
+
+/** 池里可认领任务的 DTO（`GET /api/agent-tasks?claimable=1`） */
+export interface ClaimableTaskDto {
+  id: string;
+  content: string;
+  claimPolicy: "pool";
+  /** 池范围（小队 id；缺省 = 全局池） */
+  poolScope?: string;
+  /** 池内技能标签（认领人须已挂载） */
+  skillTags?: string[];
+  status: AgentTaskStatus;
+  createdAt: string;
+}
+
+/** 池视图 DTO（`GET /api/agent-tasks?pool=1`）：含已被认领/租约态 */
+export interface PoolTaskDto extends ClaimableTaskDto {
+  /** 认领人（`claimed`/`dispatched`/`running` 才有） */
+  claimedBy?: string;
+  claimedAt?: string;
+  leaseExpiresAt?: string;
+  /** 租约是否已过期（前端直接显示「租约过期 · 待回收」，不用自己算时间） */
+  leaseExpired: boolean;
+}
+
+/** 认领结果（`POST /api/agent-tasks/:id/claim`） */
+export interface ClaimResultDto {
+  ok: true;
+  status: "claimed";
+  /** 租约到期（epoch ms，与 WebUI `ClaimResult` 对齐） */
+  leaseExpiresAt: number;
+  task: AgentTaskDto;
 }
 
 /** 与 WebUI `AgentTaskEvent` 契约一致的事件 DTO */
@@ -120,6 +200,15 @@ export interface CreateAgentTaskRequest {
   /** 群内派发（G2）：结果会自动以 `task_card` 写回这个群 */
   groupId?: string;
   idempotencyKey?: string;
+  /**
+   * 认领策略（P3-1，opt-in）：缺省 / `assigned` = 点名派发（原语义不变）；
+   * `pool` = 只建任务进池，`created` 等认领，**不派发**。
+   */
+  claimPolicy?: AgentTaskClaimPolicy;
+  /** 池范围（小队 id；空 = 全局池）——`claimPolicy='pool'` 时生效 */
+  poolScope?: string;
+  /** 池内技能标签（认领人须已挂载这些技能；空 = 不限制） */
+  skillTags?: string[];
 }
 
 /**
@@ -185,6 +274,8 @@ export interface AgentTaskServiceOptions {
   autoProbe?: boolean;
   /** 启动时把上一进程遗留的非终态任务收尾（默认 true） */
   recoverOnStart?: boolean;
+  /** P3-1：任务池认领（过滤上下文 / 租约时长 / 回收间隔） */
+  pool?: TaskPoolOptions;
   now?: () => number;
 }
 
@@ -223,6 +314,12 @@ export class AgentTaskService {
   private readonly waiters = new Map<string, Set<() => void>>();
   /** 在飞的派发（close() 要等它们收尾） */
   private readonly inflight = new Map<string, Promise<void>>();
+  /** P3-1：池过滤上下文 */
+  private readonly poolScope: TaskPoolScope | undefined;
+  /** P3-1：认领租约时长 */
+  private readonly leaseMs: number;
+  /** P3-1：租约回收定时器（unref，不拖住进程退出） */
+  private leaseTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: AgentTaskServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -234,6 +331,8 @@ export class AgentTaskService {
     this.permissionPolicy = options.permissionPolicy ?? (() => "deny");
     this.groupSink = options.groupSink;
     this.composePrompt = options.composePrompt;
+    this.poolScope = options.pool?.scope;
+    this.leaseMs = Math.max(1_000, options.pool?.leaseMs ?? 10 * 60_000);
     mkdirSync(this.defaultCwd, { recursive: true });
 
     this.store =
@@ -242,6 +341,21 @@ export class AgentTaskService {
       options.registry ?? new AgentRuntimeRegistry({ dataRoot: options.dataRoot });
 
     if (options.recoverOnStart ?? true) this.recoverInterrupted();
+    const sweepIntervalMs = options.pool?.sweepIntervalMs ?? 60_000;
+    if (sweepIntervalMs > 0) {
+      this.leaseTimer = setInterval(() => {
+        try {
+          this.sweepLeases();
+        } catch (err) {
+          log.warn(
+            "pool",
+            `租约回收失败: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }, sweepIntervalMs);
+      // 后台回收不该成为进程退不掉的最后一个理由
+      (this.leaseTimer as { unref?: () => void }).unref?.();
+    }
     if (options.autoProbe ?? true) {
       // 后台探测一次，让 Agents 页首屏就有探测结果；失败不影响服务可用性。
       void this.registry.probeAll(this.taskCounts()).catch((err: unknown) => {
@@ -335,6 +449,195 @@ export class AgentTaskService {
   }
 
   // ──────────────────────────────────────────────
+  // 读：任务池（P3-1）
+  // ──────────────────────────────────────────────
+
+  /**
+   * 池里可认领的任务。
+   *
+   * 传 `agent` 时按「小队成员 + roster skill 标签」过滤（先只做这两道，
+   * 不做能力评分）：不在小队里、或缺少任务要求的技能的，不出现在它的候选里。
+   *
+   * 读之前先做一次惰性租约回收 —— 前端看到的「可认领」不会包含刚过期的死租约。
+   *
+   * @param filter.squad - 只看某个小队的池
+   * @param filter.agent - 认领人（用于成员/技能过滤）
+   * @param filter.limit - 条数上限
+   */
+  listClaimableTasks(
+    filter: { squad?: string; agent?: string; limit?: number } = {},
+  ): ClaimableTaskDto[] {
+    this.sweepLeases();
+    return this.store
+      .listClaimable({
+        ...(filter.squad === undefined ? {} : { squad: filter.squad }),
+        ...(filter.limit === undefined ? {} : { limit: filter.limit }),
+      })
+      .filter((task) => this.canAgentTake(task, filter.agent) === null)
+      .map(toClaimableDto);
+  }
+
+  /**
+   * 池视图：某个池里的全部任务（含已被认领/租约中的），供前端展示「谁在什么时候领的」。
+   *
+   * @param filter.squad - 池范围
+   * @param filter.limit - 条数上限
+   */
+  listPoolTasks(filter: { squad?: string; limit?: number } = {}): PoolTaskDto[] {
+    this.sweepLeases();
+    const now = this.now();
+    return this.store
+      .listPool({
+        ...(filter.squad === undefined ? {} : { squad: filter.squad }),
+        ...(filter.limit === undefined ? {} : { limit: filter.limit }),
+      })
+      .map((task) => toPoolTaskDto(task, now));
+  }
+
+  /**
+   * 某个 agent 能不能拿这条池任务（成员 + 技能两道过滤）。
+   *
+   * @returns 不能拿时返回原因（code 给 409 分类、message 给人看），能拿返回 null
+   */
+  private canAgentTake(
+    task: AgentTaskRecord,
+    agentId: string | undefined,
+  ): { code: "not_member" | "skill_mismatch"; message: string } | null {
+    if (agentId === undefined || agentId === "") return null;
+    const scope = this.poolScope;
+    if (task.poolScope !== undefined && scope?.hasAgentMember !== undefined) {
+      if (!scope.hasAgentMember(task.poolScope, agentId)) {
+        return {
+          code: "not_member",
+          message: `agent ${agentId} 不是小队 ${task.poolScope} 的成员，不能认领该池任务`,
+        };
+      }
+    }
+    const required = task.skillTags ?? [];
+    if (required.length === 0) return null;
+    const owned = new Set(
+      (scope?.skillsFor?.(agentId) ?? []).map((name) => name.trim().toLowerCase()),
+    );
+    const missing = required.filter((tag) => !owned.has(tag.trim().toLowerCase()));
+    return missing.length === 0
+      ? null
+      : {
+          code: "skill_mismatch",
+          message: `agent ${agentId} 缺少任务要求的技能: ${missing.join(", ")}`,
+        };
+  }
+
+  // ──────────────────────────────────────────────
+  // 写：任务池认领（P3-1）
+  // ──────────────────────────────────────────────
+
+  /**
+   * 认领一条池任务（原子；输家 409）。
+   *
+   * 顺序刻意是「先做不该写库的校验，再一条条件 UPDATE 定胜负」：
+   * 成员/技能/runtime 这些读校验放前面只影响「谁能赢」，真正的并发裁决在
+   * `store.claim()` 的那条 UPDATE 里（`changes === 1` 才算赢），不会出现
+   * 「两个人都读到 created 都以为自己赢了」。
+   *
+   * @param id - 任务 id
+   * @param agentId - 认领人
+   * @returns 认领后的任务 + 租约
+   * @throws {TaskClaimError} 404（不存在）/ 409（已被认领、agent 忙、范围或技能不符）
+   */
+  claimTask(id: string, agentId: string): ClaimResultDto {
+    const agent = agentId.trim();
+    if (agent === "") throw new TaskClaimError("bad_request", "agent 必填", 400);
+    this.sweepLeases();
+    const task = this.store.get(id);
+    if (!task) throw new TaskClaimError("not_found", `任务不存在: ${id}`, 404);
+    if (task.claimPolicy !== "pool") {
+      throw new TaskClaimError(
+        "not_pool",
+        `任务 ${id} 不是池任务（claim_policy=${task.claimPolicy}），按点名派发执行`,
+      );
+    }
+
+    // ① 智能体必须真实存在且未归档（与派单同一道围栏）
+    if (this.agentRegistry) {
+      const record = this.agentRegistry.get(agent);
+      if (!record) throw new TaskClaimError("agent_not_found", `智能体不存在: ${agent}`, 404);
+      if (record.archivedAt !== undefined) {
+        throw new TaskClaimError("agent_archived", `智能体已归档，不能认领: ${agent}`);
+      }
+    }
+
+    // ② 池范围过滤：小队成员 + roster skill 标签
+    const rejected = this.canAgentTake(task, agent);
+    if (rejected !== null) {
+      throw new TaskClaimError(rejected.code, rejected.message);
+    }
+
+    // ③ runtime：池任务可以不写死 runtime，认领时按认领人的绑定解析
+    let runtime: string | undefined;
+    if (task.runtime === "") {
+      const record = this.agentRegistry?.get(agent);
+      if (!record) {
+        throw new TaskClaimError(
+          "agent_not_found",
+          `池任务未写死 runtime，认领需按智能体绑定解析，但智能体不存在: ${agent}`,
+          404,
+        );
+      }
+      const resolution = resolveRuntimeForAgent(record, this.listRuntimes());
+      if (!resolution.ok) {
+        throw new TaskClaimError(resolution.code, resolution.message);
+      }
+      runtime = resolution.runtime.name;
+    }
+
+    // ④ 原子认领（一条条件 UPDATE；输家拿不到 changes=1）
+    const claimed = this.store.claim(id, agent, {
+      leaseMs: this.leaseMs,
+      ...(runtime === undefined ? {} : { runtime }),
+    });
+    if (!claimed.ok) {
+      const status = claimed.code === "not_found" ? 404 : 409;
+      throw new TaskClaimError(claimed.code, claimed.message, status);
+    }
+    log.info(
+      "claim",
+      `任务 ${id} 被 ${agent} 认领（租约 ${Math.round(this.leaseMs / 1000)}s${
+        runtime === undefined ? "" : `，runtime=${runtime}`
+      }）`,
+    );
+    this.emit(id, { type: "event", event: toEventDto(claimed.event) });
+    this.emit(id, { type: "status", task: toTaskDto(claimed.task) });
+
+    // ⑤ 认领即派发（不阻塞 HTTP；进度照旧走 SSE）
+    this.startDispatch(id);
+    const latest = this.store.get(id) ?? claimed.task;
+    return {
+      ok: true,
+      status: "claimed",
+      leaseExpiresAt: claimed.task.leaseExpiresAt ?? this.now() + this.leaseMs,
+      task: toTaskDto(latest),
+    };
+  }
+
+  /**
+   * 租约回收（P3-1 第二道保险）：把过期未派发的认领退回池子并推事件。
+   *
+   * 过期退回的是 `created`（回池等别人捡），**不是 failed/expired** —— 池任务没派出去
+   * 就不算失败，这和 assigned 任务的恢复口径刻意不同。
+   *
+   * @returns 本次被退回的任务 id
+   */
+  sweepLeases(): string[] {
+    const requeued = this.store.requeueExpired(this.now());
+    for (const item of requeued) {
+      log.warn("pool", `任务 ${item.task.id} 租约过期，已退回任务池`);
+      this.emit(item.task.id, { type: "event", event: toEventDto(item.event) });
+      this.emit(item.task.id, { type: "status", task: toTaskDto(item.task) });
+    }
+    return requeued.map((item) => item.task.id);
+  }
+
+  // ──────────────────────────────────────────────
   // 写：建 / 派 / 取消 / 重试
   // ──────────────────────────────────────────────
 
@@ -354,6 +657,7 @@ export class AgentTaskService {
     ) {
       throw new Error(`群不存在: ${request.groupId}`);
     }
+    if (request.claimPolicy === "pool") return this.submitToPool(request);
     const target = this.resolveDispatchTarget(request);
     const { task, reused } = this.store.create({
       runtime: target.runtime,
@@ -373,6 +677,45 @@ export class AgentTaskService {
     // 不阻塞 HTTP：派发在后台跑，进度经事件流 / SSE 推给调用方
     this.startDispatch(task.id);
     return toTaskDto(this.store.get(task.id) ?? task);
+  }
+
+  /**
+   * 把任务放进池子（P3-1）：只落库，不派发。
+   *
+   * 与点名派发刻意不同：池任务允许不指定 `agent` / `runtime` —— 谁来干、在哪跑，
+   * 由认领时按认领人的绑定解析（`claimTask()`）。指定了 `runtime` 就是「限定这类
+   * 运行时」，认领时不会再改。
+   *
+   * @param request - 建池任务请求
+   * @returns `created` 状态的池任务
+   */
+  private submitToPool(request: CreateAgentTaskRequest): AgentTaskDto {
+    const poolScope = request.poolScope?.trim() ?? "";
+    if (poolScope !== "") {
+      const hasSquad = this.poolScope?.hasSquad;
+      if (hasSquad !== undefined && !hasSquad(poolScope)) {
+        throw new TaskClaimError("squad_not_found", `小队不存在: ${poolScope}`, 404);
+      }
+    }
+    const runtime = request.runtime?.trim() ?? "";
+    if (runtime !== "" && !this.registry.get(runtime)) {
+      throw new TaskClaimError("runtime_not_found", `未注册的 runtime: ${runtime}`, 404);
+    }
+    const { task, reused } = this.store.create({
+      runtime,
+      content: request.content,
+      cwd: request.cwd ?? this.defaultCwd,
+      claimPolicy: "pool",
+      ...(poolScope === "" ? {} : { poolScope }),
+      ...((request.skillTags ?? []).length === 0 ? {} : { skillTags: request.skillTags }),
+      ...(request.fromSession === undefined ? {} : { fromSession: request.fromSession }),
+      ...(request.groupId === undefined ? {} : { groupId: request.groupId }),
+      ...(request.idempotencyKey === undefined
+        ? {}
+        : { idempotencyKey: request.idempotencyKey }),
+    });
+    if (reused) log.info("submit", `幂等键命中，复用池任务 ${task.id}（${task.status}）`);
+    return toTaskDto(task);
   }
 
   /**
@@ -486,6 +829,11 @@ export class AgentTaskService {
       this.emit(id, { type: "event", event: toEventDto(retriedEvent) });
     }
     this.emit(id, { type: "status", task: toTaskDto(reset) });
+    // 池任务重试 = 重新回池等认领，**不是**替它派发（那会绕过认领与 owner 归属）
+    if (reset.claimPolicy === "pool") {
+      log.info("retry", `池任务 ${id} 已退回任务池（attempt=${reset.attempt}）`);
+      return toTaskDto(reset);
+    }
     this.startDispatch(id);
     return toTaskDto(this.store.get(id) ?? reset);
   }
@@ -554,6 +902,9 @@ export class AgentTaskService {
    * 收尾上一进程遗留的非终态任务（服务启动时调用一次）。
    *
    * - `created`（从未派发）→ `expired`：它已经错过了自己的派发窗口；
+   * - **`created` 的池任务不动**：它本来就该在池子里等着被认领，不是遗留残局；
+   * - `claimed`（认领了但没派出去）→ **`task/requeued` 退回池子**（`created`），
+   *   不判死 —— 这是池任务与 assigned 任务恢复口径的关键差别；
    * - `dispatched` / `running` → `failed`：目标进程随服务一起没了，**不自动重跑**
    *   （重跑必须是显式 retry，副作用次数才可控）。
    *
@@ -562,6 +913,18 @@ export class AgentTaskService {
   recoverInterrupted(): string[] {
     const recovered: string[] = [];
     for (const task of this.store.listNonTerminal()) {
+      if (task.claimPolicy === "pool" && task.status === "created") continue;
+      if (task.status === "claimed") {
+        const requeued = this.store.requeue(
+          task.id,
+          "服务重启时尚未派发（认领租约失效），退回任务池等重新认领",
+        );
+        if (requeued !== null) {
+          recovered.push(task.id);
+          log.info("recover", `池任务 ${task.id} claimed → created（退回池子）`);
+        }
+        continue;
+      }
       const next: AgentTaskStatus = task.status === "created" ? "expired" : "failed";
       const detail =
         task.status === "created"
@@ -580,6 +943,10 @@ export class AgentTaskService {
 
   /** 关闭：回收所有在飞子进程、等在飞派发收尾，再关 SQLite 连接 */
   async close(): Promise<void> {
+    if (this.leaseTimer !== undefined) {
+      clearInterval(this.leaseTimer);
+      this.leaseTimer = undefined;
+    }
     for (const [id, run] of this.active) {
       log.warn("close", `回收任务 ${id} 的子进程`);
       await run.driver.close(300).catch(() => undefined);
@@ -605,6 +972,12 @@ export class AgentTaskService {
   async dispatch(id: string): Promise<void> {
     const task = this.store.get(id);
     if (!task || isTerminalTaskStatus(task.status)) return;
+    // 池任务在没人认领前不派发：它可能没写死 runtime、也没有归属 agent，
+    // 直接 spawn 会把「谁领的活」这件事绕过去。
+    if (task.claimPolicy === "pool" && task.status === "created") {
+      log.debug("dispatch", `池任务 ${id} 尚未认领，跳过派发`);
+      return;
+    }
 
     const entry = this.registry.get(task.runtime);
     if (!entry) {
@@ -911,6 +1284,46 @@ export function toTaskDto(task: AgentTaskRecord): AgentTaskDto {
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(task.acpSessionId === undefined ? {} : { acpSessionId: task.acpSessionId }),
     ...(task.groupId === undefined ? {} : { groupId: task.groupId }),
+    claimPolicy: task.claimPolicy,
+    ...(task.poolScope === undefined ? {} : { poolScope: task.poolScope }),
+    ...(task.skillTags === undefined ? {} : { skillTags: task.skillTags }),
+    ...(task.claimedAt === undefined
+      ? {}
+      : { claimedAt: new Date(task.claimedAt).toISOString() }),
+    ...(task.leaseExpiresAt === undefined
+      ? {}
+      : { leaseExpiresAt: new Date(task.leaseExpiresAt).toISOString() }),
+  };
+}
+
+/** 池任务 → 可认领视图（`GET ?claimable=1`） */
+export function toClaimableDto(task: AgentTaskRecord): ClaimableTaskDto {
+  return {
+    id: task.id,
+    content: task.content,
+    claimPolicy: "pool",
+    ...(task.poolScope === undefined ? {} : { poolScope: task.poolScope }),
+    ...(task.skillTags === undefined ? {} : { skillTags: task.skillTags }),
+    status: task.status,
+    createdAt: new Date(task.createdAt).toISOString(),
+  };
+}
+
+/** 池任务 → 池视图（`GET ?pool=1`，含已被认领/租约态） */
+export function toPoolTaskDto(task: AgentTaskRecord, now: number): PoolTaskDto {
+  return {
+    ...toClaimableDto(task),
+    ...(task.agentId === undefined ? {} : { claimedBy: task.agentId }),
+    ...(task.claimedAt === undefined
+      ? {}
+      : { claimedAt: new Date(task.claimedAt).toISOString() }),
+    ...(task.leaseExpiresAt === undefined
+      ? {}
+      : { leaseExpiresAt: new Date(task.leaseExpiresAt).toISOString() }),
+    leaseExpired:
+      task.leaseExpiresAt !== undefined &&
+      task.leaseExpiresAt <= now &&
+      task.status === "claimed",
   };
 }
 

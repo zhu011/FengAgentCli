@@ -42,7 +42,7 @@ export type {
   ReflectionStoreOptions,
 } from "./reflection-store.ts";
 
-// 外派任务仓（7 态 + seq 单调事件流，P1/P2）
+// 外派任务仓（8 态 + seq 单调事件流，P1/P2/P3-1 任务池认领）
 export {
   AgentTaskStore,
   replayAgentTaskStatus,
@@ -54,6 +54,10 @@ export type {
   AgentTaskEventType,
   AgentTaskRecord,
   AgentTaskEventRow,
+  AgentTaskClaimPolicy,
+  ClaimFailure,
+  ClaimFailureCode,
+  ClaimSuccess,
   CreateAgentTaskInput,
   ListAgentTasksFilter,
 } from "./agent-task-store.ts";

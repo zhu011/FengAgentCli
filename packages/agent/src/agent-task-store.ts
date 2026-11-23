@@ -20,9 +20,11 @@
 import { Database } from "bun:sqlite";
 import { expandTilde, generateId } from "@fengagent/shared/utils";
 
-/** 外派任务状态（与 WebUI 的 `AgentTaskStatus` 同枚举，7 态） */
+/** 外派任务状态（与 WebUI 的 `AgentTaskStatus` 同枚举，8 态） */
 export type AgentTaskStatus =
   | "created"
+  /** P3-1：任务池里被某个 agent 原子认领（非终态，带租约） */
+  | "claimed"
   | "dispatched"
   | "running"
   | "replied"
@@ -30,9 +32,40 @@ export type AgentTaskStatus =
   | "cancelled"
   | "expired";
 
+/** 认领策略（P3-1）：`assigned`=点名派发（默认，语义零变化）；`pool`=开放任务池 */
+export type AgentTaskClaimPolicy = "assigned" | "pool";
+
+/** 认领失败原因（服务层 → 路由层映射 HTTP 状态用） */
+export type ClaimFailureCode =
+  | "not_found"
+  | "not_pool"
+  | "not_claimable"
+  | "already_claimed"
+  | "agent_busy";
+
+/** 认领失败（携带机器可读原因，路由 409/404 靠它分类） */
+export interface ClaimFailure {
+  ok: false;
+  code: ClaimFailureCode;
+  message: string;
+  /** 失败时的任务快照（不存在时为 null） */
+  task: AgentTaskRecord | null;
+}
+
+/** 认领成功（`changes === 1` 的那个赢家才拿得到） */
+export interface ClaimSuccess {
+  ok: true;
+  task: AgentTaskRecord;
+  event: AgentTaskEventRow;
+}
+
 /** 外派任务事件类型（与 WebUI 的 `AgentTaskEvent["type"]` 同枚举） */
 export type AgentTaskEventType =
   | "task/created"
+  /** P3-1：原子认领成功（detail 带 agent 与租约到期时间） */
+  | "task/claimed"
+  /** P3-1：租约过期/崩溃恢复 → 退回池子（claimed → created），不判死 */
+  | "task/requeued"
   | "task/dispatched"
   | "task/accepted"
   | "task/running"
@@ -60,9 +93,12 @@ export function isTerminalTaskStatus(status: AgentTaskStatus): boolean {
   return TERMINAL_TASK_STATUSES.includes(status);
 }
 
-/** 合法转移（7 态表；越界转移直接抛错，避免状态被写坏） */
+/** 合法转移（8 态表；越界转移直接抛错，避免状态被写坏） */
 const ALLOWED_TRANSITIONS: Record<AgentTaskStatus, readonly AgentTaskStatus[]> = {
-  created: ["dispatched", "cancelled", "expired", "failed"],
+  created: ["claimed", "dispatched", "cancelled", "expired", "failed"],
+  // 认领后只能往前派发或被取消；回池（claimed → created）走 requeue()，
+  // 因为那一步要清掉认领人/租约并写 `task/requeued`，不是普通状态推进。
+  claimed: ["dispatched", "cancelled", "failed"],
   dispatched: ["running", "replied", "failed", "cancelled", "expired"],
   running: ["replied", "failed", "cancelled"],
   replied: [],
@@ -96,6 +132,16 @@ export interface AgentTaskRecord {
   /** 所属群（G2 群内派发；结果回群靠它定位） */
   groupId?: string;
   idempotencyKey?: string;
+  /** 认领策略（P3-1）：默认 `assigned`（点名派发）；`pool` 进任务池等认领 */
+  claimPolicy: AgentTaskClaimPolicy;
+  /** 池范围（小队 id；空 = 全局池）——只有 `claimPolicy='pool'` 才有意义 */
+  poolScope?: string;
+  /** 池内技能标签过滤提示（roster skill 名；认领人须已挂载这些技能） */
+  skillTags?: string[];
+  /** 认领人（= `agentId`；`claimedAt` 有值才表示这次是认领来的） */
+  claimedAt?: number;
+  /** 租约到期（毫秒；过期由租约回收退回池子，不判死） */
+  leaseExpiresAt?: number;
 }
 
 /** 事件行 */
@@ -117,6 +163,12 @@ export interface CreateAgentTaskInput {
   /** 群内派发（G2）：结果回群时按它定位 */
   groupId?: string;
   idempotencyKey?: string;
+  /** P3-1：认领策略（默认 assigned） */
+  claimPolicy?: AgentTaskClaimPolicy;
+  /** P3-1：池范围（小队 id；空 = 全局池） */
+  poolScope?: string;
+  /** P3-1：池内技能标签（认领人须已挂载这些技能） */
+  skillTags?: string[];
   at?: number;
 }
 
@@ -128,6 +180,10 @@ export interface ListAgentTasksFilter {
   agentId?: string;
   /** 只看某个群派出的任务（G2） */
   groupId?: string;
+  /** 只看某个认领策略（P3-1） */
+  claimPolicy?: AgentTaskClaimPolicy;
+  /** 只看某个池范围（P3-1） */
+  poolScope?: string;
   /** 默认 50，上限 200 */
   limit?: number;
   /** 上一页最后一条的 `id`（简单键集分页：按 created_at DESC, id DESC） */
@@ -153,6 +209,12 @@ interface TaskRow {
   acp_session_id: string | null;
   group_id: string | null;
   idempotency_key: string | null;
+  /** P3-1 新增列（老库 migration 补齐） */
+  claim_policy?: string | null;
+  pool_scope?: string | null;
+  skill_tags?: string | null;
+  claimed_at?: number | null;
+  lease_expires_at?: number | null;
 }
 
 interface EventRow {
@@ -181,7 +243,31 @@ function rowToTask(row: TaskRow): AgentTaskRecord {
     ...(row.acp_session_id === null ? {} : { acpSessionId: row.acp_session_id }),
     ...(row.group_id === null ? {} : { groupId: row.group_id }),
     ...(row.idempotency_key === null ? {} : { idempotencyKey: row.idempotency_key }),
+    claimPolicy: (row.claim_policy === "pool" ? "pool" : "assigned") as AgentTaskClaimPolicy,
+    ...(row.pool_scope === null || row.pool_scope === undefined
+      ? {}
+      : { poolScope: row.pool_scope }),
+    ...(row.skill_tags === null || row.skill_tags === undefined || row.skill_tags === ""
+      ? {}
+      : { skillTags: parseSkillTags(row.skill_tags) }),
+    ...(row.claimed_at === null || row.claimed_at === undefined
+      ? {}
+      : { claimedAt: row.claimed_at }),
+    ...(row.lease_expires_at === null || row.lease_expires_at === undefined
+      ? {}
+      : { leaseExpiresAt: row.lease_expires_at }),
   };
+}
+
+/** skill_tags 列（JSON 数组字符串）→ 名字数组；坏数据按空数组处理，不让一行脏数据拖垮列表 */
+function parseSkillTags(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -197,6 +283,9 @@ export function replayAgentTaskStatus(
 ): AgentTaskStatus | null {
   const byEvent: Partial<Record<AgentTaskEventType, AgentTaskStatus>> = {
     "task/created": "created",
+    // 认领回池也是一次「回到 created」——重放必须能还原，否则崩溃恢复对拍会误判写坏
+    "task/requeued": "created",
+    "task/claimed": "claimed",
     "task/dispatched": "dispatched",
     "task/running": "running",
     "task/replied": "replied",
@@ -245,7 +334,12 @@ export class AgentTaskStore {
         error TEXT,
         acp_session_id TEXT,
         group_id TEXT,
-        idempotency_key TEXT
+        idempotency_key TEXT,
+        claim_policy TEXT NOT NULL DEFAULT 'assigned',
+        pool_scope TEXT,
+        skill_tags TEXT,
+        claimed_at INTEGER,
+        lease_expires_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_tasks_runtime ON agent_tasks(runtime, created_at DESC);
@@ -270,6 +364,17 @@ export class AgentTaskStore {
     if (!columns.some((column) => column.name === "agent_id")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN agent_id TEXT");
     }
+    // 老库迁移（P3-1）：任务池认领五列。`claim_policy` 必须 NOT NULL DEFAULT，
+    // 否则历史任务读出来是 NULL，`claim_policy='pool'` 的条件 UPDATE 会静默不匹配。
+    this.ensureColumn("claim_policy", "TEXT NOT NULL DEFAULT 'assigned'");
+    this.ensureColumn("pool_scope", "TEXT");
+    this.ensureColumn("skill_tags", "TEXT");
+    this.ensureColumn("claimed_at", "INTEGER");
+    this.ensureColumn("lease_expires_at", "INTEGER");
+    // 池查询索引放在补列之后：老库上先建索引会因缺列直接抛错，整个构造失败。
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_agent_tasks_pool ON agent_tasks(claim_policy, pool_scope, created_at DESC)",
+    );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_agent_tasks_agent ON agent_tasks(agent_id, created_at DESC)",
     );
@@ -289,7 +394,24 @@ export class AgentTaskStore {
   }
 
   /**
+   * 老库补列（`CREATE TABLE IF NOT EXISTS` 不会给已存在的表加列）。
+   *
+   * @param name - 列名
+   * @param ddl - 列定义（含默认值）
+   */
+  private ensureColumn(name: string, ddl: string): void {
+    const columns = this.db
+      .query("PRAGMA table_info(agent_tasks)")
+      .all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === name)) return;
+    this.db.exec(`ALTER TABLE agent_tasks ADD COLUMN ${name} ${ddl}`);
+  }
+
+  /**
    * 建任务（幂等键命中时返回既有任务）。
+   *
+   * P3-1：`claimPolicy='pool'` 时不派发、也不要求 runtime —— 任务停在 `created`
+   * 等池子里的人认领（认领时才按认领人的绑定解析 runtime）。
    *
    * @param input - 建任务入参
    * @returns 任务 + 是否复用了既有任务
@@ -301,11 +423,16 @@ export class AgentTaskStore {
     }
     const at = input.at ?? this.now();
     const id = generateId();
+    const claimPolicy: AgentTaskClaimPolicy = input.claimPolicy === "pool" ? "pool" : "assigned";
+    const skillTags = (input.skillTags ?? [])
+      .map((tag) => tag.trim())
+      .filter((tag) => tag !== "");
     this.db
       .query(
         `INSERT INTO agent_tasks
-         (id, runtime, agent_id, content, cwd, from_session, status, attempt, created_at, group_id, idempotency_key)
-         VALUES (?, ?, ?, ?, ?, ?, 'created', 1, ?, ?, ?)`,
+         (id, runtime, agent_id, content, cwd, from_session, status, attempt, created_at, group_id, idempotency_key,
+          claim_policy, pool_scope, skill_tags)
+         VALUES (?, ?, ?, ?, ?, ?, 'created', 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -317,13 +444,17 @@ export class AgentTaskStore {
         at,
         input.groupId ?? null,
         input.idempotencyKey ?? null,
+        claimPolicy,
+        input.poolScope ?? null,
+        skillTags.length === 0 ? null : JSON.stringify(skillTags),
       );
     this.appendEvent(
       id,
       "task/created",
       `runtime=${input.runtime}` +
         (input.agentId === undefined ? "" : ` agent=${input.agentId}`) +
-        (input.groupId === undefined ? "" : ` group=${input.groupId}`),
+        (input.groupId === undefined ? "" : ` group=${input.groupId}`) +
+        (claimPolicy === "pool" ? ` pool=${input.poolScope ?? "*"}` : ""),
       at,
     );
     return { task: this.get(id)!, reused: false };
@@ -376,6 +507,14 @@ export class AgentTaskStore {
       where.push("group_id = ?");
       params.push(filter.groupId);
     }
+    if (filter.claimPolicy !== undefined) {
+      where.push("claim_policy = ?");
+      params.push(filter.claimPolicy);
+    }
+    if (filter.poolScope !== undefined && filter.poolScope !== "") {
+      where.push("pool_scope = ?");
+      params.push(filter.poolScope);
+    }
     if (filter.cursor !== undefined && filter.cursor !== "") {
       const cursorTask = this.get(filter.cursor);
       if (cursorTask) {
@@ -390,16 +529,77 @@ export class AgentTaskStore {
     return rows.map(rowToTask);
   }
 
-  /** 非终态任务（启动恢复用） */
+  /** 非终态任务（启动恢复用；含池里被认领但还没派发的 `claimed`） */
   listNonTerminal(): AgentTaskRecord[] {
     const rows = this.db
       .query(
         `SELECT * FROM agent_tasks
-         WHERE status IN ('created','dispatched','running')
+         WHERE status IN ('created','claimed','dispatched','running')
          ORDER BY created_at`,
       )
       .all() as TaskRow[];
     return rows.map(rowToTask);
+  }
+
+  /**
+   * 池里可认领的任务（P3-1）：`claim_policy='pool'` 且还没人认领（`created`）。
+   *
+   * @param filter.squad - 只看某个小队的池（传了才加 `pool_scope` 条件）
+   * @param filter.limit - 默认 50，上限 200
+   * @returns 按 created_at 升序（先进先出，不会有任务永远沉底）
+   */
+  listClaimable(filter: { squad?: string; limit?: number } = {}): AgentTaskRecord[] {
+    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+    const where = ["claim_policy = 'pool'", "status = 'created'"];
+    const params: string[] = [];
+    if (filter.squad !== undefined && filter.squad !== "") {
+      where.push("pool_scope = ?");
+      params.push(filter.squad);
+    }
+    const rows = this.db
+      .query(
+        `SELECT * FROM agent_tasks WHERE ${where.join(" AND ")} ORDER BY created_at ASC, id ASC LIMIT ?`,
+      )
+      .all(...params, limit) as TaskRow[];
+    return rows.map(rowToTask);
+  }
+
+  /**
+   * 池视图（P3-1）：某个池里**所有状态**的任务（含已被认领/租约中的），供前端展示。
+   *
+   * @param filter.squad - 池范围（小队 id；空 = 全局池也一起看）
+   * @param filter.limit - 默认 50，上限 200
+   */
+  listPool(filter: { squad?: string; limit?: number } = {}): AgentTaskRecord[] {
+    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+    const where = ["claim_policy = 'pool'"];
+    const params: string[] = [];
+    if (filter.squad !== undefined && filter.squad !== "") {
+      where.push("pool_scope = ?");
+      params.push(filter.squad);
+    }
+    const rows = this.db
+      .query(
+        `SELECT * FROM agent_tasks WHERE ${where.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      )
+      .all(...params, limit) as TaskRow[];
+    return rows.map(rowToTask);
+  }
+
+  /**
+   * 某 agent 当前在飞的任务（per-agent 串行的可读入口）。
+   *
+   * @param agentId - 智能体 id
+   */
+  findInflightByAgent(agentId: string): AgentTaskRecord | null {
+    const row = this.db
+      .query(
+        `SELECT * FROM agent_tasks
+         WHERE agent_id = ? AND status IN ('claimed','dispatched','running')
+         ORDER BY created_at ASC LIMIT 1`,
+      )
+      .get(agentId) as TaskRow | null;
+    return row ? rowToTask(row) : null;
   }
 
   /** 某 runtime 在 `sinceMs` 之后创建的任务数（24h 统计用） */
@@ -512,6 +712,179 @@ export class AgentTaskStore {
   }
 
   /**
+   * **原子认领**（P3-1）：一条条件 UPDATE 定胜负，`changes === 1` 才算赢。
+   *
+   * 刻意不写成「先 SELECT 再 UPDATE」：两个 agent 同时认领同一条任务时，
+   * 读-判-写之间会被对方插进来，两边都以为自己赢；把「池任务 + 仍是 created +
+   * 这个 agent 手上没有别的在飞任务」全塞进 WHERE，让数据库写锁替我们裁决。
+   *
+   * 两道保险之一（per-agent 串行）：`NOT EXISTS` 子查询保证同一个 agent 同时只有
+   * 一条 `claimed` / `dispatched` / `running` 任务 —— 池任务不抢单、不并发囤活。
+   *
+   * @param id - 任务 id
+   * @param agentId - 认领人
+   * @param options.leaseMs - 租约时长（到期由 {@link requeueExpired} 退回池子）
+   * @param options.runtime - 任务没写死 runtime 时，按认领人绑定解析出的 runtime
+   * @param options.now - 覆盖当前时间（测试用）
+   * @returns 赢家拿 `{ok:true, task, event}`；输家拿机器可读的失败原因
+   */
+  claim(
+    id: string,
+    agentId: string,
+    options: { leaseMs: number; runtime?: string; now?: number },
+  ): ClaimSuccess | ClaimFailure {
+    const at = options.now ?? this.now();
+    const leaseExpiresAt = at + Math.max(1, options.leaseMs);
+    const normalizedAgent = agentId.trim();
+    if (normalizedAgent === "") {
+      return {
+        ok: false,
+        code: "not_found",
+        message: "认领人不能为空",
+        task: this.get(id),
+      };
+    }
+    const result = this.db
+      .query(
+        `UPDATE agent_tasks
+         SET status = 'claimed', agent_id = ?, claimed_at = ?, lease_expires_at = ?,
+             runtime = CASE WHEN runtime = '' AND ? IS NOT NULL THEN ? ELSE runtime END
+         WHERE id = ?
+           AND claim_policy = 'pool'
+           AND status = 'created'
+           AND NOT EXISTS (
+             SELECT 1 FROM agent_tasks busy
+             WHERE busy.agent_id = ?
+               AND busy.id <> agent_tasks.id
+               AND busy.status IN ('claimed','dispatched','running')
+           )`,
+      )
+      .run(
+        normalizedAgent,
+        at,
+        leaseExpiresAt,
+        options.runtime ?? null,
+        options.runtime ?? null,
+        id,
+        normalizedAgent,
+      );
+    if (result.changes === 1) {
+      const task = this.get(id)!;
+      const event = this.appendEvent(
+        id,
+        "task/claimed",
+        `agent=${normalizedAgent} lease_until=${new Date(leaseExpiresAt).toISOString()}`,
+        at,
+      );
+      return { ok: true, task, event };
+    }
+    // 输了才做诊断读：只为给调用方一个准确原因（不参与胜负判定）。
+    const task = this.get(id);
+    if (!task) {
+      return { ok: false, code: "not_found", message: `任务不存在: ${id}`, task: null };
+    }
+    if (task.claimPolicy !== "pool") {
+      return {
+        ok: false,
+        code: "not_pool",
+        message: `任务 ${id} 不是池任务（claim_policy=${task.claimPolicy}），按点名派发执行`,
+        task,
+      };
+    }
+    if (task.status !== "created") {
+      const taken = task.status === "claimed" || task.status === "dispatched" || task.status === "running";
+      return {
+        ok: false,
+        code: taken ? "already_claimed" : "not_claimable",
+        message: taken
+          ? `任务 ${id} 已被认领（status=${task.status}${task.agentId === undefined ? "" : `，agent=${task.agentId}`}）`
+          : `任务 ${id} 已结束（status=${task.status}），不能认领`,
+        task,
+      };
+    }
+    const inflight = this.findInflightByAgent(normalizedAgent);
+    return {
+      ok: false,
+      code: "agent_busy",
+      message:
+        `agent ${normalizedAgent} 手上还有在飞任务` +
+        (inflight === null ? "" : `（${inflight.id} / ${inflight.status}）`) +
+        "，同一 agent 同时只能有一条 claimed/dispatched/running",
+      task,
+    };
+  }
+
+  /**
+   * 退回池子（`claimed` → `created`）：租约过期、崩溃恢复、显式释放都走它。
+   *
+   * 与 assigned 任务的恢复口径不同：池任务没派出去就不算失败，退回池子让别人捡，
+   * 只有真的派发过（dispatched/running）才按原来的 failed/expired 收尾。
+   *
+   * @param id - 任务 id
+   * @param detail - 事件 detail（为什么退回）
+   * @param at - 事件时间
+   * @returns 退回后的任务 + 事件；任务已不在 claimed 状态时返回 null（输给并发）
+   */
+  requeue(
+    id: string,
+    detail?: string,
+    at?: number,
+  ): { task: AgentTaskRecord; event: AgentTaskEventRow } | null {
+    const when = at ?? this.now();
+    const result = this.db
+      .query(
+        `UPDATE agent_tasks
+         SET status = 'created', agent_id = NULL, claimed_at = NULL, lease_expires_at = NULL
+         WHERE id = ? AND status = 'claimed'`,
+      )
+      .run(id);
+    if (result.changes !== 1) return null;
+    const task = this.get(id)!;
+    const event = this.appendEvent(id, "task/requeued", detail ?? "退回任务池", when);
+    return { task, event };
+  }
+
+  /**
+   * 租约回收（P3-1 第二道保险）：把过期未派发的认领退回池子。
+   *
+   * 条件 UPDATE 逐条做（`WHERE id=? AND status='claimed' AND lease_expires_at<=?`），
+   * 谁先退谁算；与「认领人刚好在这一刻派发成功」竞争时不会把 running 的任务拽回池子。
+   *
+   * @param now - 当前时间（默认 this.now()）
+   * @returns 被退回的任务（含事件），供服务层推 SSE
+   */
+  requeueExpired(now?: number): Array<{ task: AgentTaskRecord; event: AgentTaskEventRow }> {
+    const when = now ?? this.now();
+    const rows = this.db
+      .query(
+        `SELECT id, lease_expires_at FROM agent_tasks
+         WHERE status = 'claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
+         ORDER BY lease_expires_at ASC`,
+      )
+      .all(when) as Array<{ id: string; lease_expires_at: number }>;
+    const requeued: Array<{ task: AgentTaskRecord; event: AgentTaskEventRow }> = [];
+    for (const row of rows) {
+      const result = this.db
+        .query(
+          `UPDATE agent_tasks
+           SET status = 'created', agent_id = NULL, claimed_at = NULL, lease_expires_at = NULL
+           WHERE id = ? AND status = 'claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
+        )
+        .run(row.id, when);
+      if (result.changes !== 1) continue;
+      const task = this.get(row.id)!;
+      const event = this.appendEvent(
+        row.id,
+        "task/requeued",
+        `租约过期（lease_until=${new Date(row.lease_expires_at).toISOString()}），退回任务池`,
+        when,
+      );
+      requeued.push({ task, event });
+    }
+    return requeued;
+  }
+
+  /**
    * 补记目标会话 id（不改状态、不写事件）。
    *
    * claude 这类「跑完才知道 `session_id`」的协议用：结果落库时把 id 记上，
@@ -553,11 +926,15 @@ export class AgentTaskStore {
       detail ?? `第 ${attempt} 次尝试（上一状态 ${current.status}）`,
       when,
     );
+    // 池任务重试 = 重新回池等认领（认领人/租约清掉），不保留上一轮的归属，
+    // 否则它虽然 status=created 却已经「名花有主」，别人永远认领不到。
+    const poolReset = current.claimPolicy === "pool";
     this.db
       .query(
         `UPDATE agent_tasks
          SET status = 'created', attempt = ?, dispatched_at = NULL, started_at = NULL,
              finished_at = NULL, result = NULL, error = NULL
+             ${poolReset ? ", agent_id = NULL, claimed_at = NULL, lease_expires_at = NULL" : ""}
          WHERE id = ?`,
       )
       .run(attempt, id);

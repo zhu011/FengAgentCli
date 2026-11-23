@@ -575,6 +575,8 @@ export async function createRuntimeAgent(
   let agentTaskService: AgentTaskService | null = null;
   // P2：小队服务在派单服务之后装配（它依赖 agentTaskService），但权限策略闭包要先声明
   let squadService: SquadService | null = null;
+  // P3-1：任务池过滤要用小队成员表（在派单服务之后才建库），先留个引用给闭包
+  let squadStoreForPool: SquadStore | null = null;
   let approvalStore: ApprovalStore | null = null;
   const humanOwner = options.env?.FENG_OWNER ?? "owner";
   if (enableStore) {
@@ -610,6 +612,19 @@ export async function createRuntimeAgent(
           }
         },
         ...(taskStore ? { ledger: taskStore.ledger } : {}),
+        // P3-1 任务池：只做「小队成员 + roster skill 标签」两道过滤，不做能力评分。
+        // 小队仓在本服务之后才建，所以用闭包惰性取（未装配时按「不限制」降级）。
+        pool: {
+          scope: {
+            hasSquad: (squadId) => squadStoreForPool?.getSquad(squadId) !== undefined,
+            hasAgentMember: (squadId, agentId) =>
+              squadStoreForPool?.hasAgentMember(squadId, agentId) ?? false,
+            skillsFor: (agentId) =>
+              (skillMounts?.listForAgent(agentId) ?? [])
+                .filter((mount) => mount.enabled)
+                .map((mount) => mount.skillName),
+          },
+        },
         // 群服务稍后才建：用惰性下沉口，任务终态时把结果以 task_card 写回群（G2）
         groupSink: {
           postRuntimeMessage: (groupId, input) =>
@@ -681,6 +696,7 @@ export async function createRuntimeAgent(
     const tasks = agentTaskService;
     try {
       const squadStore = new SquadStore(`${dataDir}/sessions.db`);
+      squadStoreForPool = squadStore;
       approvalStore = new ApprovalStore(`${dataDir}/sessions.db`);
       // P2 第二阶段：auto 模式 = SquadCoordinator（优先级/失败冷却）+ 落盘 + 真派发。
       // 它自己按 squad_task / squad_member_state 重建，不需要额外初始化。

@@ -14,8 +14,9 @@
  * | POST | `/api/runtimes/:name/probe` | 探测单个 |
  * | POST | `/api/runtimes/probe` | 显式探测全部 |
  * | POST | `/api/runtimes/probe-candidate` | 表单「探测验证」（不落盘） |
- * | GET | `/api/agent-tasks` | `{tasks, nextCursor?, runtimes}`（`status`/`runtime`/`limit`/`cursor`） |
- * | POST | `/api/agent-tasks` | 建任务并派发 → task |
+ * | GET | `/api/agent-tasks` | `{tasks, nextCursor?, runtimes}`（`status`/`runtime`/`limit`/`cursor`）；`?claimable=1[&squad=]` → `ClaimableTaskDto[]`；`?pool=1[&squad=]` → `PoolTaskDto[]`（P3-1） |
+ * | POST | `/api/agent-tasks` | 建任务并派发 → task；`claimPolicy=pool` 时只进池、不派发（P3-1） |
+ * | POST | `/api/agent-tasks/:id/claim` | 原子认领池任务 `{agent}` → `{ok,status,leaseExpiresAt,task}`；输家 409（P3-1） |
  * | GET | `/api/agent-tasks/:id` | `{task, events}` |
  * | POST | `/api/agent-tasks/:id/cancel` | 取消（终态 409） |
  * | POST | `/api/agent-tasks/:id/retry` | 重试（新 attempt，事件留痕） |
@@ -32,6 +33,7 @@ import type { AgentTaskStatus } from "@fengagent/agent";
 import { isTerminalTaskStatus } from "@fengagent/agent";
 import { createLogger } from "@fengagent/shared";
 import type { AgentTaskService, AgentTaskStreamEvent } from "../agent-task-service.ts";
+import { TaskClaimError } from "../agent-task-service.ts";
 import {
   KNOWN_AGENT_PROTOCOLS,
   RuntimeRegistryError,
@@ -45,6 +47,7 @@ const log = createLogger("agent-task-routes");
 /** 合法状态枚举（请求参数校验用） */
 const STATUSES: readonly AgentTaskStatus[] = [
   "created",
+  "claimed",
   "dispatched",
   "running",
   "replied",
@@ -221,7 +224,31 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
   const app = new Hono();
 
   // GET / — 列表 + runtime 卡片（契约：一次请求拿两屏数据）
+  // 两种池视图是「平铺数组」，与既有 `{tasks,runtimes}` 契约分开，互不影响：
+  //   ?claimable=1[&squad=][&agent=] → 可认领（池内 created）
+  //   ?pool=1[&squad=]               → 池视图（含已被认领/租约态）
   app.get("/", (c) => {
+    const squad = c.req.query("squad");
+    const rawLimit = Number.parseInt(c.req.query("limit") ?? "", 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
+    if (c.req.query("claimable") === "1") {
+      const agent = c.req.query("agent");
+      return c.json(
+        service.listClaimableTasks({
+          ...(squad === undefined || squad === "" ? {} : { squad }),
+          ...(agent === undefined || agent === "" ? {} : { agent }),
+          ...(limit === undefined ? {} : { limit }),
+        }),
+      );
+    }
+    if (c.req.query("pool") === "1") {
+      return c.json(
+        service.listPoolTasks({
+          ...(squad === undefined || squad === "" ? {} : { squad }),
+          ...(limit === undefined ? {} : { limit }),
+        }),
+      );
+    }
     const rawStatus = c.req.query("status");
     const statuses =
       rawStatus === undefined || rawStatus === ""
@@ -230,8 +257,6 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
             .split(",")
             .map((s) => s.trim())
             .filter((s): s is AgentTaskStatus => (STATUSES as readonly string[]).includes(s));
-    const rawLimit = Number.parseInt(c.req.query("limit") ?? "", 10);
-    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
     const runtime = c.req.query("runtime");
     const agentId = c.req.query("agentId");
     const groupId = c.req.query("groupId");
@@ -253,12 +278,20 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
   });
 
   // POST / — 建任务并派发（`agent` 优先按绑定解析 runtime；`runtime` 保留兼容）
+  //  P3-1：`claimPolicy=pool` 时只进池、不派发，且 `agent`/`runtime` 都可以不给。
   app.post("/", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const agent = typeof body.agent === "string" ? body.agent.trim() : "";
     const runtime = typeof body.runtime === "string" ? body.runtime.trim() : "";
     const content = typeof body.content === "string" ? body.content : "";
-    if (agent === "" && runtime === "") return c.json({ error: "agent 或 runtime 必填" }, 400);
+    const claimPolicy = body.claimPolicy;
+    if (claimPolicy !== undefined && claimPolicy !== "assigned" && claimPolicy !== "pool") {
+      return c.json({ error: "claimPolicy 只能是 assigned 或 pool" }, 400);
+    }
+    const toPool = claimPolicy === "pool";
+    if (!toPool && agent === "" && runtime === "") {
+      return c.json({ error: "agent 或 runtime 必填" }, 400);
+    }
     if (content.trim() === "") return c.json({ error: "content 必填" }, 400);
 
     const fromSession =
@@ -272,6 +305,11 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
       typeof body.idempotencyKey === "string" && body.idempotencyKey !== ""
         ? body.idempotencyKey
         : undefined;
+    const poolScope =
+      typeof body.poolScope === "string" && body.poolScope !== "" ? body.poolScope : undefined;
+    const skillTags = Array.isArray(body.skillTags)
+      ? body.skillTags.filter((tag): tag is string => typeof tag === "string" && tag !== "")
+      : undefined;
 
     try {
       const task = await service.submit({
@@ -282,15 +320,42 @@ export function createAgentTaskRoutes(service: AgentTaskService): Hono {
         ...(cwd === undefined ? {} : { cwd }),
         ...(groupId === undefined ? {} : { groupId }),
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+        ...(claimPolicy === undefined ? {} : { claimPolicy }),
+        ...(poolScope === undefined ? {} : { poolScope }),
+        ...(skillTags === undefined || skillTags.length === 0 ? {} : { skillTags }),
       });
       return c.json(task, 201);
     } catch (err) {
       if (err instanceof AgentRuntimeBindingError) {
         return c.json(err.toPayload(), err.status);
       }
+      if (err instanceof TaskClaimError) {
+        return c.json(err.toPayload(), err.status);
+      }
       const message = err instanceof Error ? err.message : String(err);
       log.warn("create", `建任务失败: ${message}`);
       return c.json({ error: message }, 400);
+    }
+  });
+
+  // POST /:id/claim — 原子认领池任务（P3-1）：条件 UPDATE 定胜负，输家 409
+  app.post("/:id/claim", async (c) => {
+    const id = c.req.param("id");
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const agent = typeof body.agent === "string" ? body.agent.trim() : "";
+    if (agent === "") {
+      return c.json({ error: { message: "agent 必填", code: "bad_request" } }, 400);
+    }
+    try {
+      return c.json(service.claimTask(id, agent));
+    } catch (err) {
+      if (err instanceof TaskClaimError) {
+        if (err.status >= 500) log.warn("claim", `认领失败: ${err.message}`);
+        return c.json(err.toPayload(), err.status);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn("claim", `认领异常: ${message}`);
+      return c.json({ error: { message, code: "internal_error" } }, 500);
     }
   });
 

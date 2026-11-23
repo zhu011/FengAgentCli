@@ -732,6 +732,81 @@ POST /api/agent-tasks
 
 **审计**：每次读别人的 run 记一条 `activity(actor, target_agent, run_id, at)`（P3）。
 
+#### 5.4.5 P3-1 任务池认领（opt-in，默认仍点名派发）
+
+**一句话**：`agent_tasks.claim_policy` 默认 `assigned`（点名派发，7 态语义零变化）；
+建任务时显式 `claimPolicy=pool` 才进池，池任务停在 `created` 等**原子认领**，
+认领成功即派发；租约过期/崩溃时**退回池子**而不是判死。
+
+**数据模型（`agent_tasks` 新增 5 列，老库自动补列）**
+
+| 列 | 说明 |
+|---|---|
+| `claim_policy TEXT NOT NULL DEFAULT 'assigned'` | `assigned` \| `pool` |
+| `pool_scope TEXT` | 池范围（小队 id；空 = 全局池） |
+| `skill_tags TEXT` | JSON 数组：池内技能标签（认领人须已挂载这些技能） |
+| `claimed_at INTEGER` | 认领时间 |
+| `lease_expires_at INTEGER` | 租约到期（过期回收） |
+
+状态机新增**非终态** `claimed`（`created → claimed → dispatched → running → …`）；
+事件流新增 `task/claimed`（detail 带 `agent=` 与租约）与 `task/requeued`（回池），
+重放规则：`task/claimed → claimed`、`task/requeued → created`。
+
+**原子认领（不是「先 SELECT 再 UPDATE」）**
+
+```sql
+UPDATE agent_tasks
+SET status = 'claimed', agent_id = ?, claimed_at = ?, lease_expires_at = ?,
+    runtime = CASE WHEN runtime = '' AND ? IS NOT NULL THEN ? ELSE runtime END
+WHERE id = ?
+  AND claim_policy = 'pool'
+  AND status = 'created'
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_tasks busy
+    WHERE busy.agent_id = ?
+      AND busy.id <> agent_tasks.id
+      AND busy.status IN ('claimed','dispatched','running')
+  )
+```
+
+`changes === 1` 才算赢；否则读一次现状给出原因：`already_claimed` / `agent_busy` /
+`not_pool` / `not_claimable` / `not_found`（全部 409，`not_found` 404）。
+输家不写任何事件。
+
+**两道保险**
+
+1. **per-agent 串行**：上面 UPDATE 里的 `NOT EXISTS` 保证同一个 agent 同时只有一条
+   `claimed` / `dispatched` / `running` 任务（含 assigned 任务），抢不到就是 `agent_busy`；
+2. **租约回收**：`claimed` 且租约过期 → 条件 UPDATE 回 `created` + 清 `agent_id` +
+   写 `task/requeued`。三个触发点：读 `?claimable=1`/`?pool=1` 时惰性回收、认领前回收、
+   后台定时扫（默认 60s，`unref` 不拖住退出）。
+   **崩溃恢复**：`claimed` → `created`（回池），**不是** `failed`/`expired`；
+   池里本来就是 `created` 的任务不算遗留残局（不会被 `expired` 清掉）。
+
+**接口**
+
+| 方法 | 路径 | 契约 |
+|---|---|---|
+| POST | `/api/agent-tasks` | body 加 `{claimPolicy?, poolScope?, skillTags?}`；`claimPolicy=pool` 时 `agent`/`runtime` 可省（只进池、不派发），201 → `status=created` |
+| GET | `/api/agent-tasks?claimable=1[&squad=&agent=]` | 200 → `ClaimableTask[]`（平铺数组）：`{id, content, claimPolicy:'pool', poolScope?, skillTags?, status, createdAt}`；传 `agent` 时按「小队成员 + roster skill」过滤 |
+| GET | `/api/agent-tasks?pool=1[&squad=]` | 200 → `PoolTaskDto[]`（含已被认领/租约态）：在 `ClaimableTask` 上加 `claimedBy?` / `claimedAt?` / `leaseExpiresAt?` / `leaseExpired` |
+| POST | `/api/agent-tasks/:id/claim` | body `{agent}` → 200 `{ok:true, status:'claimed', leaseExpiresAt:<epoch ms>, task}`；已被认领/agent 忙/范围或技能不符 → 409 `{error:{message,code}}`；不存在 404；缺 `agent` 400 |
+
+**池内选择（先只做两道，不上能力评分）**
+
+- `poolScope` 非空 → 认领人必须是该小队的 agent 成员（`squad_member`）；
+- `skillTags` 非空 → 认领人**启用中**的技能（`agent_skill`）必须覆盖全部标签，缺一即
+  `skill_mismatch`；
+- `runtime` 留空的池任务，认领时按认领人的绑定解析（`resolveRuntimeForAgent`），
+  解析失败/未探测 → 409 并带原始错误码。
+
+**边界（本期不做）**
+
+- 池任务**不写 `squad_task` / `squad_run`**：小队运行树仍只显示队长/auto 派发的任务；
+  池任务的执行记录走 `agent_tasks` + 自己的事件流/SSE（进运行树留到「团队并行」那块）；
+- 池任务 retry 回到池子（`created` + 清认领人），不自动派发；
+- 池任务没有优先级排序（`squad_task.priority` 是 auto 模式专用），先进先出。
+
 ---
 
 ## 6. 实现原理逐条（机制 → 参考证据 → 落点/改造点）
