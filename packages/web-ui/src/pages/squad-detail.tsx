@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Archive, ChevronLeft, Loader2, Plus, RefreshCw, Users } from "lucide-react";
 import { ApprovalsPane } from "./approvals-pane.tsx";
+import { TaskPoolPane } from "./task-pool-pane.tsx";
 import type { ApiClient } from "../api/client.ts";
 import type { SquadSource } from "../api/squads-mock.ts";
 import type { AgentCard, SquadInfo, SquadMember, SquadRunNode } from "../api/types.ts";
@@ -395,6 +396,9 @@ export function SquadDetailView({
 
       {/* 审批（负责人确认 + 上抛 + 审计） */}
       <ApprovalsPane client={client} squadId={id} />
+
+      {/* 任务池（P3-1：opt-in 认领，开放抢单） */}
+      <TaskPoolPane client={client} squadId={id} />
 
       {/* 危险区：归档 */}
       <div className="ag-form__row" style={{ borderTop: "1px solid var(--border-color)", paddingTop: 12 }}>

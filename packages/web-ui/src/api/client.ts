@@ -50,6 +50,8 @@ import type {
   Session,
   SessionMeta,
   AgentSkillMount,
+  ClaimableTask,
+  ClaimResult,
   SquadInfo,
   SquadInput,
   SquadMember,
@@ -685,6 +687,33 @@ export class ApiClient {
     return (await res.json()) as AgentSkillMount[];
   }
 
+
+  // ──────────────────────────────────────────────
+  // 任务池认领（P3-1：opt-in claim_policy=pool；默认点名派发不变）
+  // ──────────────────────────────────────────────
+
+  /** GET /api/agent-tasks?claimable=1 — 池内可认领任务（可按 squad 过滤） */
+  async listClaimableTasks(squadId?: string): Promise<ClaimableTask[]> {
+    const qs = squadId ? `?claimable=1&squad=${encodeURIComponent(squadId)}` : "?claimable=1";
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks${qs}`);
+    if (!res.ok) throw await this.toApiError(res, "Failed to list claimable tasks");
+    return (await res.json()) as ClaimableTask[];
+  }
+
+  /**
+   * POST /api/agent-tasks/:id/claim — 原子认领（条件 UPDATE，输家 409）。
+   *
+   * 认领后任务进 claimed + 租约；租约过期 requeue 回池（不判死）。
+   */
+  async claimTask(taskId: string, agentId: string): Promise<ClaimResult> {
+    const res = await fetch(`${this.baseUrl}/api/agent-tasks/${encodeURIComponent(taskId)}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: agentId }),
+    });
+    if (!res.ok) throw await this.toApiError(res, "Failed to claim task");
+    return (await res.json()) as ClaimResult;
+  }
   /** GET /api/agent-tasks — 外派任务列表 */
   async listAgentTasks(): Promise<AgentTaskListResponse> {
     const res = await fetch(`${this.baseUrl}/api/agent-tasks`);

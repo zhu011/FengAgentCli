@@ -701,6 +701,29 @@ export interface ApprovalDetail {
   audit: ApprovalAuditEntry[];
 }
 
+/** P3-1 任务池认领：claimable 任务视图（GET /api/agent-tasks?claimable=1） */
+export interface ClaimableTask {
+  id: string;
+  /** 任务内容 */
+  content: string;
+  /** 池范围（小队 id；空 = 全局池） */
+  poolScope?: string;
+  /** 认领策略（assigned=点名派发默认；pool=开放池） */
+  claimPolicy: "assigned" | "pool";
+  /** 池内标签过滤提示（roster skill 标签） */
+  skillTags?: string[];
+  createdAt: string;
+}
+
+/** P3-1：认领结果（POST /api/agent-tasks/:id/claim） */
+export interface ClaimResult {
+  ok: boolean;
+  /** 认领后任务状态（claimed） */
+  status: string;
+  /** 租约到期时间（epoch ms；过期 requeue 回池） */
+  leaseExpiresAt: number;
+}
+
 /* ─── 小队（AI 团队平台 P2，spec §5.2） ─── */
 
 /** 小队成员（agent 或人占位；role 自由文本） */
