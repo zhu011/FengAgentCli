@@ -177,6 +177,8 @@ export type {
   SquadDetail,
   SquadErrorCode,
   SquadMember,
+  SquadMemberRuntimeStatus,
+  SquadMemberStateRecord,
   SquadMemberType,
   SquadMode,
   SquadRecord,

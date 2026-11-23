@@ -37,6 +37,10 @@ export type AgentTaskEventType =
   | "task/accepted"
   | "task/running"
   | "task/stream-chunk"
+  /** 旁路事件：任务进入等待审批（不改 7 态状态机，时间线可见） */
+  | "task/blocked"
+  /** 旁路事件：裁决回来、续跑（与 task/blocked 成对） */
+  | "task/unblocked"
   | "task/replied"
   | "task/failed"
   | "task/cancelled"

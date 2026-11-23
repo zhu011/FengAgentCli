@@ -525,3 +525,56 @@ describe("待办工具的台账三态归因（不得把已有行当成无行）"
     expect(report.notes).toHaveLength(1);
   });
 });
+
+describe("TaskStore 等待审批（waiting_approval）", () => {
+  test("blockTask 落在非终态 waiting_approval + 原因 + 审批引用，可读可列", () => {
+    store.createTask({ taskId: "t-block", sessionId: "s1", coreIntent: "i", at: 1000 });
+    const blocked = store.blockTask("t-block", {
+      reason: "等待裁决：bash（要删 dist）",
+      ref: "ap_1",
+      at: 1001,
+    });
+    expect(blocked.status).toBe("waiting_approval");
+    expect(blocked.blockedReason).toBe("等待裁决：bash（要删 dist）");
+    expect(blocked.blockedRef).toBe("ap_1");
+
+    const loaded = store.getTask("t-block")!;
+    expect(loaded.status).toBe("waiting_approval");
+    expect(loaded.blockedReason).toContain("bash");
+    expect(store.listWaiting().map((state) => state.taskId)).toEqual(["t-block"]);
+  });
+
+  test("unblockTask 续跑（回到 active、清空原因）；重放与实时一致", () => {
+    store.createTask({ taskId: "t-resume", sessionId: "s1", coreIntent: "i", at: 1000 });
+    store.blockTask("t-resume", { reason: "等待裁决：bash", ref: "ap_1", at: 1001 });
+    const resumed = store.unblockTask("t-resume", { resolution: "approved", at: 1002 });
+    expect(resumed.status).toBe("active");
+    expect(resumed.blockedReason).toBeNull();
+    expect(resumed.blockedRef).toBeNull();
+
+    const events = store.events("t-resume");
+    expect(events.map((event) => event.type)).toEqual([
+      "task/created",
+      "task/blocked",
+      "task/unblocked",
+    ]);
+    expect(store.replay("t-resume")!.status).toBe("active");
+    expect(store.listWaiting()).toHaveLength(0);
+  });
+
+  test("等待期间经历多轮也不会被判死（非终态可重复推进）", () => {
+    store.createTask({ taskId: "t-multi", sessionId: "s1", coreIntent: "i", at: 1000 });
+    for (let i = 0; i < 3; i++) {
+      store.blockTask("t-multi", { reason: `等待裁决：tool-${i}`, at: 1001 + i * 2 });
+      expect(store.getTask("t-multi")!.status).toBe("waiting_approval");
+      store.unblockTask("t-multi", { resolution: "approved", at: 1002 + i * 2 });
+      expect(store.getTask("t-multi")!.status).toBe("active");
+    }
+    expect(store.getTask("t-multi")!.stateVersion).toBe(7);
+  });
+
+  test("空原因被拒（别让 UI 显示空的等待理由）", () => {
+    store.createTask({ taskId: "t-empty", sessionId: "s1", coreIntent: "i", at: 1000 });
+    expect(() => store.blockTask("t-empty", { reason: "  " })).toThrow(TaskStateError);
+  });
+});

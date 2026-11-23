@@ -24,10 +24,22 @@ import type { SideEffectKind } from "./operation-ledger.ts";
  * 任务生命周期状态。
  *
  * - `active`：可继续推进；
- * - `blocked`：需要外部条件（典型是「副作用结果 unknown，等待人工核对」）；
+ * - `waiting_approval`：**非终态**等待态 —— 任务卡在负责人/队长的一次审批上，
+ *   裁决后由 `task/unblocked` 放回 `active` 续跑（不是判死整轮，也不进 failed）；
+ * - `blocked`：需要外部条件（典型是「副作用结果 unknown，等待人工核对」）。
+ *   注意与 issue 的 `blocked` 状态不是一回事：这里只描述 Agent Loop 的任务，
+ *   审批等待一律走 `waiting_approval`，不要拿 `blocked` 兼职；
  * - `completed` / `aborted`：终态。
  */
-export type TaskStatus = "active" | "blocked" | "completed" | "aborted";
+export type TaskStatus = "active" | "waiting_approval" | "blocked" | "completed" | "aborted";
+
+/** 终态集合（等待态不是终态：还能被 task/unblocked 拉回去） */
+export const TERMINAL_TASK_STATE_STATUSES: readonly TaskStatus[] = ["completed", "aborted"];
+
+/** 该任务状态是否终态 */
+export function isTerminalTaskStateStatus(status: TaskStatus): boolean {
+  return TERMINAL_TASK_STATE_STATUSES.includes(status);
+}
 
 /** checkpoint 相位：一个可恢复单位的前后两半 */
 export type CheckpointPhase = "intent" | "outcome";
@@ -95,6 +107,17 @@ export interface TaskState {
   /** 上下文快照（结构化摘要，恢复时直接可用） */
   contextSnapshot: Record<string, unknown>;
   status: TaskStatus;
+  /**
+   * 进入 `waiting_approval` / `blocked` 的原因（正常态恒为 null）。
+   *
+   * 落盘后 UI 直接显示，不需要再从事件流里反推「它在等什么」。
+   */
+  blockedReason: string | null;
+  /**
+   * 等待对象的引用：审批等待时是 `approval_request.id`，其他阻塞可为空。
+   * 裁决回来时据此校验「放行的是不是它等的那一笔」。
+   */
+  blockedRef: string | null;
   /** 单调递增状态版本 */
   stateVersion: number;
   createdAt: number;
@@ -114,6 +137,8 @@ export const TASK_EVENT_TYPES = [
   "task/context",
   "task/status",
   "task/checkpoint",
+  "task/blocked",
+  "task/unblocked",
 ] as const;
 
 export type TaskEventType = (typeof TASK_EVENT_TYPES)[number];
@@ -148,7 +173,26 @@ export type TaskEvent =
       at: number;
     }
   | { type: "task/status"; taskId: string; status: TaskStatus; at: number }
-  | { type: "task/checkpoint"; taskId: string; checkpoint: Checkpoint; at: number };
+  | { type: "task/checkpoint"; taskId: string; checkpoint: Checkpoint; at: number }
+  | {
+      type: "task/blocked";
+      taskId: string;
+      /** 阻塞原因（UI 直接显示） */
+      reason: string;
+      /** 阻塞类型：缺省 `waiting_approval`（负责人/队长审批）；`blocked` 留给外部条件 */
+      status?: "waiting_approval" | "blocked";
+      /** 等待对象引用（审批等待时 = approval_request.id） */
+      ref?: string;
+      at: number;
+    }
+  | {
+      type: "task/unblocked";
+      taskId: string;
+      /** 解除方式：approve/deny 裁决续跑，resumed 是手动恢复 */
+      resolution?: "approved" | "denied" | "resumed";
+      note?: string;
+      at: number;
+    };
 
 /** 该类型事件是否属于 `task/*` 词汇 */
 export function isTaskEventType(type: string): type is TaskEventType {
@@ -164,7 +208,8 @@ export class TaskStateError extends Error {
       | "task_not_created"
       | "task_already_created"
       | "task_id_mismatch"
-      | "stale_state_version",
+      | "stale_state_version"
+      | "illegal_transition",
   ) {
     super(message);
     this.name = "TaskStateError";
@@ -194,14 +239,28 @@ export function createTaskState(
     completedSteps: [],
     contextSnapshot: {},
     status: "active",
+    blockedReason: null,
+    blockedRef: null,
     stateVersion: 1,
     createdAt: at,
     updatedAt: at,
   };
 }
 
-/** 深拷贝（reducer 保持纯函数语义，避免调用方持有的引用被改写） */
-function cloneState(state: TaskState): TaskState {
+/**
+ * 老库兼容：把缺少新字段的状态补齐（`blockedReason` / `blockedRef`）。
+ *
+ * 读盘时统一走它，重放对拍才不会因为「老行没有新键」而报差异。
+ */
+export function normalizeTaskState(state: TaskState): TaskState {
+  return {
+    ...state,
+    blockedReason: state.blockedReason ?? null,
+    blockedRef: state.blockedRef ?? null,
+  };
+}
+
+/** 深拷贝（reducer 保持纯函数语义，避免调用方持有的引用被改写） */function cloneState(state: TaskState): TaskState {
   return {
     ...state,
     pendingTools: state.pendingTools.map((p) => ({ ...p })),
@@ -284,10 +343,41 @@ export function reduceTaskState(
       break;
     case "task/status":
       next.status = event.status;
+      // 直接切到正常态等同于解除等待（原因必须一起清掉，否则 UI 会显示「在等」但状态已跑）
+      if (event.status === "active" || event.status === "completed" || event.status === "aborted") {
+        next.blockedReason = null;
+        next.blockedRef = null;
+      }
       break;
     case "task/checkpoint":
       // checkpoint 是「落盘标记」事实，不改变业务字段；版本 +1 已在上方统一处理
       break;
+    case "task/blocked": {
+      if (isTerminalTaskStateStatus(state.status)) {
+        throw new TaskStateError(
+          `cannot block task ${state.taskId} in terminal status ${state.status}`,
+          "illegal_transition",
+        );
+      }
+      // 缺省进「等待审批」而不是 blocked：审批等待是独立状态，别拿 blocked 兼职
+      next.status = event.status ?? "waiting_approval";
+      next.blockedReason = event.reason;
+      next.blockedRef = event.ref ?? null;
+      break;
+    }
+    case "task/unblocked": {
+      if (isTerminalTaskStateStatus(state.status)) {
+        throw new TaskStateError(
+          `cannot unblock task ${state.taskId} in terminal status ${state.status}`,
+          "illegal_transition",
+        );
+      }
+      // 裁决后**续跑**：回到 active，等待原因清空；重复 unblocked 是幂等的
+      next.status = "active";
+      next.blockedReason = null;
+      next.blockedRef = null;
+      break;
+    }
   }
 
   return next;

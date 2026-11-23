@@ -15,6 +15,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import type { SquadTaskPriority } from "@fengagent/core/squad";
 import { expandTilde } from "@fengagent/shared/utils";
 
 /** 小队执行模式：leader = 队长软编排（默认）；auto = 算法分配（P2 第二阶段） */
@@ -54,9 +55,29 @@ export type SquadTaskStatus =
   | "pending"
   | "assigned"
   | "running"
+  /** 非终态等待态：等负责人/队长裁决，裁决后续跑（不进 failed） */
+  | "waiting_approval"
   | "completed"
   | "failed"
   | "cancelled";
+
+/** 小队成员运行态（协调器持久化用；与 core 的 SquadMemberStatus 同枚举） */
+export type SquadMemberRuntimeStatus = "idle" | "busy" | "cooldown" | "disabled";
+
+/** 小队成员的协调器状态（落盘，重启后重建 SquadCoordinator 用） */
+export interface SquadMemberStateRecord {
+  squadId: string;
+  memberId: string;
+  status: SquadMemberRuntimeStatus;
+  failureCount: number;
+  successCount: number;
+  /** 当前分配的小队任务 id */
+  currentTaskId?: string;
+  /** 冷却结束时间（ms） */
+  cooldownUntil?: number;
+  lastError?: string;
+  updatedAt: number;
+}
 
 /** 小队任务（leader 一条 + worker N 条） */
 export interface SquadTaskRecord {
@@ -73,6 +94,14 @@ export interface SquadTaskRecord {
   title: string;
   status: SquadTaskStatus;
   attempt: number;
+  /** auto 模式的优先级（leader 模式恒为 normal） */
+  priority: SquadTaskPriority;
+  /** 已转派次数（协调器 maxReassignments 判定用） */
+  reassignmentCount: number;
+  /** 等待原因（waiting_approval / blocked 时有值，供 UI 直接显示） */
+  blockedReason?: string;
+  /** 派单正文（auto 模式换人重试时按原文重派，不靠标题猜） */
+  content?: string;
   result?: string;
   error?: string;
   createdAt: number;
@@ -172,10 +201,26 @@ interface TaskRow {
   title: string;
   status: string;
   attempt: number;
+  priority: string | null;
+  reassignment_count: number | null;
+  blocked_reason: string | null;
+  content: string | null;
   result: string | null;
   error: string | null;
   created_at: number;
   finished_at: number | null;
+}
+
+interface MemberStateRow {
+  squad_id: string;
+  member_id: string;
+  status: string;
+  failure_count: number;
+  success_count: number;
+  current_task_id: string | null;
+  cooldown_until: number | null;
+  last_error: string | null;
+  updated_at: number;
 }
 
 interface RunRow {
@@ -250,6 +295,10 @@ export class SquadStore {
         title TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'pending',
         attempt INTEGER NOT NULL DEFAULT 1,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        reassignment_count INTEGER NOT NULL DEFAULT 0,
+        blocked_reason TEXT,
+        content TEXT,
         result TEXT,
         error TEXT,
         created_at INTEGER NOT NULL,
@@ -258,6 +307,20 @@ export class SquadStore {
 
       CREATE INDEX IF NOT EXISTS idx_squad_task_squad ON squad_task(squad_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_squad_task_parent ON squad_task(parent_id);
+
+      -- auto 模式的成员运行态（重启后按它重建 SquadCoordinator）
+      CREATE TABLE IF NOT EXISTS squad_member_state (
+        squad_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'idle',
+        failure_count INTEGER NOT NULL DEFAULT 0,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        current_task_id TEXT,
+        cooldown_until INTEGER,
+        last_error TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (squad_id, member_id)
+      );
 
       CREATE TABLE IF NOT EXISTS squad_run (
         id TEXT PRIMARY KEY,
@@ -273,6 +336,11 @@ export class SquadStore {
 
       CREATE INDEX IF NOT EXISTS idx_squad_run_squad ON squad_run(squad_id, started_at ASC);
     `);
+    // 老库迁移：P2 第二阶段新增的列（CREATE TABLE IF NOT EXISTS 不会给已存在的表补列）
+    this.ensureColumn("squad_task", "priority", "TEXT NOT NULL DEFAULT 'normal'");
+    this.ensureColumn("squad_task", "reassignment_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("squad_task", "blocked_reason", "TEXT");
+    this.ensureColumn("squad_task", "content", "TEXT");
   }
 
   // ──────────────────────────────────────────────
@@ -466,7 +534,9 @@ export class SquadStore {
     isLeader: boolean;
     assigneeId: string;
     title: string;
+    content?: string;
     status?: SquadTaskStatus;
+    priority?: SquadTaskPriority;
     runId?: string;
     agentTaskId?: string;
   }): SquadTaskRecord {
@@ -474,8 +544,8 @@ export class SquadStore {
     const at = this.now();
     this.db
       .query(
-        `INSERT INTO squad_task (id, squad_id, parent_id, is_leader, assignee_id, run_id, agent_task_id, title, status, attempt, result, error, created_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, NULL)`,
+        `INSERT INTO squad_task (id, squad_id, parent_id, is_leader, assignee_id, run_id, agent_task_id, title, status, attempt, priority, reassignment_count, blocked_reason, content, result, error, created_at, finished_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, NULL, ?, NULL, NULL, ?, NULL)`,
       )
       .run(
         id,
@@ -487,6 +557,8 @@ export class SquadStore {
         input.agentTaskId ?? null,
         input.title,
         input.status ?? "pending",
+        input.priority ?? "normal",
+        input.content ?? null,
         at,
       );
     return this.getTask(id)!;
@@ -519,11 +591,15 @@ export class SquadStore {
     id: string,
     patch: {
       status?: SquadTaskStatus;
+      assigneeId?: string;
       result?: string | null;
       error?: string | null;
       runId?: string;
       agentTaskId?: string;
       attempt?: number;
+      priority?: SquadTaskPriority;
+      reassignmentCount?: number;
+      blockedReason?: string | null;
       finishedAt?: number | null;
     },
   ): SquadTaskRecord {
@@ -534,20 +610,36 @@ export class SquadStore {
     this.db
       .query(
         `UPDATE squad_task
-            SET status = ?, result = ?, error = ?, run_id = ?, agent_task_id = ?, attempt = ?, finished_at = ?
+            SET status = ?, assignee_id = ?, result = ?, error = ?, run_id = ?, agent_task_id = ?,
+                attempt = ?, priority = ?, reassignment_count = ?, blocked_reason = ?, finished_at = ?
           WHERE id = ?`,
       )
       .run(
         patch.status ?? existing.status,
+        patch.assigneeId ?? existing.assigneeId,
         patch.result === undefined ? (existing.result ?? null) : patch.result,
         patch.error === undefined ? (existing.error ?? null) : patch.error,
         patch.runId ?? existing.runId ?? null,
         patch.agentTaskId ?? existing.agentTaskId ?? null,
         patch.attempt ?? existing.attempt,
+        patch.priority ?? existing.priority,
+        patch.reassignmentCount ?? existing.reassignmentCount,
+        patch.blockedReason === undefined
+          ? (existing.blockedReason ?? null)
+          : patch.blockedReason,
         finishedAt,
         id,
       );
     return this.getTask(id)!;
+  }
+
+  /** 进入/解除等待态（waiting_approval）：只改状态与原因，不动执行字段 */
+  setWaiting(id: string, patch: { reason: string } | { reason: null }): SquadTaskRecord {
+    return this.updateTask(id, {
+      status: patch.reason === null ? "running" : "waiting_approval",
+      blockedReason: patch.reason,
+      ...(patch.reason === null ? { finishedAt: null } : {}),
+    });
   }
 
   /** 建 run（运行树节点） */
@@ -609,6 +701,79 @@ export class SquadStore {
     if (this.ownsDb) this.db.close();
   }
 
+  // ──────────────────────────────────────────────
+  // auto 模式：成员运行态（协调器持久化）
+  // ──────────────────────────────────────────────
+
+  /** 某小队全部成员运行态（无记录返回空数组） */
+  listMemberStates(squadId: string): SquadMemberStateRecord[] {
+    const rows = this.db
+      .query("SELECT * FROM squad_member_state WHERE squad_id = ? ORDER BY updated_at ASC")
+      .all(squadId) as MemberStateRow[];
+    return rows.map(toMemberState);
+  }
+
+  /** 单个成员运行态 */
+  getMemberState(squadId: string, memberId: string): SquadMemberStateRecord | undefined {
+    const row = this.db
+      .query("SELECT * FROM squad_member_state WHERE squad_id = ? AND member_id = ?")
+      .get(squadId, memberId) as MemberStateRow | null;
+    return row ? toMemberState(row) : undefined;
+  }
+
+  /** 写成员运行态（整条覆盖；协调器每次状态变化后同步一次） */
+  upsertMemberState(
+    squadId: string,
+    state: {
+      memberId: string;
+      status: SquadMemberRuntimeStatus;
+      failureCount?: number;
+      successCount?: number;
+      currentTaskId?: string | null;
+      cooldownUntil?: number | null;
+      lastError?: string | null;
+    },
+  ): SquadMemberStateRecord {
+    this.db
+      .query(
+        `INSERT INTO squad_member_state
+           (squad_id, member_id, status, failure_count, success_count, current_task_id, cooldown_until, last_error, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(squad_id, member_id) DO UPDATE SET
+           status = excluded.status,
+           failure_count = excluded.failure_count,
+           success_count = excluded.success_count,
+           current_task_id = excluded.current_task_id,
+           cooldown_until = excluded.cooldown_until,
+           last_error = excluded.last_error,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        squadId,
+        state.memberId,
+        state.status,
+        state.failureCount ?? 0,
+        state.successCount ?? 0,
+        state.currentTaskId ?? null,
+        state.cooldownUntil ?? null,
+        state.lastError ?? null,
+        this.now(),
+      );
+    return this.getMemberState(squadId, state.memberId)!;
+  }
+
+  /** 清空某小队的成员运行态（小队归档/重排用） */
+  clearMemberStates(squadId: string): void {
+    this.db.query("DELETE FROM squad_member_state WHERE squad_id = ?").run(squadId);
+  }
+
+  /** 给老库补列（列已存在则跳过） */
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (columns.some((item) => item.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+
   private requireSquad(id: string): SquadDetail {
     const squad = this.getSquad(id);
     if (!squad) throw new SquadStoreError("not_found", `小队不存在: ${id}`);
@@ -665,6 +830,10 @@ function toTask(row: TaskRow): SquadTaskRecord {
     title: row.title,
     status: toTaskStatus(row.status),
     attempt: row.attempt,
+    priority: toTaskPriority(row.priority),
+    reassignmentCount: row.reassignment_count ?? 0,
+    ...(row.blocked_reason === null ? {} : { blockedReason: row.blocked_reason }),
+    ...(row.content === null || row.content === "" ? {} : { content: row.content }),
     ...(row.result === null ? {} : { result: row.result }),
     ...(row.error === null ? {} : { error: row.error }),
     createdAt: row.created_at,
@@ -678,12 +847,52 @@ function toTaskStatus(value: string): SquadTaskStatus {
     case "pending":
     case "assigned":
     case "running":
+    case "waiting_approval":
     case "completed":
     case "failed":
     case "cancelled":
       return value;
     default:
       return "failed";
+  }
+}
+
+/** 优先级归一 */
+function toTaskPriority(value: string | null): SquadTaskPriority {
+  switch (value) {
+    case "low":
+    case "high":
+    case "urgent":
+      return value;
+    default:
+      return "normal";
+  }
+}
+
+/** 行 → 成员运行态 */
+function toMemberState(row: MemberStateRow): SquadMemberStateRecord {
+  return {
+    squadId: row.squad_id,
+    memberId: row.member_id,
+    status: toMemberRuntimeStatus(row.status),
+    failureCount: row.failure_count,
+    successCount: row.success_count,
+    ...(row.current_task_id === null ? {} : { currentTaskId: row.current_task_id }),
+    ...(row.cooldown_until === null ? {} : { cooldownUntil: row.cooldown_until }),
+    ...(row.last_error === null ? {} : { lastError: row.last_error }),
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 成员运行态归一（未知值按 idle，宁可再试一轮也不卡死） */
+function toMemberRuntimeStatus(value: string): SquadMemberRuntimeStatus {
+  switch (value) {
+    case "busy":
+    case "cooldown":
+    case "disabled":
+      return value;
+    default:
+      return "idle";
   }
 }
 

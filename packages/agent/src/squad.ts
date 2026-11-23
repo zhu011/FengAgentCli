@@ -216,12 +216,15 @@ export class SquadCoordinator {
   submitTask(
     description: string,
     options?: {
+      /** 指定任务 id（落盘方先建行、协调器复用同一个 id） */
+      id?: string;
       prompt?: string;
       priority?: SquadTaskPriority;
       maxAttempts?: number;
     },
   ): SquadTask {
     const task = createSquadTask(description, options);
+    if (options?.id !== undefined && options.id !== "") task.id = options.id;
     this.tasks.set(task.id, task);
     this.emit({
       type: "task-submitted",
@@ -229,6 +232,36 @@ export class SquadCoordinator {
       description: task.description,
     });
     return task;
+  }
+
+  /**
+   * 恢复一条已落盘的任务（重启后重建协调器状态，不重复发 `task-submitted`）。
+   *
+   * 调用方负责保证 `task.id` 未注册过；同 id 已存在时以落盘记录为准覆盖。
+   */
+  restoreTask(task: SquadTask): void {
+    this.tasks.set(task.id, task);
+    if (task.assigneeId === null) return;
+    const member = this.members.get(task.assigneeId);
+    if (!member) return;
+    member.status = "busy";
+    member.currentTaskId = task.id;
+  }
+
+  /** 恢复一个成员的历史状态（失败次数/冷却等；不改注册关系） */
+  restoreMember(
+    id: string,
+    patch: Partial<
+      Pick<
+        SquadMember,
+        "status" | "failureCount" | "successCount" | "currentTaskId" | "lastError" | "cooldownUntil"
+      >
+    >,
+  ): SquadMember | undefined {
+    const member = this.members.get(id);
+    if (!member) return undefined;
+    Object.assign(member, patch);
+    return member;
   }
 
   /** 获取任务 */
@@ -493,6 +526,22 @@ export class SquadCoordinator {
    * @returns 本次 tick 产生的事件列表
    */
   tick(): SquadEvent[] {
+    const emitted = this.tickCooldowns();
+    // 尝试分配排队任务
+    this.assignNext();
+    return emitted;
+  }
+
+  /**
+   * 只推进冷却（到期成员恢复 + failureCount 清零），**不**分配任务。
+   *
+   * 外部调度器（落盘/真派发那条链）需要自己决定何时 launch：先 `assignNext()`
+   * 再真派发，若让 `tick()` 顺手把任务标成 assigned，就会出现「成员被占住、
+   * 任务却没真正派出去」的空窗。
+   *
+   * @returns 本次推进产生的 `member-reactivated` 事件
+   */
+  tickCooldowns(): SquadEvent[] {
     const emitted: SquadEvent[] = [];
     const now = Date.now();
 
@@ -513,9 +562,6 @@ export class SquadCoordinator {
         emitted.push(event);
       }
     }
-
-    // 尝试分配排队任务
-    this.assignNext();
 
     return emitted;
   }

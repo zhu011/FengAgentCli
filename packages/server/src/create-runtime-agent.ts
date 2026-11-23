@@ -64,6 +64,7 @@ import { createContextManager } from "@fengagent/context";
 import type { ContextManager } from "@fengagent/context";
 import { AgentTaskService } from "./agent-task-service.ts";
 import { SquadService } from "./squad-service.ts";
+import { SquadAutoCoordinator } from "./squad-auto.ts";
 import { SkillService } from "./skill-service.ts";
 import { createModelSettingsService, type ModelSettingsService } from "./model-settings.ts";
 import type { AgentGroupService, GroupOrchestrator } from "@fengagent/groups";
@@ -681,11 +682,19 @@ export async function createRuntimeAgent(
     try {
       const squadStore = new SquadStore(`${dataDir}/sessions.db`);
       approvalStore = new ApprovalStore(`${dataDir}/sessions.db`);
+      // P2 第二阶段：auto 模式 = SquadCoordinator（优先级/失败冷却）+ 落盘 + 真派发。
+      // 它自己按 squad_task / squad_member_state 重建，不需要额外初始化。
+      const autoCoordinator = new SquadAutoCoordinator({
+        store: squadStore,
+        tasks,
+        composeMemberPrompt: composeAgentPrompt,
+      });
       const svc = new SquadService({
         store: squadStore,
         approvals: approvalStore,
         agentRegistry,
         tasks,
+        auto: autoCoordinator,
         // briefing roster：成员启用中的技能名（P1 agent_skill）
         skillsFor: (agentId) =>
           (skillMounts?.listForAgent(agentId) ?? [])
@@ -695,6 +704,15 @@ export async function createRuntimeAgent(
         humanOwner,
       });
       squadService = svc;
+      // 重启对账：上一进程留下的非终态 auto 任务，执行侧已终态的在这里结算
+      for (const squad of squadStore.listSquads()) {
+        if (squad.mode !== "auto") continue;
+        void autoCoordinator.reconcile(squad.id).catch((err: unknown) => {
+          process.stderr.write(
+            `Warn: 小队 ${squad.id} auto 对账失败：${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        });
+      }
 
       // 队长的「日常确认」三件套：列出待裁决 / 裁决 / 上抛人类发起人。
       // 审计由 SquadService → ApprovalStore 落库（谁、批哪次、once/session/permanent）。

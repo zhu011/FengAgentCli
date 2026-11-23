@@ -12,6 +12,8 @@ import {
   TaskStateError,
   createTaskState,
   isTaskEventType,
+  isTerminalTaskStateStatus,
+  normalizeTaskState,
   reduceTaskState,
   replayTaskState,
   taskStateEquals,
@@ -299,5 +301,109 @@ describe("事件重放对拍", () => {
 
   test("空事件流重放得到 null", () => {
     expect(replayTaskState([])).toBeNull();
+  });
+});
+
+describe("等待审批（waiting_approval）非终态", () => {
+  test("task/blocked 缺省进 waiting_approval 并写原因与引用", () => {
+    const state = createTaskState("t", "s", "改技能页", T0);
+    const blocked = reduceTaskState(state, {
+      type: "task/blocked",
+      taskId: "t",
+      reason: "等待裁决：bash（要删 dist）",
+      ref: "ap_1",
+      at: T0 + 1,
+    });
+    expect(blocked.status).toBe("waiting_approval");
+    expect(blocked.blockedReason).toBe("等待裁决：bash（要删 dist）");
+    expect(blocked.blockedRef).toBe("ap_1");
+    // 非终态：还能继续推进
+    expect(isTerminalTaskStateStatus(blocked.status)).toBe(false);
+    expect(blocked.stateVersion).toBe(2);
+  });
+
+  test("task/unblocked 回到 active 续跑并清空等待原因", () => {
+    let state = createTaskState("t", "s", "改技能页", T0);
+    state = reduceTaskState(state, {
+      type: "task/blocked",
+      taskId: "t",
+      reason: "等待裁决：bash",
+      at: T0 + 1,
+    });
+    state = reduceTaskState(state, {
+      type: "task/unblocked",
+      taskId: "t",
+      resolution: "approved",
+      note: "负责人批准",
+      at: T0 + 2,
+    });
+    expect(state.status).toBe("active");
+    expect(state.blockedReason).toBeNull();
+    expect(state.blockedRef).toBeNull();
+  });
+
+  test("显式 status=blocked 仍可表达「等外部条件」，与审批等待分开", () => {
+    const state = reduceTaskState(createTaskState("t", "s", "i", T0), {
+      type: "task/blocked",
+      taskId: "t",
+      reason: "副作用结果未知，等人工核对",
+      status: "blocked",
+      at: T0 + 1,
+    });
+    expect(state.status).toBe("blocked");
+    expect(state.blockedReason).toContain("人工核对");
+  });
+
+  test("终态任务不能被 block/unblock 复活", () => {
+    let state = reduceTaskState(createTaskState("t", "s", "i", T0), {
+      type: "task/status",
+      taskId: "t",
+      status: "completed",
+      at: T0 + 1,
+    });
+    expect(() =>
+      reduceTaskState(state, { type: "task/blocked", taskId: "t", reason: "x", at: T0 + 2 }),
+    ).toThrow(TaskStateError);
+    expect(() =>
+      reduceTaskState(state, { type: "task/unblocked", taskId: "t", at: T0 + 3 }),
+    ).toThrow(TaskStateError);
+  });
+
+  test("直接切 active 会顺手清掉等待原因（不留矛盾状态）", () => {
+    let state = reduceTaskState(createTaskState("t", "s", "i", T0), {
+      type: "task/blocked",
+      taskId: "t",
+      reason: "等待裁决：bash",
+      at: T0 + 1,
+    });
+    state = reduceTaskState(state, {
+      type: "task/status",
+      taskId: "t",
+      status: "active",
+      at: T0 + 2,
+    });
+    expect(state.blockedReason).toBeNull();
+  });
+
+  test("含 blocked/unblocked 的事件流重放与实时推进逐字节一致", () => {
+    const taskId = "task-wait";
+    const events: TaskEvent[] = [
+      { type: "task/created", taskId, sessionId: "s", coreIntent: "i", at: T0 },
+      { type: "task/blocked", taskId, reason: "等待裁决：bash", ref: "ap_1", at: T0 + 1 },
+      { type: "task/unblocked", taskId, resolution: "approved", at: T0 + 2 },
+      { type: "task/subtask", taskId, subtask: "继续改页面", at: T0 + 3 },
+    ];
+    let live = reduceTaskState(null, events[0]!);
+    for (const event of events.slice(1)) live = reduceTaskState(live, event);
+    expect(taskStateEquals(live, replayTaskState(events))).toBe(true);
+  });
+
+  test("老库状态缺新字段时归一化补齐（重放对拍不报差异）", () => {
+    const legacy = createTaskState("t", "s", "i", T0) as unknown as Record<string, unknown>;
+    delete legacy["blockedReason"];
+    delete legacy["blockedRef"];
+    const normalized = normalizeTaskState(legacy as unknown as ReturnType<typeof createTaskState>);
+    expect(normalized.blockedReason).toBeNull();
+    expect(normalized.blockedRef).toBeNull();
   });
 });

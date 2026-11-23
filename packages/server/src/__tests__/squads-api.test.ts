@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @fengagent/server — `/api/squads` + `/api/approvals` 测试（P2 第一阶段）
  *
  * 真 spawn `fake-acp-agent` 当队长/成员的 runtime，覆盖验收点：
@@ -18,6 +18,7 @@ import { AgentRegistry, ApprovalStore, SquadStore } from "@fengagent/agent";
 import { AgentTaskService } from "../agent-task-service.ts";
 import { AgentRuntimeRegistry } from "../agent-runtimes.ts";
 import { SquadService } from "../squad-service.ts";
+import { SquadAutoCoordinator } from "../squad-auto.ts";
 import { createSquadRoutes } from "../routes/squads.ts";
 import { createApprovalRoutes } from "../routes/approvals.ts";
 
@@ -87,11 +88,18 @@ async function makeFixture(): Promise<Fixture> {
   });
   const store = new SquadStore(join(dir, "sessions.db"));
   const approvals = new ApprovalStore(join(dir, "sessions.db"));
+  const auto = new SquadAutoCoordinator({
+    store,
+    tasks,
+    composeMemberPrompt: (agentId, content) => `[${agentId}]\n${content}`,
+    waitTimeoutMs: 15_000,
+  });
   const service = new SquadService({
     store,
     approvals,
     agentRegistry,
     tasks,
+    auto,
     skillsFor: (agentId) => (agentId === "leader" ? ["webui"] : []),
     humanOwner: "owner",
     waitTimeoutMs: 15_000,
@@ -309,7 +317,7 @@ describe("SquadService + /api/squads", () => {
     ).toBe(false);
   });
 
-  test("归档后派单 → 409 squad_archived；auto 模式 → 400 mode_not_supported", async () => {
+  test("归档后派单 → 409 squad_archived；auto 模式 → 协调器真分配 + 状态/推进接口", async () => {
     const id = await createSquad(fx.app);
     expect((await fx.app.request(`/api/squads/${id}`, { method: "DELETE" })).status).toBe(200);
     const archived = await fx.app.request(`/api/squads/${id}/tasks`, {
@@ -327,13 +335,48 @@ describe("SquadService + /api/squads", () => {
       body: JSON.stringify({ id: id2, name: "算法队", leaderId: "leader", mode: "auto" }),
     });
     expect(created.status).toBe(201);
+
     const auto = await fx.app.request(`/api/squads/${id2}/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: "算法分配一次" }),
+      body: JSON.stringify({ content: "算法分配一次", priority: "high" }),
     });
-    expect(auto.status).toBe(400);
-    expect(((await auto.json()) as { error: { code: string } }).error.code).toBe("mode_not_supported");
+    expect(auto.status).toBe(201);
+    const dispatched = (await auto.json()) as {
+      taskId: string;
+      runId: string;
+      agentTaskId: string;
+      mode: string;
+      assigneeId: string | null;
+      status: string;
+    };
+    // 只有队长一个 agent 成员：协调器把它当兜底成员分出去
+    expect(dispatched.mode).toBe("auto");
+    expect(dispatched.assigneeId).toBe("leader");
+    expect(dispatched.status).toBe("running");
+    expect(dispatched.runId).not.toBe("");
+    expect(dispatched.agentTaskId).not.toBe("");
+
+    const runs = await fx.app.request(`/api/squads/${id2}/runs`);
+    const nodes = (await runs.json()) as Array<{ id: string; assignee: string; status: string }>;
+    expect(nodes.some((node) => node.id === dispatched.runId && node.assignee === "leader")).toBe(true);
+
+    const coordinator = await fx.app.request(`/api/squads/${id2}/coordinator`);
+    expect(coordinator.status).toBe(200);
+    const status = (await coordinator.json()) as {
+      mode: string;
+      members: Array<{ memberId: string; status: string }>;
+      tasks: { total: number; running: number };
+      events: Array<{ type: string }>;
+    };
+    expect(status.mode).toBe("auto");
+    expect(status.members[0]!.memberId).toBe("leader");
+    expect(status.tasks.total).toBe(1);
+    expect(status.events.some((event) => event.type === "task-assigned")).toBe(true);
+
+    const tick = await fx.app.request(`/api/squads/${id2}/coordinator/tick`, { method: "POST" });
+    expect(tick.status).toBe(200);
+    expect(((await tick.json()) as { reactivated: string[] }).reactivated).toEqual([]);
   });
 });
 

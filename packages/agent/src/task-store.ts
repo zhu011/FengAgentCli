@@ -22,6 +22,7 @@ import type {
 } from "@fengagent/core";
 import {
   TaskStateError,
+  normalizeTaskState,
   reduceTaskState,
   replayTaskState,
 } from "@fengagent/core";
@@ -344,7 +345,7 @@ export class TaskStore {
     const row = this.db
       .query("SELECT * FROM task_states WHERE task_id = ?")
       .get(taskId) as TaskStateRow | null;
-    return row ? (safeParse(row.state_json) as TaskState) : null;
+    return row ? normalizeTaskState(safeParse(row.state_json) as TaskState) : null;
   }
 
   /** 按会话取任务（一个会话一个可恢复任务；多任务时取最新） */
@@ -367,7 +368,71 @@ export class TaskStore {
     const rows = this.db
       .query("SELECT * FROM task_states WHERE session_id = ? ORDER BY state_version")
       .all(sessionId) as TaskStateRow[];
-    return rows.map((r) => safeParse(r.state_json) as TaskState);
+    return rows.map((r) => normalizeTaskState(safeParse(r.state_json) as TaskState));
+  }
+
+  // ── 等待态（审批/外部条件）────────────────────
+
+  /**
+   * 进入等待态（缺省 `waiting_approval`）。
+   *
+   * 非终态：任务还能被 {@link unblockTask} 拉回来续跑，等待期间**不**进 failed。
+   *
+   * @param taskId - 任务 id
+   * @param input - 原因 + 等待对象引用（审批等待时传 approval id）
+   * @returns 推进后的状态
+   */
+  blockTask(
+    taskId: string,
+    input: {
+      reason: string;
+      status?: "waiting_approval" | "blocked";
+      ref?: string;
+      at?: number;
+    },
+  ): TaskState {
+    const reason = input.reason?.trim() ?? "";
+    if (reason === "") {
+      throw new TaskStateError("blockTask 需要非空 reason", "illegal_transition");
+    }
+    const event: TaskEvent = {
+      type: "task/blocked",
+      taskId,
+      reason,
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.ref === undefined ? {} : { ref: input.ref }),
+      at: input.at ?? Date.now(),
+    };
+    return this.appendEvent(taskId, event);
+  }
+
+  /**
+   * 解除等待态：`active` 续跑（审批裁决后走这里，而不是把整轮判死）。
+   *
+   * @param taskId - 任务 id
+   * @param input - 解除方式 / 附言
+   * @returns 推进后的状态
+   */
+  unblockTask(
+    taskId: string,
+    input: { resolution?: "approved" | "denied" | "resumed"; note?: string; at?: number } = {},
+  ): TaskState {
+    const event: TaskEvent = {
+      type: "task/unblocked",
+      taskId,
+      ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
+      ...(input.note === undefined ? {} : { note: input.note }),
+      at: input.at ?? Date.now(),
+    };
+    return this.appendEvent(taskId, event);
+  }
+
+  /** 列出等待中的任务（审批面板 / 恢复用） */
+  listWaiting(): TaskState[] {
+    const rows = this.db.query("SELECT * FROM task_states").all() as TaskStateRow[];
+    return rows
+      .map((row) => normalizeTaskState(safeParse(row.state_json) as TaskState))
+      .filter((state) => state.status === "waiting_approval" || state.status === "blocked");
   }
 
   // ── 状态推进（乐观锁）────────────────────────

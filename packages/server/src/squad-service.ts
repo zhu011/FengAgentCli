@@ -30,6 +30,7 @@ import {
   buildSquadBriefing,
   composeSquadLeaderPrompt,
   composeSquadWakePrompt,
+  isTerminalTaskStatus as isTerminalAgentTaskStatus,
   type AgentRegistry,
   type ApprovalAuditEntry,
   type ApprovalRequest,
@@ -42,8 +43,10 @@ import {
   type SquadTaskRecord,
   SquadStoreError as SquadError,
 } from "@fengagent/agent";
+import type { SquadTaskPriority } from "@fengagent/core/squad";
 import { createLogger } from "@fengagent/shared";
 import type { AgentTaskDto, AgentTaskService } from "./agent-task-service.ts";
+import type { SquadAutoCoordinator, SquadAutoDispatchResult, SquadAutoStatusDto } from "./squad-auto.ts";
 
 const log = createLogger("squads");
 
@@ -96,6 +99,10 @@ export interface SquadRunNodeDto {
   title: string;
   parentRunId: string | null;
   startedAt: string;
+  /** 等待原因（status = waiting_approval 时有值，UI 徽标旁的说明） */
+  blockedReason: string | null;
+  /** 该 run 对应的执行任务（深链到 /api/agent-tasks/:id） */
+  agentTaskId: string | null;
 }
 
 /** 派单结果（前端只需要 taskId） */
@@ -103,6 +110,12 @@ export interface SquadDispatchResult {
   taskId: string;
   runId: string;
   agentTaskId: string;
+  /** leader = 队长软编排；auto = 协调器算法分配 */
+  mode: "leader" | "auto";
+  /** 本次被分配的成员（auto「排队中」时为 null） */
+  assigneeId: string | null;
+  /** 派单后的小队任务状态（auto 可能停在 pending 排队） */
+  status: string;
 }
 
 /** 服务选项 */
@@ -121,6 +134,11 @@ export interface SquadServiceOptions {
   waitTimeoutMs?: number;
   /** 队长最多被唤醒的轮次（防「派活→回报→再派活」自激循环） */
   maxLeaderWakes?: number;
+  /**
+   * auto 模式接线层（P2 第二阶段）。不传时 `mode=auto` 返回
+   * `mode_not_supported`（保持老装配可用的降级行为）。
+   */
+  auto?: SquadAutoCoordinator;
 }
 
 /** 成员派单入参 */
@@ -149,6 +167,7 @@ export class SquadService {
   private readonly humanOwner: string | undefined;
   private readonly waitTimeoutMs: number;
   private readonly maxLeaderWakes: number;
+  private readonly auto: SquadAutoCoordinator | null;
   /** 队长任务 → 已唤醒次数 / 上次唤醒的成员终态签名（进程内，防自激） */
   private readonly wakeState = new Map<string, { count: number; signature: string }>();
   /** 已因审批唤醒过的请求 id（避免同一请求反复唤醒队长） */
@@ -164,6 +183,7 @@ export class SquadService {
     this.humanOwner = options.humanOwner;
     this.waitTimeoutMs = options.waitTimeoutMs ?? 30 * 60_000;
     this.maxLeaderWakes = options.maxLeaderWakes ?? 5;
+    this.auto = options.auto ?? null;
   }
 
   // ──────────────────────────────────────────────
@@ -250,13 +270,17 @@ export class SquadService {
   // ──────────────────────────────────────────────
 
   /**
-   * 派一次小队任务：建 leader 任务 + run，然后把「briefing + 任务」交给队长。
+   * 派一次小队任务。
+   *
+   * - `mode=leader`：建 leader 任务 + run，然后把「briefing + 任务」交给队长（建完即返回）；
+   * - `mode=auto`：交给 `SquadCoordinator` 按优先级/失败冷却算法分配，**不需要队长在场**；
+   *   没有空闲成员时任务停在 `pending`（排队），返回空 runId/agentTaskId。
    *
    * @returns 建完即返回（不等待队长/成员执行）
    */
   async dispatchTask(
     squadId: string,
-    request: { content: string; mode?: "leader" | "auto" },
+    request: { content: string; mode?: "leader" | "auto"; priority?: SquadTaskPriority },
   ): Promise<SquadDispatchResult> {
     const squad = this.requireSquad(squadId);
     if (squad.archivedAt !== undefined) {
@@ -265,18 +289,14 @@ export class SquadService {
     const content = request.content?.trim() ?? "";
     if (content === "") throw new SquadServiceError("bad_request", "content 不能为空");
     const mode = request.mode ?? squad.mode;
-    if (mode === "auto") {
-      throw new SquadServiceError(
-        "mode_not_supported",
-        "mode=auto（SquadCoordinator 算法分配）属 P2 第二阶段，本阶段只支持 leader 模式",
-      );
-    }
+    if (mode === "auto") return this.dispatchAuto(squadId, content, request.priority);
     const leaderTask = this.mapStore(() =>
       this.store.createTask({
         squadId,
         isLeader: true,
         assigneeId: squad.leaderId,
         title: titleOf(content),
+        content,
         status: "assigned",
       }),
     );
@@ -304,7 +324,46 @@ export class SquadService {
     this.store.updateRun(run.id, { status: "running" });
     this.track(leaderTask.id);
     log.info("dispatch", `小队 ${squadId} 派单 ${leaderTask.id} → 队长 ${squad.leaderId}`);
-    return { taskId: leaderTask.id, runId: run.id, agentTaskId: agentTask.id };
+    return {
+      taskId: leaderTask.id,
+      runId: run.id,
+      agentTaskId: agentTask.id,
+      mode: "leader",
+      assigneeId: squad.leaderId,
+      status: "running",
+    };
+  }
+
+  /** auto 模式派单：队长缺席也能跑（协调器算法分配） */
+  private async dispatchAuto(
+    squadId: string,
+    content: string,
+    priority?: SquadTaskPriority,
+  ): Promise<SquadDispatchResult> {
+    const auto = this.auto;
+    if (!auto) {
+      throw new SquadServiceError(
+        "mode_not_supported",
+        "auto 模式未装配（SquadAutoCoordinator 未注入），当前装配只支持 leader 模式",
+      );
+    }
+    let result: SquadAutoDispatchResult;
+    try {
+      result = await auto.dispatch(squadId, {
+        content,
+        ...(priority === undefined ? {} : { priority }),
+      });
+    } catch (err) {
+      throw this.wrapDispatchError(err, "auto");
+    }
+    return {
+      taskId: result.taskId,
+      runId: result.runId,
+      agentTaskId: result.agentTaskId,
+      mode: "auto",
+      assigneeId: result.assigneeId,
+      status: result.status,
+    };
   }
 
   /**
@@ -336,6 +395,7 @@ export class SquadService {
         isLeader: false,
         assigneeId: memberId,
         title: titleOf(content),
+        content,
         status: "assigned",
       }),
     );
@@ -371,19 +431,49 @@ export class SquadService {
     this.store.updateTask(child.id, { agentTaskId: agentTask.id, status: "running" });
     this.store.updateRun(run.id, { status: "running" });
     this.track(child.id);
-    return { taskId: child.id, runId: run.id, agentTaskId: agentTask.id };
+    return {
+      taskId: child.id,
+      runId: run.id,
+      agentTaskId: agentTask.id,
+      mode: "leader",
+      assigneeId: memberId,
+      status: "running",
+    };
   }
 
   /** 小队运行树（leader 父 + worker 子，按开始时间升序） */
   listRuns(squadId: string): SquadRunNodeDto[] {
     this.requireSquad(squadId);
-    return this.store.listRuns(squadId).map(toRunDto);
+    const tasks = new Map(this.store.listTasks(squadId).map((task) => [task.id, task]));
+    return this.store
+      .listRuns(squadId)
+      .map((run) => toRunDto(run, tasks.get(run.squadTaskId)));
   }
 
   /** 小队任务台账（路由/测试/排障用） */
   listTasks(squadId: string): SquadTaskRecord[] {
     this.requireSquad(squadId);
     return this.store.listTasks(squadId);
+  }
+
+  /** auto 协调器状态（成员运行态 / 任务计数 / 事件流） */
+  coordinatorStatus(squadId: string): SquadAutoStatusDto {
+    this.requireSquad(squadId);
+    if (!this.auto) {
+      throw new SquadServiceError("bad_request", "auto 模式未装配（SquadAutoCoordinator 未注入）");
+    }
+    return this.auto.status(squadId);
+  }
+
+  /** 推进 auto 协调器一格：冷却到期成员恢复 + 补派排队任务 */
+  async tickCoordinator(
+    squadId: string,
+  ): Promise<{ reactivated: string[]; launched: SquadAutoDispatchResult[] }> {
+    this.requireSquad(squadId);
+    if (!this.auto) {
+      throw new SquadServiceError("bad_request", "auto 模式未装配（SquadAutoCoordinator 未注入）");
+    }
+    return this.auto.tick(squadId);
   }
 
   // ──────────────────────────────────────────────
@@ -394,7 +484,9 @@ export class SquadService {
    * 权限闸门：成员能不能执行某工具。
    *
    * 命中授权（once/session/permanent）→ 放行；否则落一条待裁决请求（队长），
-   * 并顺手唤醒队长（如果它没在跑）。**没有审批仓时一律拒绝**（与既有默认策略一致）。
+   * 并把该成员的小队任务切到**非终态** `waiting_approval`（带原因）—— 等待期间
+   * 不判死整轮；裁决后由 {@link resolveApproval} 续跑。**没有审批仓时一律拒绝**
+   * （与既有默认策略一致）。
    */
   checkToolPermission(input: {
     agentId: string;
@@ -410,18 +502,135 @@ export class SquadService {
       return { allowed: true };
     }
     const squadOfMember = this.findSquadForMember(input.agentId, task?.squadId);
+    const reason = input.reason ?? "";
     const approval = this.approvals.request({
       ...(squadOfMember === undefined ? {} : { squadId: squadOfMember.id }),
       ...(task === undefined ? {} : { squadTaskId: task.id }),
       agentId: input.agentId,
       toolName: input.toolName,
       ...(input.toolInput === undefined ? {} : { toolInput: input.toolInput }),
-      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      ...(reason === "" ? {} : { reason }),
       targetType: "leader",
       ...(squadOfMember === undefined ? {} : { targetId: squadOfMember.leaderId }),
     });
+    if (task) this.enterWaitingApproval(task, { approval, toolName: input.toolName, reason });
     if (squadOfMember !== undefined) this.wakeLeaderForApproval(squadOfMember.id, approval);
     return { allowed: false, approval };
+  }
+
+  /**
+   * 把成员任务切到 `waiting_approval`（非终态），原因写进 `blocked_reason`。
+   *
+   * run 同步切等待态（运行树徽标才不会还显示 running），执行侧补一条
+   * `task/blocked` 事件（SSE 时间线可见）。
+   */
+  private enterWaitingApproval(
+    task: SquadTaskRecord,
+    info: { approval: ApprovalRequest; toolName: string; reason: string },
+  ): void {
+    if (task.status === "completed" || task.status === "failed" || task.status === "cancelled") return;
+    const reason = `等待裁决：${info.toolName}${info.reason === "" ? "" : `（${info.reason}）`}`;
+    this.mapStore(() =>
+      this.store.updateTask(task.id, {
+        status: "waiting_approval",
+        blockedReason: reason,
+        finishedAt: null,
+      }),
+    );
+    if (task.runId !== undefined) {
+      this.store.updateRun(task.runId, { status: "waiting_approval", endedAt: null });
+    }
+    if (task.agentTaskId !== undefined) {
+      this.tasks.noteBlocked(task.agentTaskId, reason, info.approval.id);
+    }
+  }
+
+  /**
+   * 裁决后**续跑**（不是判死整轮）：清掉等待态、回到 running；
+   * 若成员这一轮已经结束，就补一轮「裁决结果 + 继续」的续跑任务并重新挂观察。
+   */
+  private leaveWaitingApproval(
+    request: ApprovalRequest,
+    decision: { decision: "approve" | "deny"; note?: string },
+  ): void {
+    const taskId = request.squadTaskId;
+    if (taskId === undefined) return;
+    const task = this.store.getTask(taskId);
+    if (!task) return;
+    // 只处理「真的在等」的任务：已终态/已在跑的不复活
+    if (task.status !== "waiting_approval") return;
+    const note =
+      decision.decision === "approve"
+        ? `已批准 ${request.toolName}`
+        : `已拒绝 ${request.toolName}`;
+    this.mapStore(() =>
+      this.store.updateTask(task.id, {
+        status: "running",
+        blockedReason: null,
+        finishedAt: null,
+      }),
+    );
+    if (task.runId !== undefined) {
+      this.store.updateRun(task.runId, { status: "running", endedAt: null });
+    }
+    void this.resumeAfterApproval(task, request, decision, note);
+  }
+
+  /** 裁决后的续跑：还在跑就补事件；已经停了就补一轮续跑任务 */
+  private async resumeAfterApproval(
+    task: SquadTaskRecord,
+    request: ApprovalRequest,
+    decision: { decision: "approve" | "deny"; note?: string },
+    note: string,
+  ): Promise<void> {
+    const running =
+      task.agentTaskId === undefined ? null : this.tasks.getTask(task.agentTaskId);
+    if (running && !isTerminalAgentTaskStatus(running.status)) {
+      // 成员这一轮还在跑（下一次同类工具调用会命中授权）—— 只补事件，不重派
+      this.tasks.noteUnblocked(running.id, note);
+      return;
+    }
+    const hint =
+      decision.decision === "approve"
+        ? `负责人已批准你对 \`${request.toolName}\` 的调用（scope 见审计）。请继续把没做完的部分做完。`
+        : `负责人拒绝了 \`${request.toolName}\` 的调用。请换一条不需要它的路径继续完成原任务。`;
+    const body = [
+      `## 审批结果：${decision.decision === "approve" ? "批准" : "拒绝"}`,
+      hint,
+      decision.note === undefined || decision.note.trim() === ""
+        ? ""
+        : `裁决附言：${decision.note.trim()}`,
+    ]
+      .filter((line) => line !== "")
+      .join("\n");
+    try {
+      const sent = await this.tasks.submit({
+        agent: task.assigneeId,
+        content: this.composeMemberPrompt(task.assigneeId, body),
+      });
+      this.mapStore(() =>
+        this.store.updateTask(task.id, {
+          status: "running",
+          agentTaskId: sent.id,
+          attempt: task.attempt + 1,
+          blockedReason: null,
+          finishedAt: null,
+        }),
+      );
+      this.tasks.noteUnblocked(sent.id, note);
+      this.track(task.id);
+    } catch (err) {
+      log.warn(
+        "approval",
+        `任务 ${task.id} 裁决后续跑失败: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      this.mapStore(() =>
+        this.store.updateTask(task.id, {
+          status: "waiting_approval",
+          blockedReason: `${note}，但续跑派单失败，需人工重试`,
+        }),
+      );
+    }
   }
 
   /** 待裁决列表 */
@@ -458,6 +667,11 @@ export class SquadService {
         ...(input.note === undefined ? {} : { note: input.note }),
       });
       log.info("approval", `${id} ${resolved.status} by ${input.actor.type}:${input.actor.id}`);
+      // 等裁决的任务续跑（不进 failed）：这是「任务等审批」与「整轮判死」的分水岭
+      this.leaveWaitingApproval(resolved, {
+        decision: input.decision,
+        ...(input.note === undefined ? {} : { note: input.note }),
+      });
       return resolved;
     } catch (err) {
       throw wrapApprovalError(err);
@@ -517,6 +731,14 @@ export class SquadService {
     const task = this.store.getTask(squadTaskId);
     if (!task) return;
     if (task.agentTaskId !== undefined && done.id !== task.agentTaskId) return;
+    // 等裁决：成员这一轮停了也不能判死整轮，状态留 waiting_approval，裁决后由
+    // leaveWaitingApproval 续跑（run 同样保持等待态，UI 才不会闪成 failed）。
+    if (task.status === "waiting_approval") {
+      if (task.runId !== undefined) {
+        this.store.updateRun(task.runId, { status: "waiting_approval", endedAt: null });
+      }
+      return;
+    }
     const status = mapAgentTaskStatus(done.status);
     const finishedAt = Date.now();
     this.mapStore(() =>
@@ -524,6 +746,7 @@ export class SquadService {
         status,
         ...(done.result === undefined ? {} : { result: done.result }),
         ...(done.error === undefined ? {} : { error: done.error }),
+        blockedReason: null,
         finishedAt,
       }),
     );
@@ -552,7 +775,11 @@ export class SquadService {
     if (squad.archivedAt !== undefined) return;
 
     const children = this.store.listChildren(leaderTaskId);
-    const active = children.filter((child) => child.status === "pending" || child.status === "assigned" || child.status === "running");
+    // waiting_approval 不算「在跑」：它正等着队长裁决，队长必须被叫起来
+    const active = children.filter(
+      (child) =>
+        child.status === "pending" || child.status === "assigned" || child.status === "running",
+    );
     if (active.length > 0) return;
 
     const pendingApprovals =
@@ -818,13 +1045,16 @@ function toSquadDto(squad: SquadDetail): SquadInfoDto {
   };
 }
 
-function toRunDto(run: SquadRunRecord): SquadRunNodeDto {
+function toRunDto(run: SquadRunRecord, task?: SquadTaskRecord): SquadRunNodeDto {
   return {
     id: run.id,
     assignee: run.agentId,
-    status: run.status,
+    // 等裁决时以任务状态为准：run 可能已经收尾，但任务还在等审批
+    status: task?.status === "waiting_approval" ? "waiting_approval" : run.status,
     title: run.title,
     parentRunId: run.parentRunId ?? null,
     startedAt: new Date(run.startedAt).toISOString(),
+    blockedReason: task?.blockedReason ?? null,
+    agentTaskId: task?.agentTaskId ?? null,
   };
 }

@@ -530,6 +530,27 @@ export class AgentTaskService {
   }
 
   /**
+   * 旁路事件：任务进入等待审批（`task/blocked`）。
+   *
+   * 不改 7 态状态机（执行侧本来就是「这一轮照常结束」），只让时间线/SSE 能看到
+   * 「它在等哪一笔裁决」；裁决回来后配一条 {@link noteUnblocked}。
+   */
+  noteBlocked(id: string, reason: string, ref?: string): void {
+    if (!this.store.get(id)) return;
+    this.appendEvent(
+      id,
+      "task/blocked",
+      ref === undefined ? reason : `${reason}（approval=${ref}）`,
+    );
+  }
+
+  /** 旁路事件：等待解除、续跑（`task/unblocked`） */
+  noteUnblocked(id: string, note?: string): void {
+    if (!this.store.get(id)) return;
+    this.appendEvent(id, "task/unblocked", note);
+  }
+
+  /**
    * 收尾上一进程遗留的非终态任务（服务启动时调用一次）。
    *
    * - `created`（从未派发）→ `expired`：它已经错过了自己的派发窗口；

@@ -557,6 +557,51 @@ env_refs: [GITHUB_TOKEN]    # 只存变量名，值在 config.json / secrets.env
 
 界面：`teams.tsx` 现有四子视图（团队/任务库/成员库/技能库）里，"团队"子视图升级为"小队"：左列表 + 右详情（成员卡 / 队长徽标 / 指令编辑器 / 派单框 / 运行树）。改动集中在 `packages/web-ui/src/pages/teams.tsx` + 新 `squad-detail.tsx`。
 
+#### 5.2.5 P2 第二阶段后端契约（auto 模式 + waiting_approval）
+
+**一句话**：`mode=auto` 不再返回 400 `mode_not_supported`，而是真的用
+`SquadCoordinator` 按「优先级 → 空闲成员 → 失败冷却」分配；任务等负责人/队长裁决时
+进**非终态** `waiting_approval`，裁决后**续跑**而不是判死整轮。
+
+**auto 模式语义**
+
+- 不建 leader 任务、不要求队长在场；成员候选 = 全部 agent 成员，**队长排最后兜底**；
+- 派单即返回（非阻塞）：有人空闲 → 建 run + 真派发，返回 `status=running`；
+  全员忙/冷却 → 任务停在 `pending`（排队），返回 `runId=""`、`agentTaskId=""`；
+- 成员终态：成功 → 任务 `completed` 并释放成员；失败 → 按失败次数冷却 →
+  换空闲成员重试（新 run 的 `parentRunId` 指向上一条 run，运行树能看出转派链）→
+  无人可用则回到排队；转派次数超限 → `failed`；
+- 冷却到期后由 `POST /coordinator/tick` 恢复成员并补派排队任务（成员终态也会自动补派）。
+
+**接口**
+
+| 方法 | 路径 | 契约 |
+|---|---|---|
+| POST | `/api/squads/:id/tasks` | body `{content, mode?, priority?}`（`priority`: low/normal/high/urgent，仅 auto 生效）；201 → `{taskId, runId, agentTaskId, mode, assigneeId, status}`；`mode=auto` 排队中时 `runId/agentTaskId` 为空串、`assigneeId` 为 null |
+| GET | `/api/squads/:id/runs` | 每项 `{id, assignee, status, title, parentRunId, startedAt, blockedReason, agentTaskId}`；`status` 新增 `waiting_approval`，此时 `blockedReason` 非空（如「等待裁决：bash（要删 dist）」） |
+| GET | `/api/squads/:id/coordinator` | `{squadId, mode, members:[{memberId,status,failureCount,successCount,currentTaskId,cooldownUntil,lastError}], tasks:{total,pending,assigned,running,waitingApproval,completed,failed,cancelled}, nextCooldownAt, events:[SquadEvent…]}`；成员 `status`: idle/busy/cooldown/disabled；时间字段为 ISO |
+| POST | `/api/squads/:id/coordinator/tick` | 推进一格时钟 → `{reactivated:[memberId], launched:[派单结果]}` |
+
+`/api/approvals` 与队长工具 `list_approvals` / `resolve_approval` / `escalate_approval` 契约不变。
+
+**等待态（waiting_approval）语义**
+
+- 成员请求需批准的工具（未命中 once/session/permanent 授权）→ 落一条审批请求，
+  该成员的小队任务切 `waiting_approval` + `blocked_reason`，对应 run 同步同状态；
+- **等待期间不进 failed**：成员这一轮即使结束，任务也保持 `waiting_approval`；
+- 裁决（批准/拒绝）→ 任务回 `running`；若成员这一轮已结束，补一轮续跑任务
+  （批准：「负责人已批准…请继续」；拒绝：「负责人拒绝…请换一条路径继续」），
+  并把 `attempt+1`；授权 `permanent` 时后续同类调用直接放行；
+- 事件流：执行任务时间线新增 `task/blocked`（detail 带 `approval=<id>`）与
+  `task/unblocked` 两条旁路事件（不改 AgentTask 7 态状态机）；
+- 核心任务仓（`task_states`）新增 `waiting_approval` 状态 + `blockedReason`/`blockedRef`
+  字段 + `task/blocked` / `task/unblocked` 事件；`blocked` 仍表示「等外部条件
+  （副作用 unknown）」，不兼职审批等待。
+
+**前端对齐点（KG）**：小队详情「审批」区（列表/详情+审计/裁决/上抛/收回）、
+运行树与派单列表的「等待审批」徽标（读 `status` + `blockedReason`）、
+auto 派单框的优先级选择、协调器成员态（busy/cooldown + 冷却倒计时）。
+
 ---
 
 ### 5.3 Skill

@@ -11,12 +11,17 @@
  * | POST | `/api/squads/:id/members` | 加成员（agent id + 自由 role） |
  * | DELETE | `/api/squads/:id/members/:memberType/:memberId` | 移除成员（现任队长 → 409） |
  * | POST | `/api/squads/:id/leader` | 换队长（必须是成员） |
- * | POST | `/api/squads/:id/tasks` | 派单（leader 模式；建完即返回） |
- * | GET | `/api/squads/:id/runs` | 运行树（leader 父 + worker 子） |
+ * | POST | `/api/squads/:id/tasks` | 派单（leader 建完即返回；auto 由协调器算法分配） |
+ * | GET | `/api/squads/:id/runs` | 运行树（leader 父 + worker 子；含 waiting_approval） |
+ * | GET | `/api/squads/:id/coordinator` | auto 协调器状态（成员/任务计数/事件流） |
+ * | POST | `/api/squads/:id/coordinator/tick` | 推进协调器时钟（冷却恢复 + 补派排队任务） |
  *
  * 错误统一 `{ error: { message, code } }`，code 与 KG 前端契约一致：
  * bad_request / not_found / conflict / cannot_remove_squad_leader / leader_not_member /
  * squad_archived / agent_not_found / mode_not_supported / internal。
+ *
+ * `mode_not_supported` 只在「装配里没注入 SquadAutoCoordinator」时兜底出现；
+ * 正常装配下 `mode=auto` 是真实现。
  */
 
 import { Hono } from "hono";
@@ -183,12 +188,26 @@ export function createSquadRoutes(service: SquadService): Hono {
     const body = await readJson(c);
     if (body instanceof Response) return body;
     const mode = pickString(body, "mode");
+    const priority = pickString(body, "priority");
     try {
       const result = await service.dispatchTask(c.req.param("id"), {
         content: pickString(body, "content") ?? "",
         ...(mode === "leader" || mode === "auto" ? { mode } : {}),
+        ...(priority === "low" || priority === "normal" || priority === "high" || priority === "urgent"
+          ? { priority }
+          : {}),
       });
-      return c.json({ taskId: result.taskId, runId: result.runId, agentTaskId: result.agentTaskId }, 201);
+      return c.json(
+        {
+          taskId: result.taskId,
+          runId: result.runId,
+          agentTaskId: result.agentTaskId,
+          mode: result.mode,
+          assigneeId: result.assigneeId,
+          status: result.status,
+        },
+        201,
+      );
     } catch (err) {
       return fail(c, err);
     }
@@ -198,6 +217,23 @@ export function createSquadRoutes(service: SquadService): Hono {
     c.header("Cache-Control", "no-cache");
     try {
       return c.json(service.listRuns(c.req.param("id")));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  app.get("/:id/coordinator", (c) => {
+    c.header("Cache-Control", "no-cache");
+    try {
+      return c.json(service.coordinatorStatus(c.req.param("id")));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  app.post("/:id/coordinator/tick", async (c) => {
+    try {
+      return c.json(await service.tickCoordinator(c.req.param("id")));
     } catch (err) {
       return fail(c, err);
     }

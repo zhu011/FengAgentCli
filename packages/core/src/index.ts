@@ -47,9 +47,12 @@ export type {
 } from "./task-state.ts";
 export {
   TASK_EVENT_TYPES,
+  TERMINAL_TASK_STATE_STATUSES,
   TaskStateError,
   createTaskState,
   isTaskEventType,
+  isTerminalTaskStateStatus,
+  normalizeTaskState,
   reduceTaskState,
   replayTaskState,
   stableJson,
